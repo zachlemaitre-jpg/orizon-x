@@ -104,7 +104,7 @@ class _BitReader:
         for _ in range(bits):
             if self._pos >> 3 >= len(self._data):
                 raise ValueError("SPS tronqué")
-            byte =self._data[self._pos >> 3]
+            byte = self._data[self._pos >> 3]
             value = (value << 1) | ((byte >> (7 - (self._pos & 7))) & 1)
             self._pos += 1
         return value
