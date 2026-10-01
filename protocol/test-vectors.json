@@ -1,0 +1,54 @@
+{
+  "pc_to_tablet": [
+    {
+      "name": "config_1080p60",
+      "type": "CONFIG",
+      "fields": {"codec": 1, "width": 1920, "height": 1080, "fps": 60},
+      "hex": "01000000000000070107800438003c"
+    },
+    {
+      "name": "video_key",
+      "type": "VIDEO",
+      "fields": {"flags": 1, "pts_us": 1000000, "data": "000000016588"},
+      "hex": "020100000000000e00000000000f4240000000016588"
+    },
+    {
+      "name": "video_codec_config",
+      "type": "VIDEO",
+      "fields": {"flags": 2, "pts_us": 0, "data": "00000001670000000168"},
+      "hex": "0202000000000012000000000000000000000001670000000168"
+    },
+    {
+      "name": "pong",
+      "type": "PONG",
+      "fields": {"t_tab_us": 123456789, "t_pc_us": 987654321},
+      "hex": "030000000000001000000000075bcd15000000003ade68b1"
+    }
+  ],
+  "tablet_to_pc": [
+    {
+      "name": "hello",
+      "type": "HELLO",
+      "fields": {"version": 1, "width": 2880, "height": 1800, "dpi": 320},
+      "hex": "810000000000000c5441425800010b4007080140"
+    },
+    {
+      "name": "ping",
+      "type": "PING",
+      "fields": {"t_tab_us": 123456789},
+      "hex": "820000000000000800000000075bcd15"
+    },
+    {
+      "name": "keyframe_req",
+      "type": "KEYFRAME_REQ",
+      "fields": {},
+      "hex": "8300000000000000"
+    },
+    {
+      "name": "stats",
+      "type": "STATS",
+      "fields": {"fps": 60, "latency_avg_us": 15000, "latency_max_us": 31000, "dropped": 2, "rtt_us": 850},
+      "hex": "8400000000000012003c00003a98000079180000000200000352"
+    }
+  ]
+}
