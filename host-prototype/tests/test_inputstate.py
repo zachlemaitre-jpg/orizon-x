@@ -43,14 +43,32 @@ class TouchTest(unittest.TestCase):
         self.assertEqual(a.flags, s.POINTER_FLAG_UP | PRIMARY)
         self.assertEqual(self.touch.update([], RECT), [])
 
-    def test_primary_is_the_oldest_contact(self):
-        self.touch.update([c(0)], RECT)
+    def test_primary_is_stable_until_every_finger_has_lifted(self):
+        self.assertTrue(flags_by_id(self.touch.update([c(0)], RECT))[0] & PRIMARY)
         both = flags_by_id(self.touch.update([c(0), c(1)], RECT))
         self.assertTrue(both[0] & PRIMARY)
         self.assertFalse(both[1] & PRIMARY)
         lifted = flags_by_id(self.touch.update([c(1)], RECT))
         self.assertEqual(lifted[0], s.POINTER_FLAG_UP | PRIMARY)
-        self.assertTrue(flags_by_id(self.touch.update([c(1)], RECT))[1] & PRIMARY)
+        self.assertFalse(lifted[1] & PRIMARY)
+        later = flags_by_id(self.touch.update([c(1), c(2)], RECT))
+        self.assertFalse(later[1] & PRIMARY)
+        self.assertFalse(later[2] & PRIMARY)
+        up = flags_by_id(self.touch.update([], RECT))
+        self.assertEqual(up, {1: s.POINTER_FLAG_UP, 2: s.POINTER_FLAG_UP})
+        self.assertTrue(flags_by_id(self.touch.update([c(3)], RECT))[3] & PRIMARY)
+
+    def test_two_fingers_down_in_the_same_frame_first_is_primary(self):
+        frame = flags_by_id(self.touch.update([c(0), c(1)], RECT))
+        self.assertTrue(frame[0] & PRIMARY)
+        self.assertFalse(frame[1] & PRIMARY)
+
+    def test_touch_has_no_hover(self):
+        self.touch.update([c(0)], RECT)
+        (a,) = self.touch.update([c(0, HOVER)], RECT)
+        self.assertEqual(a.flags, s.POINTER_FLAG_UP | PRIMARY)
+        self.assertEqual(self.touch.update([], RECT), [])
+        self.assertEqual(self.touch.update([c(1, HOVER)], RECT), [])
 
     def test_canceled_contact(self):
         self.touch.update([c(0)], RECT)
@@ -107,6 +125,17 @@ class PenTest(unittest.TestCase):
         self.pen.update([c(0, HOVER)], RECT)
         (a,) = self.pen.update([], RECT)
         self.assertEqual(a.flags, s.POINTER_FLAG_UPDATE | PRIMARY)
+
+    def test_canceled_while_hovering_just_leaves(self):
+        self.pen.update([c(0, HOVER)], RECT)
+        (a,) = self.pen.update([c(0, HOVER | protocol.CONTACT_CANCELED)], RECT)
+        self.assertEqual(a.flags, s.POINTER_FLAG_UPDATE | PRIMARY)
+        self.assertEqual(self.pen.update([], RECT), [])
+
+    def test_canceled_while_down_goes_up_canceled(self):
+        self.pen.update([c(0)], RECT)
+        (a,) = self.pen.update([c(0, DOWN | protocol.CONTACT_CANCELED)], RECT)
+        self.assertEqual(a.flags, s.POINTER_FLAG_UP | s.POINTER_FLAG_CANCELED | PRIMARY)
 
     def test_cancel_all_while_hovering_just_leaves(self):
         self.pen.update([c(0, HOVER)], RECT)

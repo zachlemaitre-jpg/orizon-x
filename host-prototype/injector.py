@@ -20,6 +20,8 @@ PT_PEN = 3
 POINTER_FEEDBACK_DEFAULT = 1
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 MONITORINFOF_PRIMARY = 1
+SM_XVIRTUALSCREEN = 76
+SM_YVIRTUALSCREEN = 77
 ERROR_ACCESS_DENIED = 5
 KEEPALIVE_S = 0.1
 
@@ -100,6 +102,10 @@ _user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.c_void_p, _MONITORE
 _user32.EnumDisplayMonitors.restype = wintypes.BOOL
 _user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFOEXW)]
 _user32.GetMonitorInfoW.restype = wintypes.BOOL
+_user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+_user32.GetSystemMetrics.restype = ctypes.c_int
+_user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+_user32.GetCursorPos.restype = wintypes.BOOL
 
 try:  # API Synthetic Pointer : Windows 10 1809+
     _create_device = _user32.CreateSyntheticPointerDevice
@@ -125,6 +131,11 @@ def enable_dpi_awareness() -> None:
     set_context.argtypes = [ctypes.c_void_p]
     set_context.restype = wintypes.BOOL
     set_context(ctypes.c_void_p(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+
+
+def virtual_screen_origin() -> tuple[int, int]:
+    """InjectSyntheticPointerInput takes ptPixelLocation relative to the virtual screen's top-left, not desktop coords."""
+    return _user32.GetSystemMetrics(SM_XVIRTUALSCREEN), _user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
 
 
 def monitors() -> list[Monitor]:
@@ -155,7 +166,7 @@ def find_target(width: int, height: int, available: list[Monitor] | None = None)
     return None, f"{len(matches)} écrans en {width}x{height} : impossible de savoir lequel est la tablette"
 
 
-def _to_native(device: int, action: inputstate.PointerAction) -> POINTER_TYPE_INFO:
+def _to_native(device: int, action: inputstate.PointerAction, origin: tuple[int, int]) -> POINTER_TYPE_INFO:
     info = POINTER_TYPE_INFO()
     if device == protocol.DEVICE_TOUCH:
         info.type = PT_TOUCH
@@ -173,8 +184,8 @@ def _to_native(device: int, action: inputstate.PointerAction) -> POINTER_TYPE_IN
         pointer.pointerType = PT_PEN
     pointer.pointerId = action.pointer_id
     pointer.pointerFlags = action.flags
-    pointer.ptPixelLocation.x = action.x
-    pointer.ptPixelLocation.y = action.y
+    pointer.ptPixelLocation.x = action.x - origin[0]
+    pointer.ptPixelLocation.y = action.y - origin[1]
     return info
 
 
@@ -235,7 +246,8 @@ class Injector:
         handle = self._device_handle(device)
         if handle is None:
             return
-        infos = (POINTER_TYPE_INFO * len(frame))(*(_to_native(device, action) for action in frame))
+        origin = virtual_screen_origin()
+        infos = (POINTER_TYPE_INFO * len(frame))(*(_to_native(device, action, origin) for action in frame))
         self._last_inject = time.monotonic()
         if _inject(handle, infos, len(frame)):
             return
@@ -277,25 +289,100 @@ def create_for_stream(width: int, height: int, log: Log = print) -> Injector | N
     return Injector(rect, log)
 
 
+class _ProbeWindow:
+    """Small topmost window under the pen. Windows only moves the cursor for hovering pen input when the window
+    under it passes WM_POINTER* to DefWindowProc, so without it the selftest could not see where the pen landed."""
+
+    WM_POINTERUPDATE = 0x0245
+    _WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+    class _WNDCLASSW(ctypes.Structure):
+        _fields_ = [
+            ("style", wintypes.UINT), ("lpfnWndProc", ctypes.c_void_p), ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int), ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HANDLE),
+            ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HANDLE), ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR),
+        ]
+
+    def __init__(self, centre: tuple[int, int], size: int = 400) -> None:
+        self.pointer_updates = 0
+        _user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        _user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        _user32.RegisterClassW.argtypes = [ctypes.POINTER(self._WNDCLASSW)]
+        _user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HANDLE, wintypes.HINSTANCE, ctypes.c_void_p]
+        _user32.CreateWindowExW.restype = wintypes.HWND
+        self._proc = self._WNDPROC(self._on_message)  # garder la référence : Windows rappelle ce pointeur
+        self._class_name = f"TabxSelftest{id(self)}"
+        window_class = self._WNDCLASSW()
+        window_class.lpfnWndProc = ctypes.cast(self._proc, ctypes.c_void_p)
+        window_class.lpszClassName = self._class_name
+        _user32.RegisterClassW(ctypes.byref(window_class))
+        ex_style = 0x00000008 | 0x00000080 | 0x08000000  # TOPMOST | TOOLWINDOW | NOACTIVATE
+        self._hwnd = _user32.CreateWindowExW(
+            ex_style, self._class_name, "TabX selftest", 0x80000000 | 0x10000000,  # POPUP | VISIBLE
+            centre[0] - size // 2, centre[1] - size // 2, size, size, None, None, None, None)
+
+    def _on_message(self, hwnd, message, wparam, lparam):
+        if message == self.WM_POINTERUPDATE:
+            self.pointer_updates += 1
+        return _user32.DefWindowProcW(hwnd, message, wparam, lparam)
+
+    def pump(self, seconds: float) -> None:
+        message = wintypes.MSG()
+        end = time.monotonic() + seconds
+        while True:
+            while _user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+                _user32.TranslateMessage(ctypes.byref(message))
+                _user32.DispatchMessageW(ctypes.byref(message))
+            if time.monotonic() >= end:
+                return
+            time.sleep(0.005)
+
+    def close(self) -> None:
+        if self._hwnd:
+            _user32.DestroyWindow(self._hwnd)
+        _user32.UnregisterClassW(self._class_name, None)
+
+
 def selftest() -> None:
-    """Hovers the pen in a circle at the centre of the primary screen for 2 s. Never touches, so never clicks."""
+    """Hovers the pen in a circle at the centre of the primary screen for 2 s, then checks that the cursor landed
+    where the last hover frame pointed. Never touches, so never clicks."""
     enable_dpi_awareness()
     primary = next((rect for rect, is_primary, _name in monitors() if is_primary), None)
     if primary is None:
         sys.exit("Autotest : aucun écran principal trouvé")
+    expected = (primary.left + primary.width // 2, primary.top + primary.height // 2)
+    probe = _ProbeWindow(expected)
+    _user32.SetCursorPos(primary.left + 20, primary.top + 20)  # loin de la cible : seule l'injection peut l'y amener
+    probe.pump(0.1)
     pen = Injector(primary)
-    for step in range(61):
-        angle = 2 * math.pi * step / 60
-        x = round(32768 + 8000 * math.cos(angle))
-        y = round(32768 + 8000 * math.sin(angle))
-        pen.handle(protocol.Input(protocol.DEVICE_PEN, (protocol.Contact(0, protocol.CONTACT_IN_RANGE, x, y, 0, 0, 0),)))
-        time.sleep(2 / 60)
-    pen.handle(protocol.Input(protocol.DEVICE_PEN, ()))
-    ok = pen.enabled
-    pen.close()
+    try:
+        for step in range(61):
+            angle = 2 * math.pi * step / 60
+            x = round(32768 + 8000 * math.cos(angle))
+            y = round(32768 + 8000 * math.sin(angle))
+            pen.handle(protocol.Input(protocol.DEVICE_PEN, (protocol.Contact(0, protocol.CONTACT_IN_RANGE, x, y, 0, 0, 0),)))
+            probe.pump(2 / 60)
+        pen.handle(protocol.Input(protocol.DEVICE_PEN, (protocol.Contact(0, protocol.CONTACT_IN_RANGE, 32768, 32768, 0, 0, 0),)))
+        probe.pump(0.2)
+        cursor = wintypes.POINT()
+        got_cursor = bool(_user32.GetCursorPos(ctypes.byref(cursor)))
+        pen.handle(protocol.Input(protocol.DEVICE_PEN, ()))
+        probe.pump(0.1)
+        ok = pen.enabled
+    finally:
+        pen.close()
+        probe.close()
     if not ok:
         sys.exit("Autotest en échec : voir le message ci-dessus.")
-    print("Autotest terminé : le curseur du stylet a dû décrire un cercle au centre de l'écran principal, sans cliquer.")
+    if not got_cursor or abs(cursor.x - expected[0]) > 3 or abs(cursor.y - expected[1]) > 3:
+        sys.exit(f"Autotest en échec : le curseur devait être en {expected}, il est en "
+                 f"{(cursor.x, cursor.y) if got_cursor else 'position inconnue'} "
+                 f"({probe.pointer_updates} mises à jour reçues par la fenêtre de test).")
+    print("Autotest terminé : le stylet a décrit un cercle au centre de l'écran principal, sans cliquer, "
+          f"et le curseur est arrivé en {(cursor.x, cursor.y)} (attendu {expected}).")
 
 
 if __name__ == "__main__":

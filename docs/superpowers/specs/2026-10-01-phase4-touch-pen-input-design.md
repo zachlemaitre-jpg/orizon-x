@@ -132,7 +132,7 @@ Pour chaque périphérique, l'état précédent est conservé. Une nouvelle tram
 | Stylet qui sort de portée (était en survol) | `UPDATE` |
 
 Compléments :
-- **Contact principal** : le doigt posé depuis le plus longtemps porte `PRIMARY`, et le stylet le porte toujours.
+- **Contact principal** (règle Windows : tant qu'un contact principal existe, tous les contacts doivent être levés avant qu'un autre puisse le devenir) : un doigt qui se pose devient principal seulement s'il n'y a ni principal ni autre doigt posé ; il garde `PRIMARY` (y compris sur son `UP`) et n'est jamais remplacé ; une fois levé, aucun doigt n'est principal tant que tous ne sont pas levés. Le stylet porte toujours `PRIMARY`. Le tactile n'a pas de survol : un contact sans le bit `CONTACT` est un doigt levé.
 - **Stylet** : `penMask = PRESSURE | TILT_X | TILT_Y`, et `penFlags = BARREL` si le bit `BARREL` est présent.
 - **Coordonnées** : `px = left + round(x_n × (width − 1) / 65535)`, de même pour y, dans le rectangle en pixels physiques de l'écran cible.
 - **Fin de session** : `cancel_all()` produit `UP | CANCELED` pour tous les contacts actifs.
@@ -148,7 +148,7 @@ Compléments :
 - **Erreurs** :
   - périphérique non créé (Windows trop ancien), ou `InjectSyntheticPointerInput` en échec : message unique par session (avec `GetLastError`), injection désactivée, vidéo intacte ;
   - un accès refusé (fenêtre administrateur) donne le message « lance le relais en administrateur pour piloter les fenêtres élevées ».
-- **Autotest** : `py injector.py --selftest` déplace le stylet **en survol uniquement** (aucun contact, donc aucun clic) en cercle au centre de l'écran principal pendant 2 s, puis se termine. Il valide la couche `ctypes` sans tablette.
+- **Autotest** : `py injector.py --selftest` déplace le stylet **en survol uniquement** (aucun contact, donc aucun clic) en cercle au centre de l'écran principal pendant 2 s, puis se termine. Il valide la couche `ctypes` sans tablette : il éloigne le curseur, survole une dernière fois le centre et vérifie que le curseur y arrive (à 3 px près), ce qui prouve la conversion en coordonnées de l'écran virtuel (`ptPixelLocation` de `InjectSyntheticPointerInput` est relatif au coin haut-gauche de l'écran virtuel, pas au bureau). Une petite fenêtre de test est posée sous le stylet, car Windows ne déplace le curseur pour un survol que si la fenêtre sous le stylet transmet `WM_POINTER*` à `DefWindowProc`.
 
 ## 6. Gestion des erreurs (résumé)
 
