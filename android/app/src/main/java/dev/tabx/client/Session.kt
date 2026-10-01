@@ -38,12 +38,20 @@ class Session(
     private val tracker = LatencyTracker()
     private val timerFailure = AtomicReference<Exception?>(null)
 
+    @Volatile private var inputSink: ((TabletMessage.Input) -> Unit)? = null
+
+    /** Queues an INPUT frame on the net-writer thread (never blocks the caller); no-op outside [run]. */
+    fun sendInput(message: TabletMessage.Input) {
+        inputSink?.invoke(message)
+    }
+
     fun run() {
         socket.tcpNoDelay = true
         socket.soTimeout = READ_TIMEOUT_MS // le PC répond aux PING toutes les 500 ms : 5 s de silence = PC figé
         val reader = FrameReader(socket.getInputStream())
         val writer = FrameWriter(socket.getOutputStream())
         val timers = Executors.newSingleThreadScheduledExecutor { Thread(it, "net-writer") }
+        inputSink = { message -> runCatching { timers.execute { runCatching { writer.write(message) } } } }
         var decoder: VideoDecoder? = null
         var config: PcMessage.Config? = null
         try {
@@ -95,6 +103,7 @@ class Session(
                 throw e
             }
         } finally {
+            inputSink = null
             timers.shutdownNow()
             runCatching { timers.awaitTermination(TIMER_STOP_MS, TimeUnit.MILLISECONDS) }
             try {

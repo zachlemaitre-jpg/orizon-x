@@ -2,6 +2,7 @@ package dev.tabx.client
 
 import android.os.Bundle
 import android.view.Surface
+import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
@@ -9,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import dev.tabx.client.input.TouchForwarder
 import dev.tabx.client.ui.TabXApp
 
 class MainActivity : ComponentActivity() {
@@ -23,7 +25,7 @@ class MainActivity : ComponentActivity() {
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val screen = screenInfo()
-        setContent { TabXApp(model, screen, ::onSurfaceCreated, ::onSurfaceDestroyed) }
+        setContent { TabXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed) }
     }
 
     override fun onResume() {
@@ -46,6 +48,15 @@ class MainActivity : ComponentActivity() {
             height = minOf(bounds.width(), bounds.height()),
             dpi = resources.displayMetrics.densityDpi,
         )
+    }
+
+    private fun onVideoView(view: View) {
+        TouchForwarder(
+            view = view,
+            isStreaming = { model.state is ConnectionState.Streaming },
+            send = { receiver?.sendInput(it) },
+            onToggleHud = model::toggleHud,
+        ).attach()
     }
 
     private fun onSurfaceCreated(surface: Surface) {

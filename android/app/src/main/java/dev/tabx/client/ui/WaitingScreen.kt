@@ -77,6 +77,8 @@ fun WaitingScreen(reason: String?, screen: ScreenInfo) {
             ) {
                 GlassText("py relay.py --encoder amf", size = 13.sp, mono = true)
             }
+            Spacer(Modifier.height(12.dp))
+            GlassText("Appui long à 4 doigts : infos de connexion", size = 12.sp, alpha = 0.75f)
             Spacer(Modifier.height(16.dp))
             Row {
                 GlassText("${screen.width}×${screen.height}", size = 12.sp, alpha = 0.7f)

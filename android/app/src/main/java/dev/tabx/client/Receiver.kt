@@ -6,6 +6,7 @@ import android.view.Surface
 import dev.tabx.client.net.Server
 import dev.tabx.client.protocol.Protocol
 import dev.tabx.client.protocol.ProtocolException
+import dev.tabx.client.protocol.TabletMessage
 import dev.tabx.client.video.DecoderUnavailable
 import java.io.IOException
 import java.net.BindException
@@ -22,6 +23,12 @@ class Receiver(
     @Volatile private var running = true
     @Volatile private var server: Server? = null
     @Volatile private var socket: Socket? = null
+    @Volatile private var session: Session? = null
+
+    /** Forwards an INPUT frame to the running session, if any. */
+    fun sendInput(message: TabletMessage.Input) {
+        session?.sendInput(message)
+    }
     private val worker = thread(name = "net-reader") { loop() }
 
     private fun loop() {
@@ -40,7 +47,13 @@ class Receiver(
                         connection.close()
                         break
                     }
-                    Session(connection, surface, screen, model).run()
+                    val current = Session(connection, surface, screen, model)
+                    session = current
+                    try {
+                        current.run()
+                    } finally {
+                        session = null
+                    }
                 } catch (e: BindException) {
                     reason = "Port ${Protocol.PORT} déjà utilisé, nouvel essai…"
                     model.showWaiting(reason)
