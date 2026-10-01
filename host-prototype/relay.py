@@ -22,7 +22,9 @@ ADB_FALLBACK = Path.home() / "AppData" / "Local" / "Android" / "Sdk" / "platform
 
 ENCODERS = {
     "nvenc": ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull", "-zerolatency", "1", "-delay", "0"],
-    "amf": ["-c:v", "h264_amf", "-usage", "ultralowlatency", "-quality", "speed"],
+    # AMF : -usage ultralowlatency/lowlatency ignore -g (une seule IDR) ; -latency 1 donne la basse latence en gardant le GOP.
+    # -aud 0 : AMF insère déjà ses AUD, le bsf h264_metadata en ajoutait un doublon. -header_spacing 60 : SPS/PPS avant chaque IDR.
+    "amf": ["-c:v", "h264_amf", "-latency", "1", "-quality", "speed", "-aud", "0", "-header_spacing", "60"],
 }
 
 
