@@ -98,4 +98,10 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 
 ## Mesures phase 1
 
-À compléter après les essais : date, décodeur, fps, p50/p99 (HUD), latence filmée, encodeur PC.
+| Date | Mode | Encodeur PC | Résolution | fps | Envoi→affichage moy. / max par s | p50 / p99 (HUD) | RTT USB | Ressenti |
+|---|---|---|---|---|---|---|---|---|
+| 2026-10-01 | Écran étendu (VDD) | AMF, 30 Mbit/s, IDR/1 s | 2880×1800 | 59–61, 0 perdue | 20–22 ms / 27–33 ms (pics 58–64 ms) | **18 ms** / **60 ms** | 3–8 ms | « suffisamment fluide » |
+
+- Critère p50 ≤ 20 ms : **atteint**. Critère p99 ≤ 40 ms : **non atteint**. Les pics (~1 image sur 60) coïncident avec les IDR envoyées chaque seconde, plus lourdes à transférer et à décoder.
+- Pistes, si le besoin se fait sentir : espacer les IDR, ou les remplacer par un rafraîchissement intra progressif. Cette dernière piste dépend de la phase 2 (IDR à la demande).
+- Latence filmée de bout en bout : non mesurée.
