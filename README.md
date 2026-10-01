@@ -32,7 +32,7 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
    ```powershell
    cd host-prototype; py relay.py --encoder amf; cd ..
    ```
-   Options : `--output N` (écran capturé), `--fps 60`, `--bitrate 30M`, `--encoder nvenc` (pilote ≥ 610).
+   Options : `--output auto|N` (par défaut `auto` : l'écran à la taille de la tablette ; pour dupliquer l'écran principal, `--output 0`), `--list-outputs`, `--fps 60`, `--bitrate 30M`, `--encoder nvenc` (pilote ≥ 610).
 
    Le relais attend la tablette et l'app tout seul (il refait `adb forward` à chaque essai) : l'ordre de lancement n'a pas d'importance. Les demandes de keyframe après une erreur de décodage sont journalisées.
 4. Tap à 3 doigts sur la tablette pendant le flux : affiche/masque le HUD (fps, latence envoi→affichage, p50/p99 de session, offset d'horloge, décodeur).
@@ -50,11 +50,11 @@ Sans configuration, le relais **duplique** un écran existant. Pour un vrai écr
 
    Cliquer ensuite sur « Restart Driver » dans VDD Control.
 3. Dans Paramètres → Écran : « Étendre ces affichages », écran virtuel en 2880×1800 à 200 %, placé du côté où se trouve la tablette.
-4. Trouver son numéro, puis lancer le relais dessus :
+4. Lancer le relais : par défaut (`--output auto`), il capture l'écran qui a la taille de la tablette (2880×1800), ce qui vise donc l'écran virtuel. Les numéros d'écran changent quand on branche ou débranche un moniteur, d'où ce mode automatique.
    ```powershell
-   py relay.py --list-outputs
-   py relay.py --encoder amf --output 2
+   py relay.py --encoder amf
    ```
+   Pour voir les écrans ou en forcer un : `py relay.py --list-outputs`, puis `--output N`.
 
 **À savoir :**
 - **Désinstaller le driver (VDD Control ou Gestionnaire de périphériques) avant toute mise à jour de pilote GPU**, sinon risque d'écran noir au démarrage.

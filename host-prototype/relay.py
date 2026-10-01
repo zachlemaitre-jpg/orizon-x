@@ -1,6 +1,6 @@
 """Phase-1 relay: ffmpeg (ddagrab + hardware H.264) -> TABX protocol -> tablet through adb forward.
 
-Usage: py relay.py --encoder nvenc|amf [--output 0] [--fps 60] [--bitrate 30M]
+Usage: py relay.py --encoder nvenc|amf [--output auto|N] [--fps 60] [--bitrate 30M]
        py relay.py --list-outputs
 """
 from __future__ import annotations
@@ -50,7 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Relais TABX phase 1 : écran PC -> tablette via adb")
     parser.add_argument("--encoder", choices=sorted(ENCODERS),
                         help="nvenc (sur secteur, GPU NVIDIA) ou amf (sur batterie, iGPU AMD)")
-    parser.add_argument("--output", type=int, default=0, help="index de l'écran capturé (voir --list-outputs)")
+    parser.add_argument("--output", type=output_choice, default="auto",
+                        help="numéro de l'écran capturé (voir --list-outputs), ou 'auto' (défaut) : "
+                             "l'écran qui a la taille de la tablette")
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--bitrate", default="30M")
     parser.add_argument("--list-outputs", action="store_true", help="liste les écrans capturables puis quitte")
@@ -60,9 +62,21 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def list_outputs(max_outputs: int = 8) -> None:
-    """Prints each screen ddagrab can capture (outputs of the default D3D11 adapter) with its size."""
-    found = 0
+def output_choice(value: str) -> str:
+    if value == "auto" or value.isdigit():
+        return value
+    raise argparse.ArgumentTypeError("attendu : 'auto' ou un numéro d'écran")
+
+
+Outputs = list[tuple[int, tuple[int, int] | None]]
+
+_ONLY_DEFAULT_GPU = ("Seuls les écrans du GPU par défaut sont listés "
+                     "(sur un portable hybride, ceux branchés sur l'autre GPU n'apparaissent pas).")
+
+
+def probe_outputs(max_outputs: int = 8) -> Outputs:
+    """Captures one frame per ddagrab output (default D3D11 adapter) and returns (index, (width, height))."""
+    outputs: Outputs = []
     for index in range(max_outputs):
         result = subprocess.run(
             ["ffmpeg", "-nostdin", "-hide_banner", "-f", "lavfi",
@@ -73,18 +87,34 @@ def list_outputs(max_outputs: int = 8) -> None:
         if result.returncode != 0:
             break  # les index sont contigus : le premier échec marque la fin
         size = re.search(r"\b(\d{3,5})x(\d{3,5})\b", result.stderr)
-        print(f"--output {index} : {size.group(0) if size else 'taille inconnue'}")
-        found += 1
-    if found == 0:
-        print("Aucun écran capturable (ffmpeg/ddagrab indisponible ?)")
-    print("Seuls les écrans du GPU par défaut sont listés (sur un portable hybride, ceux branchés sur l'autre GPU n'apparaissent pas).")
+        outputs.append((index, (int(size.group(1)), int(size.group(2))) if size else None))
+    return outputs
 
 
-def ffmpeg_command(args: argparse.Namespace) -> list[str]:
+def describe_outputs(outputs: Outputs) -> str:
+    if not outputs:
+        return "Aucun écran capturable (ffmpeg/ddagrab indisponible ?)"
+    lines = [f"--output {i} : {f'{s[0]}x{s[1]}' if s else 'taille inconnue'}" for i, s in outputs]
+    return "\n".join(lines + [_ONLY_DEFAULT_GPU])
+
+
+def pick_output(choice: str, outputs: Outputs, width: int, height: int) -> int:
+    """Explicit index, or ('auto') the first screen whose size matches the tablet's."""
+    if choice != "auto":
+        return int(choice)
+    for index, size in outputs:
+        if size == (width, height):
+            print(f"Écran capturé : --output {index} ({width}x{height}, choisi automatiquement)")
+            return index
+    sys.exit(f"Aucun écran en {width}x{height} (taille de la tablette). Règle l'écran virtuel à cette résolution, "
+             f"ou choisis-en un avec --output N :\n{describe_outputs(outputs)}")
+
+
+def ffmpeg_command(args: argparse.Namespace, output: int) -> list[str]:
     return [
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
         # hwdownload : sur le portable hybride l'écran est sur l'AMD et NVENC sur la NVIDIA (corrigé en phase 2).
-        "-f", "lavfi", "-i", f"ddagrab=output_idx={args.output}:framerate={args.fps},hwdownload,format=bgra",
+        "-f", "lavfi", "-i", f"ddagrab=output_idx={output}:framerate={args.fps},hwdownload,format=bgra",
         *ENCODERS[args.encoder],
         "-rc", "cbr", "-b:v", args.bitrate, "-bf", "0", "-g", str(args.fps),
         "-bsf:v", "h264_metadata=aud=insert", "-f", "h264", "-",
@@ -198,7 +228,7 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
             send(protocol.encode_video(now_us(), unit, protocol.FLAG_KEY if info.is_idr else 0))
 
 
-def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespace) -> None:
+def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespace, output: int) -> None:
     """Streams until the tablet disconnects. Exits the program if ffmpeg stops on its own."""
     send_lock = threading.Lock()
 
@@ -210,7 +240,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
         with send_lock:  # l'horodatage est pris sous le verrou : pas d'attente entre la mesure et l'envoi
             sock.sendall(protocol.encode_pong(t_tab_us, now_us()))
 
-    ffmpeg = subprocess.Popen(ffmpeg_command(args), stdin=subprocess.DEVNULL,
+    ffmpeg = subprocess.Popen(ffmpeg_command(args, output), stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
     disconnected = threading.Event()
@@ -275,14 +305,17 @@ def main() -> None:
     if shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg introuvable : winget install Gyan.FFmpeg, puis rouvre le terminal.")
     if args.list_outputs:
-        list_outputs()
+        print(describe_outputs(probe_outputs()))
         return
     adb = find_adb()
     try:
         while True:
+            # Sondage avant la connexion : une fois le HELLO reçu, la tablette attend des PONG (5 s de silence = coupure).
+            outputs = probe_outputs() if args.output == "auto" else []
             sock, rfile, hello = connect(adb)
             print(f"Tablette connectée : écran {hello.width}x{hello.height}, {hello.dpi} dpi")
-            run_session(sock, rfile, args)
+            output = pick_output(args.output, outputs, hello.width, hello.height)
+            run_session(sock, rfile, args, output)
             print("Nouvelle tentative de connexion…")
     except KeyboardInterrupt:
         print("\nArrêt.")
