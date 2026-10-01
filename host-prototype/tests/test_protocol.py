@@ -6,7 +6,7 @@ from pathlib import Path
 import protocol
 
 VECTORS = json.loads(
-    (Path(__file__).resolve().parents[2] / "protocol" / "test-vectors.json").read_text()
+    (Path(__file__).resolve().parents[2] / "protocol" / "test-vectors.json").read_text(encoding="utf-8")
 )
 
 EXPECTED_TABLET_MESSAGES = {
@@ -68,6 +68,13 @@ class ReadMessageTest(unittest.TestCase):
         short_ping = bytes.fromhex("8200000000000004" "00000001")
         with self.assertRaises(protocol.ProtocolError):
             protocol.read_message(io.BytesIO(short_ping))
+
+    def test_handles_short_reads(self):
+        class OneByteStream(io.BytesIO):
+            def read(self, size=-1):
+                return super().read(min(size, 1) if size and size > 0 else size)
+        stream = OneByteStream(bytes.fromhex(self.PING_HEX))
+        self.assertEqual(protocol.read_message(stream), protocol.Ping(123456789))
 
 
 if __name__ == "__main__":

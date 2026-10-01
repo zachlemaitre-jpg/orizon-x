@@ -14,6 +14,9 @@ La tablette écoute sur `127.0.0.1:27183` ; le PC se connecte. Entiers non sign�
 
 Un type inconnu est ignoré (payload lu puis jeté).
 
+Le récepteur ignore `reserved` et les bits de `flags` qu'il ne connaît pas.
+La taille du payload d'un type connu est exacte : une taille différente est une erreur de protocole. Toute extension d'un message existant impose une nouvelle version du protocole.
+
 ## PC → tablette
 
 | Type | Nom | Payload |

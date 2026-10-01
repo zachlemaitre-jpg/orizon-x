@@ -102,10 +102,13 @@ def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
-    data = stream.read(size)
-    if len(data) < size:
-        raise EOFError("connexion fermée")
-    return data
+    data = bytearray()
+    while len(data) < size:
+        chunk = stream.read(size - len(data))
+        if not chunk:
+            raise EOFError("connexion fermée")
+        data += chunk
+    return bytes(data)
 
 
 def read_message(stream: BinaryIO) -> TabletMessage:
