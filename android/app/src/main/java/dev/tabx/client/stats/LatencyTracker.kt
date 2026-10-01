@@ -4,9 +4,14 @@ import kotlin.math.ceil
 
 /**
  * Clock sync (offset of the smallest-RTT sample among recent ping/pongs) and per-frame latency stats.
- * Times are microseconds; the offset converts PC time to tablet time. Thread-safe.
+ * Times are microseconds; the offset converts PC time to tablet time. Latency is recorded only after
+ * [minClockSamples] PONGs, so warm-up frames stay out of the session percentiles. Thread-safe.
  */
-class LatencyTracker(private val clockSamples: Int = 16) {
+class LatencyTracker(private val clockSamples: Int = 16, private val minClockSamples: Int = 4) {
+
+    init {
+        require(clockSamples >= 1 && minClockSamples in 1..clockSamples)
+    }
 
     data class Window(
         val fps: Int,
@@ -24,6 +29,7 @@ class LatencyTracker(private val clockSamples: Int = 16) {
     private val samples = ArrayDeque<ClockSample>()
     private val histogram = IntArray(HISTOGRAM_MAX_MS + 1)
     private var histogramCount = 0L
+    private var pongCount = 0
     private var offsetUs: Long? = null
     private var lastRttUs = 0L
     private var frames = 0
@@ -35,8 +41,10 @@ class LatencyTracker(private val clockSamples: Int = 16) {
     @Synchronized
     fun onPong(tTabSentUs: Long, tPcUs: Long, tTabReceivedUs: Long) {
         val rtt = tTabReceivedUs - tTabSentUs
+        if (rtt < 0) return // stale or foreign timestamp
         samples.addLast(ClockSample(rtt, tTabSentUs + rtt / 2 - tPcUs))
         if (samples.size > clockSamples) samples.removeFirst()
+        pongCount++
         offsetUs = samples.minBy { it.rttUs }.offsetUs
         lastRttUs = rtt
     }
@@ -44,6 +52,7 @@ class LatencyTracker(private val clockSamples: Int = 16) {
     @Synchronized
     fun onFrameRendered(ptsUs: Long, renderedUs: Long) {
         frames++
+        if (pongCount < minClockSamples) return // clock not settled yet: keep warm-up frames out of the session percentiles
         val offset = offsetUs ?: return
         val latency = renderedUs - (ptsUs + offset)
         latencyCount++

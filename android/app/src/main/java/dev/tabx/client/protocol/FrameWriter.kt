@@ -17,6 +17,8 @@ class FrameWriter(output: OutputStream) {
     }
 
     companion object {
+        private fun u32(value: Long): Int = value.coerceIn(0, 0xFFFF_FFFFL).toInt()
+
         fun encode(message: TabletMessage): ByteArray {
             val payload = ByteArrayOutputStream()
             val out = DataOutputStream(payload)
@@ -35,11 +37,11 @@ class FrameWriter(output: OutputStream) {
                 }
                 TabletMessage.KeyframeRequest -> Protocol.TYPE_KEYFRAME_REQ
                 is TabletMessage.Stats -> {
-                    out.writeShort(message.fps)
-                    out.writeInt(message.latencyAvgUs.toInt())
-                    out.writeInt(message.latencyMaxUs.toInt())
-                    out.writeInt(message.dropped.toInt())
-                    out.writeInt(message.rttUs.toInt())
+                    out.writeShort(message.fps.coerceIn(0, 0xFFFF))
+                    out.writeInt(u32(message.latencyAvgUs))
+                    out.writeInt(u32(message.latencyMaxUs))
+                    out.writeInt(u32(message.dropped))
+                    out.writeInt(u32(message.rttUs))
                     Protocol.TYPE_STATS
                 }
             }

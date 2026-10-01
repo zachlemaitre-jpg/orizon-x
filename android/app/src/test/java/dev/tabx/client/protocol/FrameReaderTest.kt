@@ -34,4 +34,33 @@ class FrameReaderTest {
     fun rejectsVideoShorterThanTimestamp() {
         read("0200000000000004" + "00000000")
     }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsLengthWithHighBitSet() {
+        read("02000000ffffffff")
+    }
+
+    @Test
+    fun readsConsecutiveMessagesFromOneStream() {
+        val reader = FrameReader(ByteArrayInputStream(hex(pongHex + "0100000000000007" + "0107800438003c")))
+        assertEquals(PcMessage.Pong(123456789, 987654321), reader.read())
+        assertEquals(PcMessage.Config(1, 1920, 1080, 60), reader.read())
+    }
+
+    @Test
+    fun handlesOneByteReads() {
+        val bytes = hex("9900000000000002" + "abcd" + pongHex)
+        val trickle = object : java.io.InputStream() {
+            private var pos = 0
+            override fun read(): Int = if (pos < bytes.size) bytes[pos++].toInt() and 0xFF else -1
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (len == 0) return 0
+                val c = read()
+                if (c < 0) return -1
+                b[off] = c.toByte()
+                return 1
+            }
+        }
+        assertEquals(PcMessage.Pong(123456789, 987654321), FrameReader(trickle).read())
+    }
 }

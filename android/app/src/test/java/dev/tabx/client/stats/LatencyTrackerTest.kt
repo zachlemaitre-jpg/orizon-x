@@ -25,7 +25,7 @@ class LatencyTrackerTest {
 
     @Test
     fun oldClockSamplesLeaveTheWindow() {
-        val tracker = LatencyTracker(clockSamples = 2)
+        val tracker = LatencyTracker(clockSamples = 2, minClockSamples = 1)
         tracker.onPong(0, 0, 100) // rtt 100, sera évincé
         tracker.onPong(1_000, 0, 1_400) // rtt 400 -> offset 1_200
         tracker.onPong(2_000, 0, 2_300) // rtt 300 -> offset 2_150
@@ -34,7 +34,7 @@ class LatencyTrackerTest {
 
     @Test
     fun latencyStatsAndPercentiles() {
-        val tracker = LatencyTracker()
+        val tracker = LatencyTracker(minClockSamples = 1)
         tracker.onPong(0, 0, 0) // offset 0
         tracker.onFrameRendered(ptsUs = 1_000, renderedUs = 11_000) // 10 ms
         tracker.onFrameRendered(ptsUs = 2_000, renderedUs = 32_000) // 30 ms
@@ -58,7 +58,7 @@ class LatencyTrackerTest {
 
     @Test
     fun windowResetsButPercentilesCoverSession() {
-        val tracker = LatencyTracker()
+        val tracker = LatencyTracker(minClockSamples = 1)
         tracker.onPong(0, 0, 0)
         tracker.onFrameRendered(0, 12_000)
         tracker.onFrameDropped()
@@ -68,6 +68,37 @@ class LatencyTrackerTest {
         assertEquals(0, second.fps)
         assertEquals(0L, second.dropped)
         assertEquals(12, second.p50Ms)
+    }
+
+    @Test
+    fun latencyIgnoredUntilEnoughPongs() {
+        val tracker = LatencyTracker(minClockSamples = 2)
+        tracker.onPong(0, 0, 0)
+        tracker.onFrameRendered(0, 10_000)
+        assertEquals(0L, tracker.takeWindow().latencyAvgUs)
+        tracker.onPong(0, 0, 0)
+        tracker.onFrameRendered(0, 10_000)
+        val window = tracker.takeWindow()
+        assertEquals(10_000L, window.latencyAvgUs)
+        assertEquals(10, window.p50Ms)
+    }
+
+    @Test
+    fun negativeRttPongIsIgnored() {
+        val tracker = LatencyTracker()
+        tracker.onPong(1_000, 50_000, 1_200)
+        tracker.onPong(5_000, 0, 4_000) // rtt -1000
+        assertEquals(-48_900L, tracker.takeWindow().offsetUs)
+    }
+
+    @Test
+    fun latencyAbove500MsIsClampedInPercentiles() {
+        val tracker = LatencyTracker(minClockSamples = 1)
+        tracker.onPong(0, 0, 0)
+        tracker.onFrameRendered(0, 900_000)
+        val window = tracker.takeWindow()
+        assertEquals(900_000L, window.latencyMaxUs)
+        assertEquals(500, window.p99Ms)
     }
 
     @Test

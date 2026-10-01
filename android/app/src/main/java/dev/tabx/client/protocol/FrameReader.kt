@@ -7,6 +7,7 @@ import java.io.InputStream
 /** Reads PC -> tablet messages. Not thread-safe: use from a single reader thread. */
 class FrameReader(input: InputStream) {
     private val stream = DataInputStream(BufferedInputStream(input, 64 * 1024))
+    private val scratch = ByteArray(8 * 1024)
 
     /** Blocks until the next known message; unknown types are skipped. Throws EOFException at end of stream. */
     fun read(): PcMessage {
@@ -38,8 +39,17 @@ class FrameReader(input: InputStream) {
                     expectSize("PONG", size, 16)
                     return PcMessage.Pong(stream.readLong(), stream.readLong())
                 }
-                else -> stream.readFully(ByteArray(size))
+                else -> skip(size)
             }
+        }
+    }
+
+    private fun skip(size: Int) {
+        var remaining = size
+        while (remaining > 0) {
+            val n = minOf(remaining, scratch.size)
+            stream.readFully(scratch, 0, n)
+            remaining -= n
         }
     }
 
