@@ -22,9 +22,9 @@ ADB_FALLBACK = Path.home() / "AppData" / "Local" / "Android" / "Sdk" / "platform
 
 ENCODERS = {
     "nvenc": ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull", "-zerolatency", "1", "-delay", "0"],
-    # AMF : -usage ultralowlatency/lowlatency ignore -g (une seule IDR) ; -latency 1 donne la basse latence en gardant le GOP.
-    # -aud 0 : AMF insère déjà ses AUD, le bsf h264_metadata en ajoutait un doublon. -header_spacing 60 : SPS/PPS avant chaque IDR.
-    "amf": ["-c:v", "h264_amf", "-latency", "1", "-quality", "speed", "-aud", "0", "-header_spacing", "60"],
+    # AMF : -usage ultralowlatency/lowlatency ignorent -g (une seule IDR) ; sans -usage, -latency 1 donne la basse latence en gardant le GOP.
+    # -aud 0 : sinon AMF ajoute ses propres AUD, en double avec ceux du bsf h264_metadata.
+    "amf": ["-c:v", "h264_amf", "-latency", "1", "-quality", "speed", "-aud", "0"],
 }
 
 
@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
 
 def ffmpeg_command(args: argparse.Namespace) -> list[str]:
     return [
-        "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
         # hwdownload : sur le portable hybride l'écran est sur l'AMD et NVENC sur la NVIDIA (corrigé en phase 2).
         "-f", "lavfi", "-i", f"ddagrab=output_idx={args.output}:framerate={args.fps},hwdownload,format=bgra",
         *ENCODERS[args.encoder],
@@ -72,14 +72,17 @@ def setup_adb_forward(adb: str) -> None:
         sys.exit("Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la tablette.")
     if states.count("device") != 1:
         sys.exit(f"Il faut exactement une tablette prête. État actuel : {states}")
-    subprocess.run([adb, "forward", f"tcp:{protocol.PORT}", f"tcp:{protocol.PORT}"], check=True)
+    result = subprocess.run([adb, "forward", f"tcp:{protocol.PORT}", f"tcp:{protocol.PORT}"],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit(f"adb forward a échoué : {result.stderr.strip()}")
 
 
 def connect() -> tuple[socket.socket, BinaryIO, protocol.Hello]:
     """Connects through adb forward and waits for HELLO, retrying while the app isn't listening."""
     announced = False
     while True:
-        sock = None
+        sock = rfile = None
         try:
             sock = socket.create_connection(("127.0.0.1", protocol.PORT), timeout=2)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -88,6 +91,8 @@ def connect() -> tuple[socket.socket, BinaryIO, protocol.Hello]:
             hello = protocol.read_message(rfile)
             sock.settimeout(None)
         except (OSError, EOFError, protocol.ProtocolError):
+            if rfile is not None:
+                rfile.close()
             if sock is not None:
                 sock.close()
             if not announced:
@@ -108,6 +113,7 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
     splitter = annexb.AccessUnitSplitter()
     size: tuple[int, int] | None = None
     last_sps: bytes | None = None
+    last_pps: bytes | None = None
     bad_sps: bytes | None = None
     while not stop.is_set():
         chunk = source.read1(65536)
@@ -132,6 +138,9 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
                 codec_config = annexb.START_CODE + info.sps + annexb.START_CODE + info.pps
                 send(protocol.encode_video(now_us(), codec_config, protocol.FLAG_CODEC_CONFIG))
                 last_sps = info.sps
+                last_pps = info.pps
+            if info.is_idr and info.sps is None and last_sps is not None:
+                unit = annexb.insert_parameter_sets(unit, last_sps, last_pps)
             send(protocol.encode_video(now_us(), unit, protocol.FLAG_KEY if info.is_idr else 0))
 
 
@@ -143,22 +152,30 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
         with send_lock:
             sock.sendall(data)
 
-    ffmpeg = subprocess.Popen(ffmpeg_command(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def send_pong(t_tab_us: int) -> None:
+        with send_lock:  # l'horodatage est pris sous le verrou : pas d'attente entre la mesure et l'envoi
+            sock.sendall(protocol.encode_pong(t_tab_us, now_us()))
+
+    ffmpeg = subprocess.Popen(ffmpeg_command(args), stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
     disconnected = threading.Event()
 
     def pump_stderr() -> None:
-        for line in ffmpeg.stderr:
-            text = line.decode(errors="replace").rstrip()
-            stderr_tail.append(text)
-            print(f"[ffmpeg] {text}")
+        try:
+            for line in ffmpeg.stderr:
+                text = line.decode(errors="replace").rstrip()
+                stderr_tail.append(text)
+                print(f"[ffmpeg] {text}")
+        except (OSError, ValueError):
+            pass  # le thread ne doit jamais mourir tant que ffmpeg écrit
 
     def read_tablet() -> None:
         try:
             while True:
                 message = protocol.read_message(rfile)
                 if isinstance(message, protocol.Ping):
-                    send(protocol.encode_pong(message.t_tab_us, now_us()))
+                    send_pong(message.t_tab_us)
                 elif isinstance(message, protocol.Stats):
                     print(f"{message.fps:3d} fps | latence moy {message.latency_avg_us / 1000:5.1f} ms, "
                           f"max {message.latency_max_us / 1000:5.1f} ms | perdues {message.dropped} | "
@@ -169,6 +186,10 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
             print(f"Tablette déconnectée ({e})")
         finally:
             disconnected.set()
+            try:
+                sock.shutdown(socket.SHUT_RDWR)  # réveille un sendall bloqué dans stream()
+            except OSError:
+                pass
             ffmpeg.kill()
 
     threading.Thread(target=pump_stderr, daemon=True).start()
@@ -182,6 +203,7 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
         tablet_gone = send_failed or disconnected.is_set()
         ffmpeg.kill()
         ffmpeg.wait()
+        rfile.close()
         sock.close()
     if not tablet_gone:
         print("ffmpeg s'est arrêté de lui-même. Dernières lignes :", *stderr_tail, sep="\n  ")
@@ -189,6 +211,7 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args()
     if shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg introuvable : winget install Gyan.FFmpeg, puis rouvre le terminal.")

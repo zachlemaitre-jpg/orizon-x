@@ -861,6 +861,8 @@ git commit -m "feat(relay): parse display size from H.264 SPS"
 
 ### Task 5 : Relais `relay.py`
 
+> Note d'exécution : le code final diffère de ce bloc (options AMF mesurées, réinsertion SPS/PPS, durcissements de revue) — la référence est `host-prototype/relay.py` et la spec §6.2.
+
 Ce fichier orchestre des processus et des sockets : il n'a pas de test unitaire (la logique testable est dans `protocol.py` et `annexb.py`). Il est vérifié manuellement ici, puis en intégration (tâche 12).
 
 **Files:**

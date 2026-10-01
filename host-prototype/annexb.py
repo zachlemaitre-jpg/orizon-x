@@ -91,7 +91,17 @@ def describe(unit: bytes) -> AccessUnitInfo:
     return AccessUnitInfo(is_idr, sps, pps)
 
 
-_HIGH_PROFILES = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
+def insert_parameter_sets(unit: bytes, sps: bytes, pps: bytes) -> bytes:
+    """Returns the access unit with SPS and PPS inserted right after its leading AUD."""
+    after_aud = unit.find(_START_3, len(_AUD_MARK))  # start code of the NAL following the AUD
+    if after_aud < 0:
+        return unit + START_CODE + sps + START_CODE + pps
+    if unit[after_aud - 1] == 0:  # 4-byte start code (an AUD's payload byte is never 0)
+        after_aud -= 1
+    return unit[:after_aud] + START_CODE + sps + START_CODE + pps + unit[after_aud:]
+
+
+_HIGH_PROFILES ={100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
 
 
 class _BitReader:

@@ -89,6 +89,15 @@ class DescribeTest(unittest.TestCase):
         self.assertEqual(nals[0][0] & 0x1F, annexb.NAL_AUD)
         self.assertTrue(all(nal[:3] != b"\x00\x00\x01" for nal in nals))
 
+    def test_insert_parameter_sets_after_aud(self):
+        first = annexb.describe(self.units[0])
+        out = annexb.insert_parameter_sets(self.units[1], first.sps, first.pps)
+        types = [nal[0] & 0x1F for nal in annexb.split_nals(out)]
+        original = [nal[0] & 0x1F for nal in annexb.split_nals(self.units[1])]
+        self.assertEqual(types, [annexb.NAL_AUD, annexb.NAL_SPS, annexb.NAL_PPS] + original[1:])
+        self.assertEqual(annexb.describe(out).sps, first.sps)
+        self.assertEqual(out.replace(annexb.START_CODE + first.sps + annexb.START_CODE + first.pps, b""), self.units[1])
+
 
 class SpsTest(unittest.TestCase):
     def test_sample_size_applies_frame_cropping(self):

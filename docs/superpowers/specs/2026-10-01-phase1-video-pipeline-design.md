@@ -204,7 +204,9 @@ ffmpeg -f lavfi -i ddagrab=output_idx=0:framerate=60,hwdownload,format=bgra
   -bsf:v h264_metadata=aud=insert -f h264 -
 ```
 
-AMD : identique, sauf l'encodeur : `-c:v h264_amf -usage ultralowlatency -quality speed -rc cbr -b:v 30M -bf 0 -g 60`.
+AMD : `-c:v h264_amf -latency 1 -quality speed -aud 0`, le reste identique.
+
+Mesuré sur la machine cible : avec `-usage ultralowlatency`, AMF ignore `-g` (une seule IDR) ; AMF ajoute ses propres AUD si `-aud 0` est absent. Le relais réinsère SPS/PPS dans toute IDR qui n'en porte pas. NVENC exige un pilote NVIDIA ≥ 610 avec ce build de ffmpeg.
 
 Le relais construit cette commande : `relay.py --encoder nvenc|amf --output 0 --bitrate 30M --fps 60`.
 
@@ -212,7 +214,7 @@ Le relais construit cette commande : `relay.py --encoder nvenc|amf --output 0 --
 
 | Compromis | Raison | Corrigé en |
 |---|---|---|
-| `hwdownload` (copie via le CPU) | Sur le portable hybride, l'écran est piloté par l'AMD et NVENC est sur la NVIDIA : le passage direct GPU→GPU échoue dans ffmpeg. | Phase 2 |
+| `hwdownload` (copie via le CPU) | Sur le portable hybride, l'écran est piloté par l'AMD et NVENC est sur la NVIDIA : le passage direct GPU→GPU échoue dans ffmpeg (mesuré : sans `hwdownload`, AMF échoue avec « SubmitInput() failed with error 18 »). | Phase 2 |
 | GOP fixe de 60 | Le relais ne peut pas forcer d'IDR dans ffmpeg : `KEYFRAME_REQ` est journalisé et satisfait en ≤ 1 s. | Phase 2 |
 | Fin de frame détectée à l'AUD suivant | Seul découpage fiable sur un pipe ; ajoute ~1 frame (16 ms) hors mesure tablette. | Phase 2 |
 | Résolution = écran PC existant | La tablette letterboxe ; le 2880×1800 natif arrive avec l'IDD. | Phase 3 |
