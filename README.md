@@ -39,6 +39,27 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
 
 La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : elle exclut la capture et l'encodage côté PC. La latence de bout en bout se mesure en filmant les deux écrans.
 
+## Second écran étendu
+
+Sans configuration, le relais **duplique** un écran existant. Pour un vrai écran étendu, il faut un moniteur virtuel. En attendant le driver maison (phase 3), on utilise [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver), un driver signé : pas besoin du mode test.
+
+1. Installer : `winget install --id=VirtualDrivers.Virtual-Display-Driver -e`. Lancer ensuite **VDD Control** (dans `%LOCALAPPDATA%\Microsoft\WinGet\Packages\VirtualDrivers.Virtual-Display-Driver_*`) et cliquer **une seule fois** sur « Install Driver » : chaque clic crée un adaptateur de plus.
+2. Configurer `C:\VirtualDisplayDriver\vdd_settings.xml` :
+   - `<friendlyname>` = le GPU qui pilote l'écran principal (ici `AMD Radeon(TM) 890M Graphics`) ;
+   - ajouter la résolution `2880`×`1800` à `60` Hz dans `<resolutions>`.
+
+   Cliquer ensuite sur « Restart Driver » dans VDD Control.
+3. Dans Paramètres → Écran : « Étendre ces affichages », écran virtuel en 2880×1800 à 200 %, placé du côté où se trouve la tablette.
+4. Trouver son numéro, puis lancer le relais dessus :
+   ```powershell
+   py relay.py --list-outputs
+   py relay.py --encoder amf --output 2
+   ```
+
+**À savoir :**
+- **Désinstaller le driver (VDD Control ou Gestionnaire de périphériques) avant toute mise à jour de pilote GPU**, sinon risque d'écran noir au démarrage.
+- Le tactile n'agit pas encore sur le PC (phase 4) : on passe sur l'écran virtuel avec la souris.
+
 ## Tests
 
 - Python : `cd host-prototype; py -m unittest discover -v`

@@ -1,11 +1,13 @@
 """Phase-1 relay: ffmpeg (ddagrab + hardware H.264) -> TABX protocol -> tablet through adb forward.
 
 Usage: py relay.py --encoder nvenc|amf [--output 0] [--fps 60] [--bitrate 30M]
+       py relay.py --list-outputs
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import re
 import shutil
 import socket
 import subprocess
@@ -46,12 +48,36 @@ def now_us() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Relais TABX phase 1 : écran PC -> tablette via adb")
-    parser.add_argument("--encoder", choices=sorted(ENCODERS), required=True,
+    parser.add_argument("--encoder", choices=sorted(ENCODERS),
                         help="nvenc (sur secteur, GPU NVIDIA) ou amf (sur batterie, iGPU AMD)")
-    parser.add_argument("--output", type=int, default=0, help="index de l'écran capturé (ddagrab output_idx)")
+    parser.add_argument("--output", type=int, default=0, help="index de l'écran capturé (voir --list-outputs)")
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--bitrate", default="30M")
-    return parser.parse_args()
+    parser.add_argument("--list-outputs", action="store_true", help="liste les écrans capturables puis quitte")
+    args = parser.parse_args()
+    if not args.list_outputs and args.encoder is None:
+        parser.error("--encoder est requis (sauf avec --list-outputs)")
+    return args
+
+
+def list_outputs(max_outputs: int = 8) -> None:
+    """Prints each screen ddagrab can capture (outputs of the default D3D11 adapter) with its size."""
+    found = 0
+    for index in range(max_outputs):
+        result = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-f", "lavfi",
+             "-i", f"ddagrab=output_idx={index}:framerate=1,hwdownload,format=bgra",
+             "-frames:v", "1", "-f", "null", "-"],
+            capture_output=True, text=True, errors="replace",
+        )
+        if result.returncode != 0:
+            break  # les index sont contigus : le premier échec marque la fin
+        size = re.search(r"\b(\d{3,5})x(\d{3,5})\b", result.stderr)
+        print(f"--output {index} : {size.group(0) if size else 'taille inconnue'}")
+        found += 1
+    if found == 0:
+        print("Aucun écran capturable (ffmpeg/ddagrab indisponible ?)")
+    print("Seuls les écrans du GPU par défaut sont listés (sur un portable hybride, ceux branchés sur l'autre GPU n'apparaissent pas).")
 
 
 def ffmpeg_command(args: argparse.Namespace) -> list[str]:
@@ -248,6 +274,9 @@ def main() -> None:
     args = parse_args()
     if shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg introuvable : winget install Gyan.FFmpeg, puis rouvre le terminal.")
+    if args.list_outputs:
+        list_outputs()
+        return
     adb = find_adb()
     try:
         while True:
