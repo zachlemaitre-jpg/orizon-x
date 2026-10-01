@@ -1,0 +1,60 @@
+package dev.tabx.client
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.tabx.client.protocol.PcMessage
+import dev.tabx.client.stats.LatencyTracker
+
+sealed interface ConnectionState {
+    data class Waiting(val reason: String?) : ConnectionState
+    data class Streaming(val width: Int, val height: Int) : ConnectionState
+}
+
+data class HudData(
+    val fps: Int,
+    val avgMs: Double,
+    val maxMs: Double,
+    val p50Ms: Int,
+    val p99Ms: Int,
+    val offsetMs: Double?,
+    val decoder: String,
+)
+
+/** Compose-observable app state. Written from background threads, read by the UI. */
+class UiModel : Session.Listener {
+    var state by mutableStateOf<ConnectionState>(ConnectionState.Waiting(null))
+        private set
+    var hud by mutableStateOf<HudData?>(null)
+        private set
+    var hudVisible by mutableStateOf(false)
+        private set
+
+    @Volatile private var decoderName = ""
+
+    fun showWaiting(reason: String?) {
+        state = ConnectionState.Waiting(reason)
+        hud = null
+    }
+
+    fun toggleHud() {
+        hudVisible = !hudVisible
+    }
+
+    override fun onStreaming(config: PcMessage.Config, decoder: String) {
+        decoderName = decoder
+        state = ConnectionState.Streaming(config.width, config.height)
+    }
+
+    override fun onStats(window: LatencyTracker.Window) {
+        hud = HudData(
+            fps = window.fps,
+            avgMs = window.latencyAvgUs / 1000.0,
+            maxMs = window.latencyMaxUs / 1000.0,
+            p50Ms = window.p50Ms,
+            p99Ms = window.p99Ms,
+            offsetMs = window.offsetUs?.let { it / 1000.0 },
+            decoder = decoderName,
+        )
+    }
+}
