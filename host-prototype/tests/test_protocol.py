@@ -63,6 +63,10 @@ class ReadMessageTest(unittest.TestCase):
         with self.assertRaises(protocol.ProtocolError):
             protocol.read_message(io.BytesIO(bytes.fromhex("8500000000000016" "0202" + "00" * 20)))
 
+    def test_pen_out_of_range_is_an_empty_input(self):
+        message = protocol.read_message(io.BytesIO(bytes.fromhex("8500000000000002" "0200")))
+        self.assertEqual(message, protocol.Input(protocol.DEVICE_PEN, ()))
+
     def test_rejects_oversized_payload(self):
         header = bytes.fromhex("82000000") + (protocol.MAX_PAYLOAD + 1).to_bytes(4, "big")
         with self.assertRaises(protocol.ProtocolError):

@@ -45,16 +45,18 @@ class FrameWriter(output: OutputStream) {
                     Protocol.TYPE_STATS
                 }
                 is TabletMessage.Input -> {
+                    val max = if (message.device == Protocol.DEVICE_PEN) 1 else Protocol.MAX_TOUCH_CONTACTS
+                    val contacts = message.contacts.take(max)
                     out.writeByte(message.device)
-                    out.writeByte(message.contacts.size)
-                    for (contact in message.contacts) {
+                    out.writeByte(contacts.size)
+                    for (contact in contacts) {
                         out.writeByte(contact.id)
                         out.writeByte(contact.flags)
-                        out.writeShort(contact.x)
-                        out.writeShort(contact.y)
-                        out.writeShort(contact.pressure)
-                        out.writeByte(contact.tiltX)
-                        out.writeByte(contact.tiltY)
+                        out.writeShort(contact.x.coerceIn(0, 0xFFFF))
+                        out.writeShort(contact.y.coerceIn(0, 0xFFFF))
+                        out.writeShort(contact.pressure.coerceIn(0, 0xFFFF))
+                        out.writeByte(contact.tiltX.coerceIn(-90, 90))
+                        out.writeByte(contact.tiltY.coerceIn(-90, 90))
                     }
                     Protocol.TYPE_INPUT
                 }
