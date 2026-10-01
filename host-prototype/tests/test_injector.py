@@ -1,4 +1,5 @@
 import ctypes
+import time
 import unittest
 from unittest import mock
 
@@ -86,7 +87,8 @@ class FakeWin32:
         return [c for c in self.calls if c[0] == kind]
 
 
-class InjectorTest(unittest.TestCase):
+class _InjectorCase(unittest.TestCase):
+    KEEPALIVE_S = 3600  # le keep-alive ne se déclenche pas pendant un test, sauf pour KeepAliveTest
     RECT = Rect(2560, -207, 2880, 1800)
     TOUCH = lambda self, *contacts: protocol.Input(protocol.DEVICE_TOUCH, tuple(contacts))
     PEN = lambda self, *contacts: protocol.Input(protocol.DEVICE_PEN, tuple(contacts))
@@ -98,7 +100,8 @@ class InjectorTest(unittest.TestCase):
         patches = mock.patch.multiple(
             injector, create=True, AVAILABLE=True,
             _create_device=self.win32.create_device, _inject=self.win32.inject,
-            _destroy_device=self.win32.destroy_device, virtual_screen_origin=lambda: (-1920, -207))
+            _destroy_device=self.win32.destroy_device, virtual_screen_origin=lambda: (-1920, -207),
+            KEEPALIVE_S=self.KEEPALIVE_S)
         patches.start()
         self.addCleanup(patches.stop)
         self.injector = injector.Injector(self.RECT, log=self.log.append)
@@ -107,6 +110,9 @@ class InjectorTest(unittest.TestCase):
     def contact(self, id_, flags):
         return protocol.Contact(id_, flags, 0, 0, 0, 0, 0)
 
+
+
+class InjectorTest(_InjectorCase):
     def test_devices_are_created_lazily_once_per_type(self):
         self.assertEqual(self.win32.calls, [])
         self.injector.handle(self.TOUCH(self.contact(0, self.DOWN)))
@@ -151,6 +157,28 @@ class InjectorTest(unittest.TestCase):
         self.win32.calls.clear()
         self.injector.handle(self.TOUCH(self.contact(0, self.DOWN)))
         self.assertEqual(self.win32.calls, [])
+
+
+class KeepAliveTest(_InjectorCase):
+    KEEPALIVE_S = 0.02
+
+    def test_held_contact_is_reinjected(self):
+        self.injector.handle(self.TOUCH(self.contact(0, self.DOWN)))
+        self.assertEqual(len(self.win32.kinds("inject")), 1)
+        time.sleep(0.1)
+        extra = self.win32.kinds("inject")[1:]
+        self.assertGreaterEqual(len(extra), 1)
+        held = inputstate.POINTER_FLAG_UPDATE | inputstate.POINTER_FLAG_INRANGE | inputstate.POINTER_FLAG_INCONTACT
+        self.assertTrue(all(frame[0][2] & ~inputstate.POINTER_FLAG_PRIMARY == held for _, _, frame in extra))
+        self.injector.close()
+
+    def test_nothing_is_reinjected_without_a_held_contact(self):
+        self.injector.handle(self.PEN(self.contact(0, protocol.CONTACT_IN_RANGE)))
+        count = len(self.win32.kinds("inject"))
+        self.assertEqual(count, 1)
+        time.sleep(0.1)
+        self.assertEqual(len(self.win32.kinds("inject")), count)
+        self.injector.close()
 
 
 if __name__ == "__main__":

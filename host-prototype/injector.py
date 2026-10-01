@@ -304,7 +304,7 @@ class _ProbeWindow:
             ("lpszClassName", wintypes.LPCWSTR),
         ]
 
-    def __init__(self, centre: tuple[int, int], size: int = 400) -> None:
+    def __init__(self, centre: tuple[int, int], width: int = 720, height: int = 480) -> None:
         self.pointer_updates = 0
         _user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         _user32.DefWindowProcW.restype = ctypes.c_ssize_t
@@ -322,7 +322,7 @@ class _ProbeWindow:
         ex_style = 0x00000008 | 0x00000080 | 0x08000000  # TOPMOST | TOOLWINDOW | NOACTIVATE
         self._hwnd = _user32.CreateWindowExW(
             ex_style, self._class_name, "TabX selftest", 0x80000000 | 0x10000000,  # POPUP | VISIBLE
-            centre[0] - size // 2, centre[1] - size // 2, size, size, None, None, None, None)
+            centre[0] - width // 2, centre[1] - height // 2, width, height, None, None, None, None)
 
     def _on_message(self, hwnd, message, wparam, lparam):
         if message == self.WM_POINTERUPDATE:
