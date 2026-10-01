@@ -14,6 +14,7 @@ EXPECTED_TABLET_MESSAGES = {
     "PING": lambda f: protocol.Ping(**f),
     "KEYFRAME_REQ": lambda f: protocol.KeyframeRequest(),
     "STATS": lambda f: protocol.Stats(**f),
+    "INPUT": lambda f: protocol.Input(f["device"], tuple(protocol.Contact(**c) for c in f["contacts"])),
 }
 
 
@@ -49,6 +50,18 @@ class ReadMessageTest(unittest.TestCase):
         unknown = bytes.fromhex("99000000" "00000003" "010203")
         stream = io.BytesIO(unknown + bytes.fromhex(self.PING_HEX))
         self.assertEqual(protocol.read_message(stream), protocol.Ping(123456789))
+
+    def test_rejects_input_with_wrong_size(self):
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.read_message(io.BytesIO(bytes.fromhex("8500000000000003" "010100")))
+
+    def test_rejects_input_from_unknown_device(self):
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.read_message(io.BytesIO(bytes.fromhex("8500000000000002" "0300")))
+
+    def test_rejects_more_than_one_pen_contact(self):
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.read_message(io.BytesIO(bytes.fromhex("8500000000000016" "0202" + "00" * 20)))
 
     def test_rejects_oversized_payload(self):
         header = bytes.fromhex("82000000") + (protocol.MAX_PAYLOAD + 1).to_bytes(4, "big")

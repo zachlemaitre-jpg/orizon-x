@@ -49,6 +49,29 @@
       "type": "STATS",
       "fields": {"fps": 60, "latency_avg_us": 15000, "latency_max_us": 31000, "dropped": 2, "rtt_us": 850},
       "hex": "8400000000000012003c00003a98000079180000000200000352"
+    },
+    {
+      "name": "input_touch_two_fingers",
+      "type": "INPUT",
+      "fields": {"device": 1, "contacts": [
+        {"id": 0, "flags": 3, "x": 32768, "y": 16384, "pressure": 0, "tilt_x": 0, "tilt_y": 0},
+        {"id": 1, "flags": 3, "x": 65535, "y": 0, "pressure": 0, "tilt_x": 0, "tilt_y": 0}
+      ]},
+      "hex": "85000000000000160102000380004000000000000103ffff000000000000"
+    },
+    {
+      "name": "input_pen_contact",
+      "type": "INPUT",
+      "fields": {"device": 2, "contacts": [
+        {"id": 0, "flags": 7, "x": 1000, "y": 2000, "pressure": 512, "tilt_x": -30, "tilt_y": 45}
+      ]},
+      "hex": "850000000000000c0201000703e807d00200e22d"
+    },
+    {
+      "name": "input_touch_none",
+      "type": "INPUT",
+      "fields": {"device": 1, "contacts": []},
+      "hex": "85000000000000020100"
     }
   ]
 }

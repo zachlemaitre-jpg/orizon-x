@@ -20,6 +20,16 @@ HELLO = 0x81
 PING = 0x82
 KEYFRAME_REQ = 0x83
 STATS = 0x84
+INPUT = 0x85
+
+DEVICE_TOUCH = 1
+DEVICE_PEN = 2
+MAX_TOUCH_CONTACTS = 10
+# bits de Contact.flags
+CONTACT_CONTACT = 0x01
+CONTACT_IN_RANGE = 0x02
+CONTACT_BARREL = 0x04
+CONTACT_CANCELED = 0x08
 
 FLAG_KEY = 0x01
 FLAG_CODEC_CONFIG = 0x02
@@ -30,6 +40,8 @@ _U64 = struct.Struct(">Q")
 _PONG = struct.Struct(">QQ")
 _HELLO = struct.Struct(">4sHHHH")
 _STATS = struct.Struct(">HIIII")
+_INPUT_HEAD = struct.Struct(">BB")
+_CONTACT = struct.Struct(">BBHHHbb")
 
 
 class ProtocolError(Exception):
@@ -63,7 +75,24 @@ class Stats:
     rtt_us: int
 
 
-TabletMessage = Hello | Ping | KeyframeRequest | Stats
+@dataclass(frozen=True)
+class Contact:
+    id: int
+    flags: int
+    x: int
+    y: int
+    pressure: int
+    tilt_x: int
+    tilt_y: int
+
+
+@dataclass(frozen=True)
+class Input:
+    device: int
+    contacts: tuple[Contact, ...]
+
+
+TabletMessage = Hello | Ping | KeyframeRequest | Stats | Input
 
 
 def _frame(msg_type: int, flags: int, payload: bytes) -> bytes:
@@ -98,9 +127,28 @@ def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
             return KeyframeRequest()
         if msg_type == STATS:
             return Stats(*_STATS.unpack(payload))
+        if msg_type == INPUT:
+            return _decode_input(payload)
     except struct.error as e:
         raise ProtocolError(f"payload invalide pour le type 0x{msg_type:02x} : {e}") from e
     return None
+
+
+def _decode_input(payload: bytes) -> Input:
+    if len(payload) < _INPUT_HEAD.size:
+        raise ProtocolError(f"INPUT trop court : {len(payload)} octets")
+    device, count = _INPUT_HEAD.unpack_from(payload)
+    max_count = {DEVICE_TOUCH: MAX_TOUCH_CONTACTS, DEVICE_PEN: 1}.get(device)
+    if max_count is None:
+        raise ProtocolError(f"INPUT : périphérique inconnu {device}")
+    if count > max_count:
+        raise ProtocolError(f"INPUT : {count} contacts pour le périphérique {device} (max {max_count})")
+    if len(payload) != _INPUT_HEAD.size + _CONTACT.size * count:
+        raise ProtocolError(f"INPUT : {len(payload)} octets pour {count} contact(s)")
+    contacts = tuple(
+        Contact(*_CONTACT.unpack_from(payload, _INPUT_HEAD.size + i * _CONTACT.size)) for i in range(count)
+    )
+    return Input(device, contacts)
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:

@@ -33,7 +33,17 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x82 | PING | t_tab_us u64 (toutes les 500 ms) |
 | 0x83 | KEYFRAME_REQ | vide |
 | 0x84 | STATS | fps u16, latency_avg_us u32, latency_max_us u32, dropped u32, rtt_us u32 (chaque seconde) |
-| 0x85 | INPUT | réservé (phase 4) |
+| 0x85 | INPUT | device u8 (1 tactile, 2 stylet), count u8 (≤ 10 tactile, ≤ 1 stylet), puis count × contact de 10 octets (voir ci-dessous) |
+
+## INPUT (phase 4)
+
+Contact (10 octets) : `id u8, flags u8, x u16, y u16, pressure u16, tilt_x i8, tilt_y i8`.
+
+- `id` : emplacement stable 0..9 (tactile) ; 0 (stylet).
+- `flags` : bit0 CONTACT (posé), bit1 IN_RANGE (détecté, y compris en survol), bit2 BARREL (bouton du stylet), bit3 CANCELED (geste annulé, aucun clic). Les autres bits valent 0 et sont ignorés.
+- `x`, `y` : 0..65535 sur l'image vidéo. `pressure` : 0..1024 (stylet). `tilt_x`, `tilt_y` : degrés −90..90 (stylet).
+
+Chaque message est l'**état complet** d'un périphérique. Un contact absent de la trame suivante est levé, et `count = 0` signifie que tout est levé ou hors de portée. Un contact CANCELED n'apparaît que dans une trame.
 
 ## Horloges
 
