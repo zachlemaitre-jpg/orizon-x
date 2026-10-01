@@ -31,8 +31,14 @@ class AccessUnitSplitter:
         while True:
             idx = self._buf.find(_AUD_MARK, self._search_from)
             if idx < 0:
-                # Keep the last bytes searchable: a mark may straddle two chunks.
-                self._search_from = max(self._search_from, len(self._buf) - len(_AUD_MARK) + 1)
+                if not self._synced:
+                    # Bytes before the first AUD are dropped anyway: keep only what a straddling mark needs
+                    # (4 bytes, so a 4-byte start code's leading zero survives).
+                    del self._buf[: max(0, len(self._buf) - len(_AUD_MARK))]
+                    self._search_from = 0
+                else:
+                    # Keep the last bytes searchable: a mark may straddle two chunks.
+                    self._search_from = max(self._search_from, len(self._buf) - len(_AUD_MARK) + 1)
                 return units
             start = idx - 1 if idx > 0 and self._buf[idx - 1] == 0 else idx  # include 4-byte start code
             if self._synced:
@@ -96,7 +102,9 @@ class _BitReader:
     def u(self, bits: int) -> int:
         value = 0
         for _ in range(bits):
-            byte = self._data[self._pos >> 3]
+            if self._pos >> 3 >= len(self._data):
+                raise ValueError("SPS tronqué")
+            byte =self._data[self._pos >> 3]
             value = (value << 1) | ((byte >> (7 - (self._pos & 7))) & 1)
             self._pos += 1
         return value
@@ -121,7 +129,7 @@ def _skip_scaling_list(reader: _BitReader, size: int) -> None:
 
 
 def parse_sps_size(sps: bytes) -> tuple[int, int]:
-    """Returns the displayed (width, height) of an SPS NAL (header byte included), cropping applied."""
+    """Returns the displayed (width, height) of an SPS NAL (header byte included), cropping applied. Raises ValueError if truncated."""
     r = _BitReader(sps[1:].replace(b"\x00\x00\x03", b"\x00\x00"))  # remove emulation prevention bytes
     profile_idc = r.u(8)
     r.u(16)  # constraint flags + level_idc
