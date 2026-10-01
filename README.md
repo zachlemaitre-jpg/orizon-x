@@ -15,10 +15,7 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
 ## Prérequis
 
 - Windows 11, Python ≥ 3.10 (lanceur `py`).
-- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan). Il doit être dans le PATH. Sur la machine de dev, un build existe dans `D:\NOZAFLU\windows\ffmpeg-2026-09-02-git-9fc8c785e2-essentials_build\ffmpeg-2026-09-02-git-9fc8c785e2-essentials_build\bin` : ajoute ce dossier au PATH utilisateur (Paramètres → Système → Informations système → Paramètres système avancés → Variables d'environnement), ou pour la session courante seulement :
-  ```powershell
-  $env:PATH = "D:\NOZAFLU\windows\ffmpeg-2026-09-02-git-9fc8c785e2-essentials_build\ffmpeg-2026-09-02-git-9fc8c785e2-essentials_build\bin;$env:PATH"
-  ```
+- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan), dans le PATH. Sur la machine de dev, il est installé dans `%LOCALAPPDATA%\Programs\ffmpeg\bin` (déjà ajouté au PATH utilisateur ; ouvrir un nouveau terminal après l'installation). Vérifier avec `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
 - Encodeur : **AMF** (iGPU AMD) fonctionne. **NVENC** exige un pilote NVIDIA ≥ 610 avec ce build de ffmpeg : mets à jour le pilote avant d'utiliser `--encoder nvenc`.
 - Android Studio (SDK + JBR). `adb` est cherché dans le PATH puis dans `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
 - Tablette Android 11+ avec le débogage USB activé : Paramètres → À propos de la tablette → Informations sur le logiciel → taper 7 fois sur « Numéro de version », puis Options de développement → « Débogage USB ». Brancher le câble et accepter l'autorisation sur la tablette.
