@@ -74,25 +74,47 @@ def find_adb() -> str:
     sys.exit("adb introuvable : installe Android platform-tools ou ajoute-le au PATH.")
 
 
-def setup_adb_forward(adb: str) -> None:
+def adb_problem(adb: str) -> str | None:
+    """None if exactly one authorized device is ready, else a message saying what to do."""
     out = subprocess.run([adb, "devices"], capture_output=True, text=True, check=True).stdout
     states = [line.split("\t")[1] for line in out.splitlines()[1:] if "\t" in line]
     if not states:
-        sys.exit("Aucune tablette détectée : branche le câble USB et active le débogage USB.")
+        return "Aucune tablette détectée : branche le câble USB et active le débogage USB."
     if "unauthorized" in states:
-        sys.exit("Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la tablette.")
+        return "Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la tablette."
     if states.count("device") != 1:
-        sys.exit(f"Il faut exactement une tablette prête. État actuel : {states}")
+        return f"Il faut exactement une tablette prête. État actuel : {states}"
+    return None
+
+
+def ensure_forward(adb: str) -> str | None:
+    """(Re)creates the adb forward; returns a message if it can't. adb drops forwards when the device reconnects."""
+    problem = adb_problem(adb)
+    if problem is not None:
+        return problem
     result = subprocess.run([adb, "forward", f"tcp:{protocol.PORT}", f"tcp:{protocol.PORT}"],
                             capture_output=True, text=True)
     if result.returncode != 0:
-        sys.exit(f"adb forward a échoué : {result.stderr.strip()}")
+        return f"adb forward a échoué : {result.stderr.strip()}"
+    return None
 
 
-def connect() -> tuple[socket.socket, SocketReader, protocol.Hello]:
-    """Connects through adb forward and waits for HELLO, retrying while the app isn't listening."""
-    announced = False
+def connect(adb: str) -> tuple[socket.socket, SocketReader, protocol.Hello]:
+    """Waits for a tablet, redoing the adb forward on each try, then connects and waits for HELLO."""
+    last_message: str | None = None
+
+    def wait(message: str) -> None:
+        nonlocal last_message
+        if message != last_message:
+            print(message)
+            last_message = message
+        time.sleep(1)
+
     while True:
+        problem = ensure_forward(adb)
+        if problem is not None:
+            wait(problem)
+            continue
         sock = None
         try:
             sock = socket.create_connection(("127.0.0.1", protocol.PORT), timeout=2)
@@ -104,10 +126,7 @@ def connect() -> tuple[socket.socket, SocketReader, protocol.Hello]:
         except (OSError, EOFError, protocol.ProtocolError):
             if sock is not None:
                 sock.close()
-            if not announced:
-                print("En attente de l'app sur la tablette (ouvre TabX)…")
-                announced = True
-            time.sleep(1)
+            wait("En attente de l'app sur la tablette (ouvre TabX)…")
             continue
         if not isinstance(hello, protocol.Hello):
             sys.exit(f"Premier message inattendu de la tablette : {hello}")
@@ -169,6 +188,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
     disconnected = threading.Event()
+    keyframe_requests = 0  # la tablette en envoie une juste après chaque CONFIG (normal) : on ne journalise que les suivantes
     closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
 
     def pump_stderr() -> None:
@@ -181,6 +201,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
             pass  # le thread ne doit jamais mourir tant que ffmpeg écrit
 
     def read_tablet() -> None:
+        nonlocal keyframe_requests
         try:
             while True:
                 message = protocol.read_message(rfile)
@@ -191,7 +212,9 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
                           f"max {message.latency_max_us / 1000:5.1f} ms | perdues {message.dropped} | "
                           f"RTT {message.rtt_us / 1000:.2f} ms")
                 elif isinstance(message, protocol.KeyframeRequest):
-                    print("Keyframe demandée : prochaine IDR sous 1 s (GOP fixe en phase 1)")
+                    keyframe_requests += 1
+                    if keyframe_requests >= 2:
+                        print("Keyframe demandée par la tablette : prochaine IDR sous 1 s (GOP fixe)")
         except (EOFError, OSError, protocol.ProtocolError) as e:
             if not closing.is_set():
                 print(f"Tablette déconnectée ({e})")
@@ -200,7 +223,8 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
             sock.close()  # sous Windows, seul closesocket() interrompt un sendall bloqué dans stream()
             ffmpeg.kill()
 
-    threading.Thread(target=pump_stderr, daemon=True).start()
+    stderr_thread = threading.Thread(target=pump_stderr, daemon=True)
+    stderr_thread.start()
     threading.Thread(target=read_tablet, daemon=True).start()
     send_failed = False
     try:
@@ -214,6 +238,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
         closing.set()
         sock.close()
     if not tablet_gone:
+        stderr_thread.join(timeout=0.5)  # laisse le pump finir de lire avant d'afficher la fin du stderr
         print("ffmpeg s'est arrêté de lui-même. Dernières lignes :", *stderr_tail, sep="\n  ")
         sys.exit(1)
 
@@ -226,8 +251,7 @@ def main() -> None:
     adb = find_adb()
     try:
         while True:
-            setup_adb_forward(adb)
-            sock, rfile, hello = connect()
+            sock, rfile, hello = connect(adb)
             print(f"Tablette connectée : écran {hello.width}x{hello.height}, {hello.dpi} dpi")
             run_session(sock, rfile, args)
             print("Nouvelle tentative de connexion…")

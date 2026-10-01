@@ -93,6 +93,8 @@ def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
         if msg_type == PING:
             return Ping(*_U64.unpack(payload))
         if msg_type == KEYFRAME_REQ:
+            if payload:
+                raise ProtocolError(f"KEYFRAME_REQ avec un payload de {len(payload)} octets (attendu : vide)")
             return KeyframeRequest()
         if msg_type == STATS:
             return Stats(*_STATS.unpack(payload))

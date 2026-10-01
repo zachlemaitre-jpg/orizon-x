@@ -55,6 +55,10 @@ class ReadMessageTest(unittest.TestCase):
         with self.assertRaises(protocol.ProtocolError):
             protocol.read_message(io.BytesIO(header))
 
+    def test_rejects_keyframe_request_with_payload(self):
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.read_message(io.BytesIO(bytes.fromhex("8300000000000001" "00")))
+
     def test_truncated_stream_raises_eof(self):
         with self.assertRaises(EOFError):
             protocol.read_message(io.BytesIO(bytes.fromhex(self.PING_HEX)[:-1]))

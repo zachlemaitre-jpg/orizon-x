@@ -62,7 +62,7 @@ Le risque technique principal est la latence du décodeur MediaCodec, qui varie 
 
 ### 4.1 Transport
 
-- La tablette écoute sur `127.0.0.1:27183` (loopback uniquement, jamais `0.0.0.0` : sinon tout appareil du Wi-Fi pourrait injecter un flux dans le décodeur).
+- La tablette écoute sur `127.0.0.1:27183` (loopback uniquement, jamais `0.0.0.0` : sinon tout appareil du Wi-Fi pourrait injecter un flux dans le décodeur). La tablette se lie explicitement à 127.0.0.1 (IPv4) : `getLoopbackAddress()` renverrait `::1`.
 - Le PC exécute `adb forward tcp:27183 tcp:27183` puis se connecte à `127.0.0.1:27183`.
 - Une seule connexion TCP full-duplex. `TCP_NODELAY` des deux côtés.
 - Tous les entiers sont non signés, **big-endian**.
@@ -108,7 +108,8 @@ Règles :
   - `rtt = t_recv − t_tab`
   - `offset = t_tab + rtt/2 − t_pc` (convertit une heure PC en heure tablette)
   - On conserve l'`offset` de l'échantillon ayant le plus petit `rtt` parmi les 16 derniers.
-- **Latence d'une frame** = `t_affichage − (pts_us + offset)`, où `t_affichage` vient de `OnFrameRenderedListener`.
+- **Latence d'une frame** = `t_affichage − (pts_us + offset)`, où `t_affichage` vient de `OnFrameRenderedListener`. La latence n'est enregistrée qu'après 4 `PONG` (mise en route de l'horloge).
+- La mesure est biaisée vers le bas d'au plus RTT_min/2 (le PONG peut attendre derrière la vidéo sur le trajet PC→tablette) ; le filtre min-RTT sur 16 échantillons limite l'effet.
 - En phase 1, `pts_us` correspond au moment où le relais a reçu la frame complète de ffmpeg : la capture, l'encodage et le délai de découpage du relais ne sont donc **pas** inclus. La latence de bout en bout réelle se mesure en filmant les deux écrans.
 
 ## 5. Client Android
@@ -149,7 +150,7 @@ dev/tabx/client/
 
 - `MediaFormat` : `video/avc`, dimensions issues de `CONFIG`, `KEY_LOW_LATENCY = 1` toujours demandé, ainsi que la clé vendeur Exynos `vendor.rtc-ext-dec-low-latency.enable` (ignorée par les décodeurs qui ne la gèrent pas), `KEY_PRIORITY = 0`, `KEY_FRAME_RATE` (fps de `CONFIG`) et `KEY_MAX_INPUT_SIZE = max(w×h, 2 Mio)`.
 - Mode asynchrone (`setCallback` sur un `HandlerThread` dédié).
-- Les indices de buffers d'entrée libres sont placés dans une `ArrayBlockingQueue`. Le thread réseau prend un indice (attente bloquante), copie la frame, appelle `queueInputBuffer` avec `presentationTimeUs = pts_us`. Si le décodeur sature, le thread réseau bloque et TCP applique la contre-pression jusqu'au PC : aucune file ne grossit.
+- Les indices de buffers d'entrée libres sont placés dans une `LinkedBlockingQueue`. Le thread réseau prend un indice (`submit()` attend au plus 500 ms via `poll`, sinon `DecoderFailure`), copie la frame, appelle `queueInputBuffer` avec `presentationTimeUs = pts_us`. Si le décodeur sature, le thread réseau bloque et TCP applique la contre-pression jusqu'au PC : aucune file ne grossit.
 - Les paquets `CODEC_CONFIG` sont soumis avec `BUFFER_FLAG_CODEC_CONFIG`.
 - Un `onError` fatal réveille immédiatement `submit()` s'il attend un buffer d'entrée.
 - Après création ou recréation du décodeur, toute frame non-`KEY` est ignorée jusqu'à la première `KEY`. Une frame `KEY` ou `CODEC_CONFIG` qui a provoqué l'échec est resoumise au nouveau décodeur.
@@ -161,8 +162,8 @@ dev/tabx/client/
 
 | Thread | Rôle |
 |---|---|
-| `net-reader` | accept, lecture des messages, aiguillage vers le décodeur / le tracker |
-| `net-writer` | file d'envoi (`HELLO`, `PING`, `STATS`, `KEYFRAME_REQ`) |
+| `net-reader` | accept, lecture des messages, aiguillage vers le décodeur / le tracker ; écrit aussi `HELLO` et `KEYFRAME_REQ` (le `FrameWriter` est synchronisé) |
+| `net-writer` | `PING` planifié (500 ms) et `STATS` (1 s) |
 | `codec` | callbacks MediaCodec |
 | UI | cycle de vie de la Surface, écrans, HUD |
 
@@ -224,12 +225,12 @@ Le relais construit cette commande : `relay.py --encoder nvenc|amf --output 0 --
 
 ### 6.4 Fonctionnement de `relay.py` (Python ≥ 3.10, bibliothèque standard uniquement)
 
-1. Vérifie `adb devices` et exécute `adb forward tcp:27183 tcp:27183`.
-2. Se connecte (`TCP_NODELAY`). En cas de refus, réessaie chaque seconde en affichant « Ouvre l'app sur la tablette ».
+1. À chaque essai : vérifie `adb devices` et (re)crée `adb forward tcp:27183 tcp:27183` ; s'il y a un problème, affiche un message (une seule fois par message) et attend 1 s.
+2. Se connecte (`TCP_NODELAY`). En cas de refus, réessaie chaque seconde en affichant « En attente de l'app sur la tablette (ouvre TabX)… ».
 3. Lit le `HELLO`, vérifie le magic et la version.
 4. Lance ffmpeg, lit le premier SPS pour obtenir la taille (en appliquant le `frame_cropping` : 1080 lignes sont codées en 1088), envoie `CONFIG` avec le `fps` passé en argument.
 5. Découpe le flux : ignore tout jusqu'au premier IDR, envoie SPS+PPS en `VIDEO` avec `CODEC_CONFIG`, puis chaque unité d'accès en `VIDEO` (flag `KEY` si elle contient un IDR). `pts_us` = horloge PC à la fin du découpage.
-6. Thread lecteur : répond à chaque `PING` par un `PONG` immédiat, affiche les `STATS` en console (fps, latence moyenne/max, frames perdues, RTT), journalise les `KEYFRAME_REQ`.
+6. Thread lecteur : répond à chaque `PING` par un `PONG` immédiat, affiche les `STATS` en console (fps, latence moyenne/max, frames perdues, RTT), journalise les `KEYFRAME_REQ` (sauf la première de la session, envoyée systématiquement après `CONFIG`).
 7. Si la tablette se déconnecte : arrêt de ffmpeg, retour à l'étape 2. Ctrl+C : arrêt propre.
 
 ### 6.5 Fichiers
@@ -266,11 +267,13 @@ host-prototype/
 
 | Situation | Réaction |
 |---|---|
-| `adb` introuvable / aucun appareil / appareil `unauthorized` | Message explicite avec l'action à faire, code de sortie ≠ 0 |
+| `adb` introuvable | Message explicite, code de sortie ≠ 0 |
+| Aucun appareil / appareil `unauthorized` / plusieurs appareils | Message explicite avec l'action à faire, attente (pas de sortie) |
 | Connexion refusée | Nouvel essai chaque seconde |
 | Version incompatible | Message explicite, code de sortie ≠ 0 |
 | ffmpeg introuvable ou terminé | Dernières lignes de son stderr, code de sortie ≠ 0 |
 | Tablette déconnectée | ffmpeg arrêté, retour à l'attente de connexion |
+| Tablette débranchée / redirection adb perdue | Message explicite, attente, `adb forward` refait à chaque essai (plus de sortie du relais) |
 
 ## 8. Tests
 

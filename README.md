@@ -36,6 +36,8 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
    cd host-prototype; py relay.py --encoder amf; cd ..
    ```
    Options : `--output N` (écran capturé), `--fps 60`, `--bitrate 30M`, `--encoder nvenc` (pilote ≥ 610).
+
+   Le relais attend la tablette et l'app tout seul (il refait `adb forward` à chaque essai) : l'ordre de lancement n'a pas d'importance. Les demandes de keyframe après une erreur de décodage sont journalisées.
 4. Tap à 3 doigts sur la tablette pendant le flux : affiche/masque le HUD (fps, latence envoi→affichage, p50/p99 de session, offset d'horloge, décodeur).
 
 La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : elle exclut la capture et l'encodage côté PC. La latence de bout en bout se mesure en filmant les deux écrans.
@@ -52,7 +54,7 @@ La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : ell
 - [ ] 60 fps stables pendant 10 min en bougeant des fenêtres, sans artefacts cumulés (stats du relais + HUD).
 - [ ] HUD : p50 ≤ 20 ms, p99 ≤ 40 ms. Noter les valeurs et le nom du décodeur.
 - [ ] Latence de bout en bout filmée (chronomètre en ms à l'écran, ralenti du téléphone) : valeur notée (référence ; ~20 ms dus aux compromis de la phase 1).
-- [ ] Câble débranché puis rebranché, relais relancé : le flux reprend sans relancer l'app.
+- [ ] Câble débranché puis rebranché (relais laissé tourner) : le flux reprend sans relancer l'app.
 - [ ] Relais tué (Ctrl+C) en plein flux : l'app revient à l'écran d'attente avec « PC déconnecté ».
 - [ ] Tous les tests passent.
 
@@ -60,10 +62,12 @@ La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : ell
 
 Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 
+`adb` n'est pas forcément dans le PATH : utiliser `& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"` ou ajouter ce dossier au PATH.
+
 - [ ] **Décodeur basse latence** : le HUD affiche le nom du décodeur (ex. `c2.exynos.h264.decoder`). Dans le log `décodeur … paramètres vendeur : […]`, vérifier si `vendor.rtc-ext-dec-low-latency.enable` est listé.
 - [ ] **fps du HUD ≈ 60** : s'il reste à 0, `OnFrameRenderedListener` ne se déclenche pas sur ce couple appareil/flux.
 - [ ] **Régime permanent propre** : aucune ligne « recréation du décodeur » ni « décodeur bloqué » ; « format de sortie » apparaît une fois par décodeur, pas à chaque IDR.
-- [ ] **Si « Décodeur indisponible : configuration… »** : retirer d'abord `KEY_FRAME_RATE` dans `VideoDecoder.kt`, puis réessayer.
+- [ ] **Si « Décodeur indisponible : configuration… »** : retirer d'abord `KEY_FRAME_RATE`, puis la clé vendeur `vendor.rtc-ext-dec-low-latency.enable` dans `VideoDecoder.kt`, et réessayer.
 - [ ] **Surface stable** : une seule création de surface par passage au premier plan ; le démarrage du flux ne doit provoquer qu'un `surfaceChanged` (pas de reconnexion en boucle).
 - [ ] **Arrière-plan / premier plan ×20** pendant le flux (bouton Accueil puis retour, écran éteint/allumé) : pas de plantage, le flux reprend, jamais de « Port 27183 déjà utilisé » bloqué.
 - [ ] **Relais relancé sans tuer l'app** : nouveau CONFIG, première image en moins d'1 s, pas de plantage.
