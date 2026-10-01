@@ -37,7 +37,13 @@ class FrameReaderTest {
 
     @Test(expected = ProtocolException::class)
     fun rejectsLengthWithHighBitSet() {
-        read("02000000ffffffff")
+        read("99000000ffffffff")
+    }
+
+    @Test
+    fun skipsLargeUnknownPayloadAcrossScratchBuffer() {
+        val big = "99000000" + "%08x".format(20_000) + "ab".repeat(20_000)
+        assertEquals(PcMessage.Pong(123456789, 987654321), read(big + pongHex))
     }
 
     @Test

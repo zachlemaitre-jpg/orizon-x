@@ -10,7 +10,7 @@ import kotlin.math.ceil
 class LatencyTracker(private val clockSamples: Int = 16, private val minClockSamples: Int = 4) {
 
     init {
-        require(clockSamples >= 1 && minClockSamples in 1..clockSamples)
+        require(clockSamples >= 1 && minClockSamples in 1..clockSamples) { "clockSamples >= 1 et 1 <= minClockSamples <= clockSamples requis" }
     }
 
     data class Window(
