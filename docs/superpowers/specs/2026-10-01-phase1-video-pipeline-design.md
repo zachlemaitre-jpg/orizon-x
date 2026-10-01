@@ -134,10 +134,13 @@ dev/tabx/client/
 ├── stats/
 │   └── LatencyTracker.kt  offset d'horloge, latence par frame, agrégat par seconde (Kotlin pur)
 ├── ui/
-│   ├── GlassCard.kt     composant verre réutilisable
-│   ├── WaitingScreen.kt écran d'attente / erreur
-│   └── StreamScreen.kt  SurfaceView letterboxé + HUD
-├── Session.kt           orchestre une connexion de bout en bout
+│   ├── Glass.kt         GlassCard (vrai verre), GlassPanel (verre simulé), GlassText
+│   ├── WaitingScreen.kt écran d'attente / erreur, fond flouté animé
+│   ├── StreamScreen.kt  SurfaceView, HUD, détection du tap à 3 doigts
+│   └── TabXApp.kt       composition racine (vidéo letterboxée + écran d'attente + HUD)
+├── Session.kt           une connexion de bout en bout (+ ScreenInfo)
+├── Receiver.kt          boucle d'accept sur le thread net-reader, une Session à la fois
+├── UiModel.kt           état observable par Compose (connexion, HUD)
 └── MainActivity.kt
 ```
 
@@ -174,11 +177,11 @@ Contrainte : le contenu d'un `SurfaceView` est composé par SurfaceFlinger et n'
 
 | Écran | Rendu |
 |---|---|
-| Attente / connexion / erreur | **Vrai verre dépoli** : fond sombre avec 3 formes colorées animées et floutées (`Modifier.blur`, API 31+), `GlassCard` translucide par-dessus (fond blanc ~10 % d'opacité, bordure blanche ~28 %, coins 20 dp). Contenu : nom de l'app, version du protocole, statut animé (« En attente du PC… »), commande `adb forward` à taper, résolution et port. |
-| Streaming | Vidéo plein écran, **rien par-dessus par défaut**. HUD optionnel en **verre simulé** (teinte sombre ~55 %, bordure claire, reflet en haut, sans flou) : fps, latence moyenne/max, offset. Affichage et masquage par tap à 3 doigts. |
+| Attente / connexion / erreur | **Vrai verre dépoli** : fond sombre avec 3 formes colorées animées et floutées (`Modifier.blur`, API 31+), `GlassCard` translucide par-dessus (fond blanc ~10 % d'opacité, bordure blanche ~28 %, coins 20 dp). Contenu : nom de l'app, version du protocole, statut animé (« En attente du PC… »), commande du relais à lancer sur le PC (`py relay.py --encoder nvenc`), résolution et port. |
+| Streaming | Vidéo plein écran, **rien par-dessus par défaut**. HUD optionnel en **verre simulé** (teinte sombre ~55 %, bordure claire, reflet en haut, sans flou) : fps, latence moyenne/max de la dernière seconde, p50/p99 de la session (histogramme par pas de 1 ms), offset d'horloge, nom du décodeur. Affichage et masquage par tap à 3 doigts. |
 
 - Thème sombre uniquement.
-- Transition : fondu de la carte au démarrage de la session, retour animé de l'écran d'attente à la déconnexion, avec la raison (« PC déconnecté », « Version incompatible », etc.).
+- Transition : fondu de la carte au démarrage de la session, retour animé de l'écran d'attente à la déconnexion, avec la raison (« PC déconnecté », « Protocole invalide : … », « Port 27183 déjà utilisé »). Une version de protocole incompatible est détectée et expliquée côté PC (c'est le PC qui lit le `HELLO`) ; la tablette voit seulement une déconnexion.
 
 ## 6. Relais PC (prototype Python)
 
@@ -246,8 +249,8 @@ host-prototype/
 | En-tête invalide, payload > 16 Mo | Fin de session, raison affichée |
 | Type de message inconnu | Payload ignoré, session continue |
 | `CodecException` transitoire | Nouvel essai |
-| `CodecException` récupérable | `stop` → `configure` → `start`, puis `KEYFRAME_REQ` |
-| `CodecException` fatale, ou aucun buffer d'entrée libre pendant 500 ms | Décodeur libéré et recréé, `KEYFRAME_REQ`, frames ignorées jusqu'à la prochaine `KEY` |
+| `CodecException` non transitoire (récupérable ou fatale), ou aucun buffer d'entrée libre pendant 500 ms | Décodeur libéré et recréé (couvre aussi le cas récupérable, plus simple qu'un `stop`/`configure`/`start`), `KEYFRAME_REQ`, frames ignorées jusqu'à la prochaine `KEY` |
+| Exception inattendue (ex. `IllegalStateException` de MediaCodec) | Fin de session, raison affichée, l'app ne plante pas |
 | Nouveau `CONFIG` en cours de session | Décodeur recréé |
 | Socket fermée / `IOException` | Fin de session, « PC déconnecté » |
 | Port 27183 occupé (`BindException`) | Message d'erreur, nouvel essai toutes les 2 s |
@@ -273,7 +276,7 @@ host-prototype/
 ## 9. Critères de réussite
 
 1. Le bureau PC s'affiche à 60 fps stables pendant 10 minutes, sans artefacts cumulés.
-2. Latence envoi→affichage mesurée par la tablette : médiane ≤ 20 ms, 99e centile ≤ 40 ms.
+2. Latence envoi→affichage mesurée par la tablette (p50/p99 de session affichés dans le HUD) : médiane ≤ 20 ms, 99e centile ≤ 40 ms.
 3. Latence de bout en bout (vidéo au téléphone, chronomètre en ms) relevée comme référence. La cible < 50 ms s'applique à partir de la phase 2.
 4. Câble débranché puis rebranché, relais relancé : le flux reprend sans redémarrer l'app.
 5. Relais tué en plein flux : l'app revient à l'écran d'attente avec la raison.
