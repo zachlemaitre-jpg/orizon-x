@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import BinaryIO, Callable
 
 import annexb
+import injector
 import protocol
 
 
@@ -192,7 +193,8 @@ def connect(adb: str) -> tuple[socket.socket, SocketReader, protocol.Hello]:
         return sock, rfile, hello
 
 
-def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: threading.Event) -> None:
+def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: threading.Event,
+           on_size: Callable[[int, int], None]) -> None:
     """Forwards ffmpeg's Annex-B output as TABX messages until EOF or stop."""
     splitter = annexb.AccessUnitSplitter()
     size: tuple[int, int] | None = None
@@ -217,6 +219,7 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
                     continue
                 if new_size != size:
                     size = new_size
+                    on_size(size[0], size[1])
                     send(protocol.encode_config(size[0], size[1], fps))
                     print(f"Flux : {size[0]}x{size[1]} @ {fps} fps")
                 codec_config = annexb.START_CODE + info.sps + annexb.START_CODE + info.pps
@@ -246,6 +249,15 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
     disconnected = threading.Event()
     keyframe_requests = 0  # la tablette en envoie une juste après chaque CONFIG (normal) : on ne journalise que les suivantes
     closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
+    pointer_injector: injector.Injector | None = None
+    injector_lock = threading.Lock()
+
+    def on_stream_size(width: int, height: int) -> None:
+        nonlocal pointer_injector
+        with injector_lock:
+            if pointer_injector is not None:
+                pointer_injector.close()
+            pointer_injector = injector.create_for_stream(width, height)
 
     def pump_stderr() -> None:
         try:
@@ -271,6 +283,11 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
                     keyframe_requests += 1
                     if keyframe_requests >= 2:
                         print("Keyframe demandée par la tablette : prochaine IDR sous 1 s (GOP fixe)")
+                elif isinstance(message, protocol.Input):
+                    with injector_lock:
+                        target = pointer_injector
+                    if target is not None:
+                        target.handle(message)
         except (EOFError, OSError, protocol.ProtocolError) as e:
             if not closing.is_set():
                 print(f"Tablette déconnectée ({e})")
@@ -284,10 +301,14 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
     threading.Thread(target=read_tablet, daemon=True).start()
     send_failed = False
     try:
-        stream(ffmpeg.stdout, send, args.fps, disconnected)
+        stream(ffmpeg.stdout, send, args.fps, disconnected, on_stream_size)
     except OSError:
         send_failed = True  # sendall a échoué : la tablette est partie
     finally:
+        with injector_lock:
+            if pointer_injector is not None:
+                pointer_injector.close()  # lève tous les contacts : rien ne reste « posé » dans Windows
+                pointer_injector = None
         tablet_gone = send_failed or disconnected.is_set()
         ffmpeg.kill()
         ffmpeg.wait()
@@ -301,6 +322,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    injector.enable_dpi_awareness()  # coordonnées en pixels physiques (écran virtuel à 200 %)
     args = parse_args()
     if shutil.which("ffmpeg") is None:
         sys.exit("ffmpeg introuvable : winget install Gyan.FFmpeg, puis rouvre le terminal.")
