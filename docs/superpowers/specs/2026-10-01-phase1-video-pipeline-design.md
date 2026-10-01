@@ -146,12 +146,13 @@ dev/tabx/client/
 
 ### 5.3 Décodeur
 
-- `MediaFormat` : `video/avc`, dimensions issues de `CONFIG`, `KEY_LOW_LATENCY = 1`, `KEY_PRIORITY = 0`.
+- `MediaFormat` : `video/avc`, dimensions issues de `CONFIG`, `KEY_LOW_LATENCY = 1` toujours demandé, ainsi que la clé vendeur Exynos `vendor.rtc-ext-dec-low-latency.enable` (ignorée par les décodeurs qui ne la gèrent pas), `KEY_PRIORITY = 0`, `KEY_FRAME_RATE` (fps de `CONFIG`) et `KEY_MAX_INPUT_SIZE = max(w×h, 2 Mio)`.
 - Mode asynchrone (`setCallback` sur un `HandlerThread` dédié).
 - Les indices de buffers d'entrée libres sont placés dans une `ArrayBlockingQueue`. Le thread réseau prend un indice (attente bloquante), copie la frame, appelle `queueInputBuffer` avec `presentationTimeUs = pts_us`. Si le décodeur sature, le thread réseau bloque et TCP applique la contre-pression jusqu'au PC : aucune file ne grossit.
 - Les paquets `CODEC_CONFIG` sont soumis avec `BUFFER_FLAG_CODEC_CONFIG`.
-- Après création ou recréation du décodeur, toute frame non-`KEY` est ignorée jusqu'à la première `KEY`.
-- En sortie : `releaseOutputBuffer(index, true)` immédiatement, sans attendre le pts.
+- Un `onError` fatal réveille immédiatement `submit()` s'il attend un buffer d'entrée.
+- Après création ou recréation du décodeur, toute frame non-`KEY` est ignorée jusqu'à la première `KEY`. Une frame `KEY` ou `CODEC_CONFIG` qui a provoqué l'échec est resoumise au nouveau décodeur.
+- En sortie : `releaseOutputBuffer(index, System.nanoTime())`, c'est-à-dire présentation au prochain vsync, sans attendre le pts. On n'utilise pas `releaseOutputBuffer(index, true)` : le pts est sur l'horloge du PC, et il serait alors interprété comme heure de présentation sur l'horloge de la tablette.
 - `setOnFrameRenderedListener` fournit l'heure d'affichage réelle au `LatencyTracker`.
 - Le `SurfaceView` est dimensionné au ratio du flux (letterbox sur fond noir).
 
@@ -253,6 +254,7 @@ host-prototype/
 | `CodecException` transitoire | Nouvel essai |
 | `CodecException` non transitoire (récupérable ou fatale), ou aucun buffer d'entrée libre pendant 500 ms | Décodeur libéré et recréé (couvre aussi le cas récupérable, plus simple qu'un `stop`/`configure`/`start`), `KEYFRAME_REQ`, frames ignorées jusqu'à la prochaine `KEY` |
 | Exception inattendue (ex. `IllegalStateException` de MediaCodec) | Fin de session, raison affichée, l'app ne plante pas |
+| Création/configuration du décodeur impossible (`DecoderUnavailable`) | Fin de session, « Décodeur indisponible : … » |
 | Nouveau `CONFIG` en cours de session | Décodeur recréé |
 | Socket fermée / `IOException` | Fin de session, « PC déconnecté » |
 | Port 27183 occupé (`BindException`) | Message d'erreur, nouvel essai toutes les 2 s |

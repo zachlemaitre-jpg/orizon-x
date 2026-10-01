@@ -11,10 +11,13 @@ import dev.tabx.client.protocol.TabletMessage
 import dev.tabx.client.stats.LatencyTracker
 import dev.tabx.client.video.DecoderFailure
 import dev.tabx.client.video.VideoDecoder
+import java.io.IOException
 import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** Physical screen in landscape, sent in HELLO. */
 data class ScreenInfo(val width: Int, val height: Int, val dpi: Int)
@@ -32,6 +35,7 @@ class Session(
     }
 
     private val tracker = LatencyTracker()
+    private val timerFailure = AtomicReference<Exception?>(null)
 
     fun run() {
         socket.tcpNoDelay = true
@@ -45,35 +49,52 @@ class Session(
             writer.write(TabletMessage.Hello(screen.width, screen.height, screen.dpi))
             timers.every(PING_INTERVAL_MS, initialDelayMs = 0) { writer.write(TabletMessage.Ping(nowUs())) }
             timers.every(STATS_INTERVAL_MS, initialDelayMs = STATS_INTERVAL_MS) { sendStats(writer) }
-            while (true) {
-                when (val message = reader.read()) {
-                    is PcMessage.Config -> {
-                        validate(message)
-                        decoder?.release()
-                        decoder = createDecoder(message)
-                        config = message
-                        writer.write(TabletMessage.KeyframeRequest)
-                        listener.onStreaming(message, decoder.description)
-                    }
-                    is PcMessage.Video -> {
-                        val current = decoder ?: continue // vidéo reçue avant CONFIG : ignorée
-                        try {
-                            if (!current.submit(message)) tracker.onFrameDropped()
-                        } catch (e: DecoderFailure) {
-                            Log.w(TAG, "recréation du décodeur", e)
-                            current.release()
-                            decoder = createDecoder(config!!)
-                            tracker.onFrameDropped()
+            try {
+                while (true) {
+                    when (val message = reader.read()) {
+                        is PcMessage.Config -> {
+                            validate(message)
+                            decoder?.release()
+                            decoder = null
+                            val fresh = createDecoder(message)
+                            decoder = fresh
+                            config = message
                             writer.write(TabletMessage.KeyframeRequest)
+                            listener.onStreaming(message, fresh.description)
                         }
+                        is PcMessage.Video -> {
+                            val current = decoder ?: continue // vidéo reçue avant CONFIG : ignorée
+                            try {
+                                if (!current.submit(message)) tracker.onFrameDropped()
+                            } catch (e: DecoderFailure) {
+                                Log.w(TAG, "recréation du décodeur", e)
+                                current.release()
+                                decoder = null
+                                val fresh = createDecoder(config!!)
+                                decoder = fresh
+                                writer.write(TabletMessage.KeyframeRequest)
+                                // Une keyframe perdue = écran noir jusqu'à la suivante : on la redonne au nouveau décodeur.
+                                if (message.isKey || message.isCodecConfig) fresh.submit(message) else tracker.onFrameDropped()
+                            }
+                        }
+                        is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
                     }
-                    is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
                 }
+            } catch (e: SocketException) {
+                // Une tâche périodique a fermé la socket : remonter sa vraie cause si ce n'est pas une erreur réseau.
+                timerFailure.get()?.let { if (it !is IOException) throw it }
+                throw e
             }
         } finally {
             timers.shutdownNow()
-            decoder?.release()
-            socket.close()
+            runCatching { timers.awaitTermination(TIMER_STOP_MS, TimeUnit.MILLISECONDS) }
+            try {
+                decoder?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "libération du décodeur", e)
+            } finally {
+                runCatching { socket.close() }
+            }
         }
     }
 
@@ -101,13 +122,14 @@ class Session(
         )
     }
 
-    /** Runs [action] at a fixed rate; any failure closes the socket so the reader loop ends the session. */
+    /** Runs [action] at a fixed rate; any failure is recorded and closes the socket so the reader loop ends. */
     private fun ScheduledExecutorService.every(periodMs: Long, initialDelayMs: Long, action: () -> Unit) {
         scheduleAtFixedRate({
             try {
                 action()
             } catch (e: Exception) {
                 Log.w(TAG, "tâche périodique en échec, fermeture de la session", e)
+                timerFailure.compareAndSet(null, e)
                 runCatching { socket.close() }
             }
         }, initialDelayMs, periodMs, TimeUnit.MILLISECONDS)
@@ -118,6 +140,7 @@ class Session(
         const val READ_TIMEOUT_MS = 5000
         const val PING_INTERVAL_MS = 500L
         const val STATS_INTERVAL_MS = 1000L
+        const val TIMER_STOP_MS = 100L
         fun nowUs() = System.nanoTime() / 1000
     }
 }
