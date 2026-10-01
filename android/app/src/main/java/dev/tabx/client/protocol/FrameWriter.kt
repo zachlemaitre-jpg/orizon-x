@@ -44,6 +44,20 @@ class FrameWriter(output: OutputStream) {
                     out.writeInt(u32(message.rttUs))
                     Protocol.TYPE_STATS
                 }
+                is TabletMessage.Input -> {
+                    out.writeByte(message.device)
+                    out.writeByte(message.contacts.size)
+                    for (contact in message.contacts) {
+                        out.writeByte(contact.id)
+                        out.writeByte(contact.flags)
+                        out.writeShort(contact.x)
+                        out.writeShort(contact.y)
+                        out.writeShort(contact.pressure)
+                        out.writeByte(contact.tiltX)
+                        out.writeByte(contact.tiltY)
+                    }
+                    Protocol.TYPE_INPUT
+                }
             }
             val body = payload.toByteArray()
             return ByteBuffer.allocate(Protocol.HEADER_SIZE + body.size)

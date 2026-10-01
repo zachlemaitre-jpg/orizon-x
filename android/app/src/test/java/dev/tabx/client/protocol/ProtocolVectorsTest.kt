@@ -49,6 +49,19 @@ class ProtocolVectorsTest {
                     f.getInt("fps"), f.getLong("latency_avg_us"), f.getLong("latency_max_us"),
                     f.getLong("dropped"), f.getLong("rtt_us"),
                 )
+                "INPUT" -> {
+                    val contacts = f.getJSONArray("contacts")
+                    TabletMessage.Input(
+                        f.getInt("device"),
+                        (0 until contacts.length()).map { j ->
+                            val c = contacts.getJSONObject(j)
+                            InputContact(
+                                c.getInt("id"), c.getInt("flags"), c.getInt("x"), c.getInt("y"),
+                                c.getInt("pressure"), c.getInt("tilt_x"), c.getInt("tilt_y"),
+                            )
+                        },
+                    )
+                }
                 else -> error("type inattendu : ${vector.getString("type")}")
             }
             assertEquals(vector.getString("name"), vector.getString("hex"), FrameWriter.encode(message).toHex())
