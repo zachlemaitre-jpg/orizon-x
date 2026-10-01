@@ -65,5 +65,28 @@ class DescribeTest(unittest.TestCase):
         self.assertTrue(all(nal[:3] != b"\x00\x00\x01" for nal in nals))
 
 
+class SpsTest(unittest.TestCase):
+    def test_sample_size_applies_frame_cropping(self):
+        units = split_all(SAMPLE, 1000)
+        sps = annexb.describe(units[0]).sps
+        self.assertEqual(annexb.parse_sps_size(sps), (320, 180))
+
+    def test_baseline_sps_without_cropping(self):
+        # Baseline profile 66, 1280x720 (80x45 macroblocks), frame_mbs_only, no cropping.
+        # Bits after the 3 fixed bytes: sps_id ue(0)=1, log2_max_frame_num-4 ue(0)=1, poc_type ue(2)=011,
+        # max_num_ref ue(1)=010, gaps u1=0, width_mbs-1 ue(79), height_map-1 ue(44),
+        # frame_mbs_only=1, direct_8x8=1, cropping=0, vui=0, stop bit.
+        bits = "1" + "1" + "011" + "010" + "0" + _ue(79) + _ue(44) + "1" + "1" + "0" + "0" + "1"
+        bits += "0" * (-len(bits) % 8)
+        payload = int(bits, 2).to_bytes(len(bits) // 8, "big")
+        sps = bytes([0x67, 66, 0xC0, 31]) + payload
+        self.assertEqual(annexb.parse_sps_size(sps), (1280, 720))
+
+
+def _ue(value: int) -> str:
+    code = bin(value + 1)[2:]
+    return "0" * (len(code) - 1) + code
+
+
 if __name__ == "__main__":
     unittest.main()

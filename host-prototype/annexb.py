@@ -83,3 +83,88 @@ def describe(unit: bytes) -> AccessUnitInfo:
         elif nal_type == NAL_PPS and pps is None:
             pps = nal
     return AccessUnitInfo(is_idr, sps, pps)
+
+
+_HIGH_PROFILES = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
+
+
+class _BitReader:
+    def __init__(self, rbsp: bytes) -> None:
+        self._data = rbsp
+        self._pos = 0
+
+    def u(self, bits: int) -> int:
+        value = 0
+        for _ in range(bits):
+            byte = self._data[self._pos >> 3]
+            value = (value << 1) | ((byte >> (7 - (self._pos & 7))) & 1)
+            self._pos += 1
+        return value
+
+    def ue(self) -> int:
+        zeros = 0
+        while self.u(1) == 0:
+            zeros += 1
+        return (1 << zeros) - 1 + self.u(zeros)
+
+    def se(self) -> int:
+        k = self.ue()
+        return (k + 1) // 2 if k % 2 else -(k // 2)
+
+
+def _skip_scaling_list(reader: _BitReader, size: int) -> None:
+    last = nxt = 8
+    for _ in range(size):
+        if nxt != 0:
+            nxt = (last + reader.se() + 256) % 256
+        last = last if nxt == 0 else nxt
+
+
+def parse_sps_size(sps: bytes) -> tuple[int, int]:
+    """Returns the displayed (width, height) of an SPS NAL (header byte included), cropping applied."""
+    r = _BitReader(sps[1:].replace(b"\x00\x00\x03", b"\x00\x00"))  # remove emulation prevention bytes
+    profile_idc = r.u(8)
+    r.u(16)  # constraint flags + level_idc
+    r.ue()  # seq_parameter_set_id
+    chroma_format_idc = 1
+    separate_colour_plane = 0
+    if profile_idc in _HIGH_PROFILES:
+        chroma_format_idc = r.ue()
+        if chroma_format_idc == 3:
+            separate_colour_plane = r.u(1)
+        r.ue()  # bit_depth_luma_minus8
+        r.ue()  # bit_depth_chroma_minus8
+        r.u(1)  # qpprime_y_zero_transform_bypass_flag
+        if r.u(1):  # seq_scaling_matrix_present_flag
+            for i in range(8 if chroma_format_idc != 3 else 12):
+                if r.u(1):
+                    _skip_scaling_list(r, 16 if i < 6 else 64)
+    r.ue()  # log2_max_frame_num_minus4
+    poc_type = r.ue()
+    if poc_type == 0:
+        r.ue()  # log2_max_pic_order_cnt_lsb_minus4
+    elif poc_type == 1:
+        r.u(1)
+        r.se()
+        r.se()
+        for _ in range(r.ue()):
+            r.se()
+    r.ue()  # max_num_ref_frames
+    r.u(1)  # gaps_in_frame_num_value_allowed_flag
+    width_mbs = r.ue() + 1
+    height_map_units = r.ue() + 1
+    frame_mbs_only = r.u(1)
+    if not frame_mbs_only:
+        r.u(1)  # mb_adaptive_frame_field_flag
+    r.u(1)  # direct_8x8_inference_flag
+    width = width_mbs * 16
+    height = (2 - frame_mbs_only) * height_map_units * 16
+    if r.u(1):  # frame_cropping_flag
+        left, right, top, bottom = r.ue(), r.ue(), r.ue(), r.ue()
+        chroma_array_type = 0 if separate_colour_plane else chroma_format_idc
+        sub_w, sub_h = {1: (2, 2), 2: (2, 1), 3: (1, 1)}.get(chroma_array_type, (1, 1))
+        crop_x = 1 if chroma_array_type == 0 else sub_w
+        crop_y = (2 - frame_mbs_only) * (1 if chroma_array_type == 0 else sub_h)
+        width -= (left + right) * crop_x
+        height -= (top + bottom) * crop_y
+    return width, height
