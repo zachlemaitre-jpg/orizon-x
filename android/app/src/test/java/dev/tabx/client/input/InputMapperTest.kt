@@ -122,6 +122,48 @@ class InputMapperTest {
     }
 
     @Test
+    fun penDuringHoldCancelsTheHudGesture() {
+        val m = mapper()
+        m.process(four(), w, h, 0)
+        m.process(four() + PointerSample(0, Tool.PEN, 500f, 250f, inContact = false), w, h, 500)
+        assertNull(m.hudDeadlineMs)
+        assertFalse(m.tick(2_000))
+    }
+
+    @Test
+    fun restingPalmAfterPenLeavesNeverTogglesHud() {
+        val m = mapper()
+        m.process(four() + PointerSample(0, Tool.PEN, 500f, 250f, inContact = false), w, h, 0)
+        m.process(four(), w, h, 100)
+        assertFalse(m.tick(2_100))
+    }
+
+    @Test
+    fun slotFreedInThisFrameIsNotReusedInTheSameFrame() {
+        val m = mapper()
+        m.process(listOf(finger(5)), w, h, 0)
+        assertEquals(listOf(1), m.process(listOf(finger(9, 500f)), w, h, 10).messages.single().contacts.map { it.id })
+    }
+
+    @Test
+    fun nanValuesNeverCrash() {
+        val m = mapper()
+        assertTrue(m.process(listOf(finger(0, Float.NaN)), w, h, 0).messages.isEmpty())
+        val pen = PointerSample(0, Tool.PEN, 10f, 10f, pressure = Float.NaN, tiltRad = Float.NaN, orientationRad = Float.POSITIVE_INFINITY)
+        val c = m.process(listOf(pen), w, h, 10).messages.single().contacts.single()
+        assertEquals(Triple(0, 0, 0), Triple(c.pressure, c.tiltX, c.tiltY))
+    }
+
+    @Test
+    fun reusedPointerIdDisqualifiesTheHudGesture() {
+        val m = mapper()
+        m.process((0..4).map { finger(it) }, w, h, 0)
+        m.process((0..3).map { finger(it) }, w, h, 300)
+        m.process((0..3).map { finger(it) } + finger(4, 110f), w, h, 600)
+        assertFalse(m.tick(2_000))
+    }
+
+    @Test
     fun cancelAllCancelsActiveContactsOnce() {
         val m = mapper()
         m.process(listOf(finger(0)), w, h, 0)

@@ -73,7 +73,7 @@ Entrée : un instantané `List<PointerSample>` et l'heure `nowMs`, avec `Pointer
 Règles :
 
 1. **Normalisation** : `x_n = round(clamp(x / w, 0, 1) × 65535)`, de même pour y.
-2. **Emplacements des doigts** : un id de pointeur Android se voit attribuer le plus petit emplacement libre 0..9 à son apparition, qu'il garde jusqu'à sa disparition. Au-delà de 10 doigts, les suivants sont ignorés.
+2. **Emplacements des doigts** : un id de pointeur Android se voit attribuer le plus petit emplacement libre 0..9 à son apparition (« libre » = absent de la trame précédente : un emplacement libéré n'est jamais réutilisé dans la trame même où il se libère), qu'il garde jusqu'à sa disparition. Au-delà de 10 doigts, les suivants sont ignorés.
 3. **Stylet** :
    - `pressure = round(p × 1024)` ;
    - `tilt_x = round(deg(atan(sin(o) × tan(t))))` et `tilt_y = round(deg(atan(−cos(o) × tan(t))))`, avec `t = AXIS_TILT` et `o = AXIS_ORIENTATION`. La convention de signe est à confirmer sur la tablette (§8) ;
