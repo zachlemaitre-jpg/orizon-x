@@ -248,6 +248,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
     stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
     disconnected = threading.Event()
     keyframe_requests = 0  # la tablette en envoie une juste après chaque CONFIG (normal) : on ne journalise que les suivantes
+    input_failed = False  # un échec d'injection n'est journalisé qu'une fois par session
     closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
     pointer_injector: injector.Injector | None = None
     injector_lock = threading.Lock()
@@ -256,8 +257,16 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
         nonlocal pointer_injector
         with injector_lock:
             if pointer_injector is not None:
-                pointer_injector.close()
-            pointer_injector = injector.create_for_stream(width, height)
+                try:
+                    pointer_injector.close()
+                except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
+                    print(f"Fermeture du tactile en échec : {e}")
+                pointer_injector = None
+            try:
+                pointer_injector = injector.create_for_stream(width, height)
+            except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
+                print(f"Tactile désactivé : {e}. La vidéo continue.")
+                pointer_injector = None
 
     def pump_stderr() -> None:
         try:
@@ -269,7 +278,7 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
             pass  # le thread ne doit jamais mourir tant que ffmpeg écrit
 
     def read_tablet() -> None:
-        nonlocal keyframe_requests
+        nonlocal keyframe_requests, input_failed
         try:
             while True:
                 message = protocol.read_message(rfile)
@@ -287,7 +296,12 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
                     with injector_lock:
                         target = pointer_injector
                     if target is not None:
-                        target.handle(message)
+                        try:
+                            target.handle(message)
+                        except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
+                            if not input_failed:
+                                input_failed = True
+                                print(f"Tactile en échec, entrées ignorées : {e}")
         except (EOFError, OSError, protocol.ProtocolError) as e:
             if not closing.is_set():
                 print(f"Tablette déconnectée ({e})")
@@ -307,7 +321,10 @@ def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespa
     finally:
         with injector_lock:
             if pointer_injector is not None:
-                pointer_injector.close()  # lève tous les contacts : rien ne reste « posé » dans Windows
+                try:
+                    pointer_injector.close()  # lève tous les contacts : rien ne reste « posé » dans Windows
+                except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fermeture de la session
+                    print(f"Fermeture du tactile en échec : {e}")
                 pointer_injector = None
         tablet_gone = send_failed or disconnected.is_set()
         ffmpeg.kill()
