@@ -10,6 +10,7 @@ import dev.tabx.client.protocol.ProtocolException
 import dev.tabx.client.protocol.TabletMessage
 import dev.tabx.client.stats.LatencyTracker
 import dev.tabx.client.video.DecoderFailure
+import dev.tabx.client.video.DecoderUnavailable
 import dev.tabx.client.video.VideoDecoder
 import java.io.IOException
 import java.net.Socket
@@ -74,7 +75,15 @@ class Session(
                                 decoder = fresh
                                 writer.write(TabletMessage.KeyframeRequest)
                                 // Une keyframe perdue = écran noir jusqu'à la suivante : on la redonne au nouveau décodeur.
-                                if (message.isKey || message.isCodecConfig) fresh.submit(message) else tracker.onFrameDropped()
+                                if (message.isKey || message.isCodecConfig) {
+                                    try {
+                                        fresh.submit(message)
+                                    } catch (e2: DecoderFailure) {
+                                        throw DecoderUnavailable("échec juste après recréation : ${e2.message}", e2)
+                                    }
+                                } else {
+                                    tracker.onFrameDropped()
+                                }
                             }
                         }
                         is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())

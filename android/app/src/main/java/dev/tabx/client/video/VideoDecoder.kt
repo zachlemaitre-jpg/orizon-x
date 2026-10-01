@@ -45,7 +45,7 @@ class VideoDecoder(
     val description: String = try {
         start(config, surface, onFrameRendered)
     } catch (e: Exception) {
-        codec.release()
+        runCatching { codec.release() }
         thread.quitSafely()
         throw DecoderUnavailable("configuration du décodeur impossible : ${e.message ?: e.javaClass.simpleName}", e)
     }
