@@ -18,6 +18,17 @@ from typing import BinaryIO, Callable
 import annexb
 import protocol
 
+
+class SocketReader:
+    """Minimal binary reader over recv(). Unlike makefile(), it lets sock.close() abort a blocked recv on Windows."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+
+    def read(self, size: int) -> bytes:
+        return self._sock.recv(size)
+
+
 ADB_FALLBACK = Path.home() / "AppData" / "Local" / "Android" / "Sdk" / "platform-tools" / "adb.exe"
 
 ENCODERS = {
@@ -78,21 +89,19 @@ def setup_adb_forward(adb: str) -> None:
         sys.exit(f"adb forward a échoué : {result.stderr.strip()}")
 
 
-def connect() -> tuple[socket.socket, BinaryIO, protocol.Hello]:
+def connect() -> tuple[socket.socket, SocketReader, protocol.Hello]:
     """Connects through adb forward and waits for HELLO, retrying while the app isn't listening."""
     announced = False
     while True:
-        sock = rfile = None
+        sock = None
         try:
             sock = socket.create_connection(("127.0.0.1", protocol.PORT), timeout=2)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             # adb accepte la connexion locale même si rien n'écoute sur la tablette : seul le HELLO prouve que l'app est là.
-            rfile = sock.makefile("rb")
+            rfile = SocketReader(sock)
             hello = protocol.read_message(rfile)
             sock.settimeout(None)
         except (OSError, EOFError, protocol.ProtocolError):
-            if rfile is not None:
-                rfile.close()
             if sock is not None:
                 sock.close()
             if not announced:
@@ -123,7 +132,7 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
             info = annexb.describe(unit)
             if size is None and not (info.is_idr and info.sps and info.pps):
                 continue  # on attend la première IDR avec ses SPS/PPS
-            if info.sps is not None and info.pps is not None and info.sps != last_sps:
+            if info.sps is not None and info.pps is not None and (info.sps != last_sps or info.pps != last_pps):
                 try:
                     new_size = annexb.parse_sps_size(info.sps)
                 except ValueError as e:
@@ -144,7 +153,7 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
             send(protocol.encode_video(now_us(), unit, protocol.FLAG_KEY if info.is_idr else 0))
 
 
-def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) -> None:
+def run_session(sock: socket.socket, rfile: SocketReader, args: argparse.Namespace) -> None:
     """Streams until the tablet disconnects. Exits the program if ffmpeg stops on its own."""
     send_lock = threading.Lock()
 
@@ -160,6 +169,7 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
     disconnected = threading.Event()
+    closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
 
     def pump_stderr() -> None:
         try:
@@ -183,13 +193,11 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
                 elif isinstance(message, protocol.KeyframeRequest):
                     print("Keyframe demandée : prochaine IDR sous 1 s (GOP fixe en phase 1)")
         except (EOFError, OSError, protocol.ProtocolError) as e:
-            print(f"Tablette déconnectée ({e})")
+            if not closing.is_set():
+                print(f"Tablette déconnectée ({e})")
         finally:
             disconnected.set()
-            try:
-                sock.shutdown(socket.SHUT_RDWR)  # réveille un sendall bloqué dans stream()
-            except OSError:
-                pass
+            sock.close()  # sous Windows, seul closesocket() interrompt un sendall bloqué dans stream()
             ffmpeg.kill()
 
     threading.Thread(target=pump_stderr, daemon=True).start()
@@ -203,7 +211,7 @@ def run_session(sock: socket.socket, rfile: BinaryIO, args: argparse.Namespace) 
         tablet_gone = send_failed or disconnected.is_set()
         ffmpeg.kill()
         ffmpeg.wait()
-        rfile.close()
+        closing.set()
         sock.close()
     if not tablet_gone:
         print("ffmpeg s'est arrêté de lui-même. Dernières lignes :", *stderr_tail, sep="\n  ")

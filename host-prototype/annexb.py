@@ -101,7 +101,7 @@ def insert_parameter_sets(unit: bytes, sps: bytes, pps: bytes) -> bytes:
     return unit[:after_aud] + START_CODE + sps + START_CODE + pps + unit[after_aud:]
 
 
-_HIGH_PROFILES ={100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
+_HIGH_PROFILES = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
 
 
 class _BitReader:
