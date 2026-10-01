@@ -30,9 +30,18 @@ class UiModel : Session.Listener {
     var hudVisible by mutableStateOf(false)
         private set
 
+    /** Last reason shown on the waiting screen; kept while the screen fades out. */
+    var waitingReason by mutableStateOf<String?>(null)
+        private set
+
+    /** Size of the last stream; kept after a disconnect so the letterbox doesn't jump. */
+    var lastStream by mutableStateOf<ConnectionState.Streaming?>(null)
+        private set
+
     @Volatile private var decoderName = ""
 
     fun showWaiting(reason: String?) {
+        waitingReason = reason
         state = ConnectionState.Waiting(reason)
         hud = null
     }
@@ -43,7 +52,9 @@ class UiModel : Session.Listener {
 
     override fun onStreaming(config: PcMessage.Config, decoder: String) {
         decoderName = decoder
-        state = ConnectionState.Streaming(config.width, config.height)
+        val streaming = ConnectionState.Streaming(config.width, config.height)
+        lastStream = streaming
+        state = streaming
     }
 
     override fun onStats(window: LatencyTracker.Window) {

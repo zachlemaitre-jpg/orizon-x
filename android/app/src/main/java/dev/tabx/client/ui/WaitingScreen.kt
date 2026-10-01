@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -47,7 +48,7 @@ private val Amber = Color(0xFFFAC775)
 fun WaitingScreen(reason: String?, screen: ScreenInfo) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         BlobBackground()
-        GlassCard(Modifier.fillMaxWidth(0.55f).widthIn(max = 620.dp)) {
+        GlassCard(Modifier.fillMaxWidth(0.55f).wrapContentWidth().widthIn(max = 620.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 GlassText("TabX", size = 26.sp, weight = FontWeight.Medium)
                 Spacer(Modifier.weight(1f))

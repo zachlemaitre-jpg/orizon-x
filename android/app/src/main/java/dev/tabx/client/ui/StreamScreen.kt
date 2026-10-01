@@ -6,6 +6,8 @@ import android.view.SurfaceView
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -16,14 +18,16 @@ import dev.tabx.client.HudData
 /** SurfaceView whose Surface feeds MediaCodec. Lifecycle callbacks drive the Receiver. */
 @Composable
 fun VideoSurface(modifier: Modifier, onCreated: (Surface) -> Unit, onDestroyed: () -> Unit) {
+    val created by rememberUpdatedState(onCreated)
+    val destroyed by rememberUpdatedState(onDestroyed)
     AndroidView(
         modifier = modifier,
         factory = { context ->
             SurfaceView(context).apply {
                 holder.addCallback(object : SurfaceHolder.Callback {
-                    override fun surfaceCreated(holder: SurfaceHolder) = onCreated(holder.surface)
+                    override fun surfaceCreated(holder: SurfaceHolder) = created(holder.surface)
                     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-                    override fun surfaceDestroyed(holder: SurfaceHolder) = onDestroyed()
+                    override fun surfaceDestroyed(holder: SurfaceHolder) = destroyed()
                 })
             }
         },

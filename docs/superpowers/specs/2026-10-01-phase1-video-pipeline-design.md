@@ -118,6 +118,7 @@ Règles :
 - Kotlin, minSdk 30, targetSdk 35, package `dev.tabx.client` (nom provisoire).
 - Interface en Jetpack Compose (seule dépendance hors framework). Le `SurfaceView` est intégré via `AndroidView`.
 - Une seule activité, paysage forcé, plein écran immersif, écran maintenu allumé.
+- Activité jamais recréée : `configChanges` couvre tous les changements de configuration (mode sombre, zoom, clavier…).
 
 ### 5.2 Modules
 
@@ -178,10 +179,11 @@ Contrainte : le contenu d'un `SurfaceView` est composé par SurfaceFlinger et n'
 
 | Écran | Rendu |
 |---|---|
-| Attente / connexion / erreur | **Vrai verre dépoli** : fond sombre avec 3 formes colorées animées et floutées (`Modifier.blur`, API 31+), `GlassCard` translucide par-dessus (fond blanc ~10 % d'opacité, bordure blanche ~28 %, coins 20 dp). Contenu : nom de l'app, version du protocole, statut animé (« En attente du PC… »), commande du relais à lancer sur le PC (`py relay.py --encoder nvenc`), résolution et port. |
+| Attente / connexion / erreur | **Vrai verre dépoli** : fond sombre avec 3 formes colorées animées et floutées (`Modifier.blur`, API 31+), `GlassCard` translucide par-dessus (fond blanc ~10 % d'opacité, bordure blanche ~28 %, coins 20 dp). Contenu : nom de l'app, version du protocole, statut animé (« En attente du PC… »), commande du relais à lancer sur le PC (`py relay.py --encoder amf` ; AMF par défaut sur la machine cible : NVENC exige un pilote NVIDIA ≥ 610), résolution et port. |
 | Streaming | Vidéo plein écran, **rien par-dessus par défaut**. HUD optionnel en **verre simulé** (teinte sombre ~55 %, bordure claire, reflet en haut, sans flou) : fps, latence moyenne/max de la dernière seconde, p50/p99 de la session (histogramme par pas de 1 ms), offset d'horloge, nom du décodeur. Affichage et masquage par tap à 3 doigts. |
 
 - Thème sombre uniquement.
+- La dernière raison et le dernier format vidéo sont conservés pendant les fondus (pas de saut de mise en page).
 - Transition : fondu de la carte au démarrage de la session, retour animé de l'écran d'attente à la déconnexion, avec la raison (« PC déconnecté », « Protocole invalide : … », « Port 27183 déjà utilisé »). Une version de protocole incompatible est détectée et expliquée côté PC (c'est le PC qui lit le `HELLO`) ; la tablette voit seulement une déconnexion.
 
 ## 6. Relais PC (prototype Python)
