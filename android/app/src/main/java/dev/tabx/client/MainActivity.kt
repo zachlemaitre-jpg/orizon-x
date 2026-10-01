@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
     private fun onVideoView(view: View) {
         TouchForwarder(
             view = view,
-            isStreaming = { model.state is ConnectionState.Streaming },
+            currentSession = { if (model.state is ConnectionState.Streaming) model.streamGeneration else null },
             send = { receiver?.sendInput(it) },
             onToggleHud = model::toggleHud,
         ).attach()

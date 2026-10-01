@@ -24,12 +24,12 @@ class Receiver(
     @Volatile private var server: Server? = null
     @Volatile private var socket: Socket? = null
     @Volatile private var session: Session? = null
+    private val worker = thread(name = "net-reader") { loop() }
 
     /** Forwards an INPUT frame to the running session, if any. */
     fun sendInput(message: TabletMessage.Input) {
         session?.sendInput(message)
     }
-    private val worker = thread(name = "net-reader") { loop() }
 
     private fun loop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)

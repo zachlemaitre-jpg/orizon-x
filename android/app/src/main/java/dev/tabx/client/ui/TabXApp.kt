@@ -24,10 +24,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 import dev.tabx.client.ConnectionState
 import dev.tabx.client.ScreenInfo
 import dev.tabx.client.UiModel
+import kotlinx.coroutines.delay
 
 /** Root: letterboxed video, waiting screen on top while disconnected, optional HUD while streaming. */
 @Composable
@@ -60,7 +60,7 @@ fun TabXApp(
         }
 
         if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))
-        GestureHint(streaming, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp))
+        GestureHint(streaming, model.streamGeneration, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp))
     }
 }
 
@@ -75,9 +75,9 @@ private fun HudLayer(model: UiModel, modifier: Modifier) {
 
 /** Brief reminder of the HUD gesture at the start of each connection (spec phase 4 §4.5). */
 @Composable
-private fun GestureHint(streaming: Boolean, modifier: Modifier) {
+private fun GestureHint(streaming: Boolean, generation: Int, modifier: Modifier) {
     var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(streaming) {
+    LaunchedEffect(streaming, generation) {
         visible = streaming
         if (streaming) {
             delay(HINT_DURATION_MS)

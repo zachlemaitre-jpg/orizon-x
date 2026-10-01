@@ -2,25 +2,27 @@ package dev.tabx.client.input
 
 import android.annotation.SuppressLint
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import dev.tabx.client.protocol.TabletMessage
 
 /**
  * Android glue (spec phase 4 §4.3): reads touch and stylus-hover events on the video view,
- * feeds [InputMapper] and sends its INPUT frames, only while [isStreaming].
+ * feeds [InputMapper] and sends its INPUT frames, only while a session is streaming.
  */
 class TouchForwarder(
     private val view: View,
-    private val isStreaming: () -> Boolean,
+    /** The stream generation while streaming, null otherwise. */
+    private val currentSession: () -> Int?,
     private val send: (TabletMessage.Input) -> Unit,
     private val onToggleHud: () -> Unit,
 ) {
     private val mapper = InputMapper(hudSlopPx = InputMapper.HUD_SLOP_DP * view.resources.displayMetrics.density)
     private var touchSamples: List<PointerSample> = emptyList()
     private var hoverPen: PointerSample? = null
-    private var wasStreaming = false
-    private val hudCheck = Runnable { if (mapper.tick(SystemClock.uptimeMillis())) onToggleHud() }
+    private var lastSession: Int? = null
+    private val hudCheck = Runnable { if (streamingNow() && mapper.tick(SystemClock.uptimeMillis())) onToggleHud() }
 
     // Android envoie HOVER_EXIT juste avant le DOWN du stylet, et UP juste avant HOVER_ENTER :
     // un court délai garde le stylet « en portée » entre deux traits (pas de sortie/entrée parasite côté Windows).
@@ -31,8 +33,18 @@ class TouchForwarder(
 
     @SuppressLint("ClickableViewAccessibility") // la vue vidéo n'a pas d'action de clic propre
     fun attach() {
-        view.setOnTouchListener { v, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) v.requestUnbufferedDispatch(event)
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                v.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_POINTER) // toucher ET survol, sans attendre la vsync
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                v.removeCallbacks(hudCheck)
+                v.removeCallbacks(penLeft)
+            }
+        })
+        if (view.isAttachedToWindow) view.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_POINTER)
+        view.setOnTouchListener { _, event ->
             if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
                 touchSamples = emptyList()
                 hoverPen = null
@@ -50,10 +62,9 @@ class TouchForwarder(
             }
             true
         }
-        view.setOnGenericMotionListener { v, event ->
+        view.setOnGenericMotionListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
-                    if (event.actionMasked == MotionEvent.ACTION_HOVER_ENTER) v.requestUnbufferedDispatch(event)
                     view.removeCallbacks(penLeft)
                     hoverPen = hoverSampleOf(event)
                     dispatch(event.eventTime)
@@ -85,15 +96,17 @@ class TouchForwarder(
 
     /** False outside a streaming session; resets the mapper when a new session starts. */
     private fun streamingNow(): Boolean {
-        if (!isStreaming()) {
-            wasStreaming = false
+        val session = currentSession()
+        if (session == null) {
+            lastSession = null
             view.removeCallbacks(hudCheck)
             view.removeCallbacks(penLeft)
             return false
         }
-        if (!wasStreaming) {
+        if (session != lastSession) {
             mapper.reset()
-            wasStreaming = true
+            view.removeCallbacks(hudCheck)
+            lastSession = session
         }
         return true
     }

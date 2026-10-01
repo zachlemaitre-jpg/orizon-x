@@ -1,6 +1,7 @@
 package dev.tabx.client
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.tabx.client.protocol.PcMessage
@@ -38,6 +39,10 @@ class UiModel : Session.Listener {
     var lastStream by mutableStateOf<ConnectionState.Streaming?>(null)
         private set
 
+    /** Incremented each time a new streaming session starts (not on a mid-session CONFIG). */
+    var streamGeneration by mutableIntStateOf(0)
+        private set
+
     @Volatile private var decoderName = ""
 
     fun showWaiting(reason: String?) {
@@ -54,6 +59,7 @@ class UiModel : Session.Listener {
         decoderName = decoder
         val streaming = ConnectionState.Streaming(config.width, config.height)
         lastStream = streaming
+        if (state !is ConnectionState.Streaming) streamGeneration++
         state = streaming
     }
 
