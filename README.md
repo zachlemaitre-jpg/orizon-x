@@ -58,7 +58,26 @@ Sans configuration, le relais **duplique** un écran existant. Pour un vrai écr
 
 **À savoir :**
 - **Désinstaller le driver (VDD Control ou Gestionnaire de périphériques) avant toute mise à jour de pilote GPU**, sinon risque d'écran noir au démarrage.
-- Le tactile n'agit pas encore sur le PC (phase 4) : on passe sur l'écran virtuel avec la souris.
+## Tactile et stylet (phase 4)
+
+Pendant le flux, le doigt et le S Pen pilotent Windows à l'endroit touché de l'écran étendu :
+
+- **Doigt** :
+  - tap = clic ;
+  - appui long = clic droit ;
+  - défilement et zoom à deux doigts (gestes natifs de Windows).
+
+  Au plus 3 doigts sont transmis : le 4e est réservé au HUD.
+- **S Pen** :
+  - survol = curseur ;
+  - encre avec pression et inclinaison ;
+  - bouton latéral = clic droit.
+
+  Tant que le stylet est détecté, les doigts (la paume) sont ignorés.
+- **HUD** : appui long à 4 doigts (2 s, sans bouger).
+- **Écran ciblé** : le relais vise l'écran Windows qui a la taille du flux. S'il n'existe pas un écran unique de cette taille, le tactile se désactive mais la vidéo continue.
+- **Fenêtres administrateur** (Gestionnaire des tâches, installeurs) : elles ne répondent qu'à un relais **lancé en administrateur**.
+- **Autotest de l'injection**, sans tablette et sans clic (survol uniquement) : `cd host-prototype; py injector.py --selftest`. Il vérifie que le curseur arrive au pixel visé.
 
 ## Tests
 
@@ -95,6 +114,32 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 - [ ] **Barres système** : restent masquées après arrière-plan, volet de notifications, écran partagé.
 - [ ] **Thermique de l'écran d'attente** : le laisser 30 min (flou plein écran animé), puis `adb shell dumpsys thermalservice` et noter le p50/p99 de la session suivante. Si la tablette chauffe ou bride, remplacer le flou par des dégradés radiaux (`Brush.radialGradient`) dans `WaitingScreen.kt`.
 - [ ] **Keyframes AMF** : après une recréation du décodeur, l'image revient en ≤ 1 s (IDR toutes les 60 frames). Sinon, AMF n'envoie qu'une IDR : revoir les options de `ENCODERS["amf"]` dans `relay.py`.
+
+### Vérifications tactile et stylet (phase 4)
+
+- [ ] **Tactile** :
+  - tap précis (viser la croix d'une fenêtre) ;
+  - défilement à 2 doigts dans un navigateur ;
+  - pincement dans Photos ;
+  - appui long = menu contextuel.
+- [ ] **S Pen** :
+  - survol sans clic ;
+  - trait plus épais quand on appuie (Paint, Whiteboard) ;
+  - inclinaison dans le bon sens ;
+  - bouton = clic droit.
+
+  Si le bouton ouvre le menu Air Command de Samsung en survol, le noter. Si l'inclinaison est inversée, changer le signe de `tiltX` ou de `tiltY` dans `InputMapper.penContact`.
+- [ ] **Point immobile qui appuie plus fort** : poser le stylet sans bouger et augmenter la pression. Compose ignore les mouvements sans déplacement, donc l'épaisseur peut rester celle du contact initial. À noter si c'est gênant.
+- [ ] **Paume** : poser la main en dessinant ne clique nulle part, et le stylet ne « clignote » pas hors de portée.
+- [ ] **HUD** :
+  - l'appui long à 4 doigts bascule le HUD sans clic ni geste Windows ;
+  - le rappel est visible sur l'écran d'attente et en début de connexion.
+- [ ] **Contacts coincés** : Ctrl+C sur le relais pendant un toucher → aucun contact ne reste « posé ».
+- [ ] **Fenêtre administrateur** :
+  - toucher le Gestionnaire des tâches avec un relais non administrateur, puis noter si le message « lance le relais en administrateur » apparaît (il peut ne jamais apparaître, Windows ignorant l'entrée en silence) ;
+  - refaire l'essai avec le relais en administrateur.
+- [ ] **Garde-fou 100 ms** (`KEEPALIVE_S` dans `injector.py`) : garder un doigt immobile 5 s sur une fenêtre. Mettre ensuite la constante à `3600` et refaire l'essai. Si le contact tient aussi sans garde-fou, le garde-fou est inutile.
+- [ ] **Entre deux traits** : `PEN_EXIT_GRACE_MS` (50 ms, `TouchForwarder.kt`) évite que le stylet sorte de portée entre deux traits. Si le curseur du stylet clignote entre les traits, l'augmenter.
 
 ## Mesures phase 1
 
