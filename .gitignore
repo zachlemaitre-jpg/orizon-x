@@ -10,3 +10,6 @@ android/.idea/
 # Python
 __pycache__/
 *.pyc
+
+# APK générés
+dist/
