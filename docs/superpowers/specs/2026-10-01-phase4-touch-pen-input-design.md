@@ -1,7 +1,7 @@
 # TabX — Phase 4 : tactile et stylet vers le PC (design)
 
 Date : 2026-10-01
-Statut : validé en brainstorming, en attente de relecture
+Statut : validé, implémenté sur la branche `phase4-touch-pen` (essai sur la tablette en cours)
 Prérequis : phase 1 (`2026-10-01-phase1-video-pipeline-design.md`), fusionnée dans `master`. Écran étendu fourni par Virtual Display Driver (écran virtuel 2880×1800 à 200 %).
 
 ## 1. Objectif et périmètre
@@ -91,7 +91,7 @@ Règles :
 - Il est attaché au `SurfaceView` vidéo, dont les proportions sont exactement celles du flux, donc ses coordonnées sont celles de l'image :
   - `setOnTouchListener` pour les doigts et le stylet posé ;
   - `setOnGenericMotionListener` pour le survol du stylet (`ACTION_HOVER_*`).
-- `requestUnbufferedDispatch(event)` sur `ACTION_DOWN` et `ACTION_HOVER_ENTER` : les événements arrivent sans attendre la prochaine image.
+- `requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_POINTER)` une fois, à l'attachement de la vue : toucher et survol arrivent sans attendre la prochaine image (la variante par événement est sans effet sur le survol).
 - Seul l'état courant de l'événement est transmis, sans l'historique (`getHistorical*`).
 - Il ne transmet rien quand l'état n'est pas `Streaming`. Il réinitialise le mapper à chaque nouvelle connexion.
 - Le détecteur Compose du tap à 3 doigts (`detectThreeFingerTap`) est **supprimé**.
@@ -135,7 +135,7 @@ Compléments :
 - **Contact principal** (règle Windows : tant qu'un contact principal existe, tous les contacts doivent être levés avant qu'un autre puisse le devenir) : un doigt qui se pose devient principal seulement s'il n'y a ni principal ni autre doigt posé ; il garde `PRIMARY` (y compris sur son `UP`) et n'est jamais remplacé ; une fois levé, aucun doigt n'est principal tant que tous ne sont pas levés. Le stylet porte toujours `PRIMARY`. Le tactile n'a pas de survol : un contact sans le bit `CONTACT` est un doigt levé.
 - **Stylet** : `penMask = PRESSURE | TILT_X | TILT_Y`, et `penFlags = BARREL` si le bit `BARREL` est présent.
 - **Coordonnées** : `px = left + round(x_n × (width − 1) / 65535)`, de même pour y, dans le rectangle en pixels physiques de l'écran cible.
-- **Fin de session** : `cancel_all()` produit `UP | CANCELED` pour tous les contacts actifs.
+- **Fin de session** : `cancel_all()` produit `UP | CANCELED` pour les contacts posés, et `UPDATE` (sortie de portée) pour un stylet en survol.
 
 ### 5.3 `injector.py` (Win32)
 
@@ -165,7 +165,7 @@ Compléments :
 
 - **Vecteurs partagés** (`protocol/test-vectors.json`, section `tablet_to_pc`), vérifiés par Kotlin (encodage) et par Python (décodage) :
   - tactile à 2 doigts ;
-  - stylet en survol avec inclinaison et bouton ;
+  - stylet posé avec pression, inclinaison et bouton ;
   - `count = 0`.
 - **Kotlin (JVM), `InputMapperTest`** :
   - normalisation et bornes ;

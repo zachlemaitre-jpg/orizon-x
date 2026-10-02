@@ -35,7 +35,7 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
    Options : `--output auto|N` (par défaut `auto` : l'écran à la taille de la tablette ; pour dupliquer l'écran principal, `--output 0`), `--list-outputs`, `--fps 60`, `--bitrate 30M`, `--encoder nvenc` (pilote ≥ 610).
 
    Le relais attend la tablette et l'app tout seul (il refait `adb forward` à chaque essai) : l'ordre de lancement n'a pas d'importance. Les demandes de keyframe après une erreur de décodage sont journalisées.
-4. Tap à 3 doigts sur la tablette pendant le flux : affiche/masque le HUD (fps, latence envoi→affichage, p50/p99 de session, offset d'horloge, décodeur).
+4. Appui long à 4 doigts (2 s, sans bouger) sur la tablette pendant le flux : affiche/masque le HUD (fps, latence envoi→affichage, p50/p99 de session, offset d'horloge, décodeur).
 
 La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : elle exclut la capture et l'encodage côté PC. La latence de bout en bout se mesure en filmant les deux écrans.
 
@@ -58,6 +58,7 @@ Sans configuration, le relais **duplique** un écran existant. Pour un vrai écr
 
 **À savoir :**
 - **Désinstaller le driver (VDD Control ou Gestionnaire de périphériques) avant toute mise à jour de pilote GPU**, sinon risque d'écran noir au démarrage.
+
 ## Tactile et stylet (phase 4)
 
 Pendant le flux, le doigt et le S Pen pilotent Windows à l'endroit touché de l'écran étendu :
@@ -110,7 +111,7 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 - [ ] **Relais relancé sans tuer l'app** : nouveau CONFIG, première image en moins d'1 s, pas de plantage.
 - [ ] **Changements de configuration en plein flux** (mode sombre, zoom d'écran, clavier Book Cover) : le flux continue sans coupure.
 - [ ] **Composition** (HUD masqué) : `adb shell dumpsys SurfaceFlinger` → la couche du SurfaceView en composition DEVICE (pas CLIENT). `adb shell dumpsys gfxinfo dev.tabx.client` → aucune nouvelle frame UI pendant le flux.
-- [ ] **Tap à 3 doigts** : bascule le HUD exactement une fois, uniquement pendant le flux ; aucun geste One UI ne l'intercepte.
+- [ ] **Appui long à 4 doigts** : bascule le HUD exactement une fois, uniquement pendant le flux ; aucun geste One UI ne l'intercepte.
 - [ ] **Barres système** : restent masquées après arrière-plan, volet de notifications, écran partagé.
 - [ ] **Thermique de l'écran d'attente** : le laisser 30 min (flou plein écran animé), puis `adb shell dumpsys thermalservice` et noter le p50/p99 de la session suivante. Si la tablette chauffe ou bride, remplacer le flou par des dégradés radiaux (`Brush.radialGradient`) dans `WaitingScreen.kt`.
 - [ ] **Keyframes AMF** : après une recréation du décodeur, l'image revient en ≤ 1 s (IDR toutes les 60 frames). Sinon, AMF n'envoie qu'une IDR : revoir les options de `ENCODERS["amf"]` dans `relay.py`.
