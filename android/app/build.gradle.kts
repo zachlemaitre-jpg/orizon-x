@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.tabx.client"
+    namespace = "com.orizonx.client"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.tabx.client"
+        applicationId = "com.orizonx.client"
         minSdk = 30
         targetSdk = 35
         versionCode = 1

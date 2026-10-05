@@ -183,7 +183,7 @@ def connect(adb: str) -> tuple[socket.socket, SocketReader, protocol.Hello]:
         except (OSError, EOFError, protocol.ProtocolError):
             if sock is not None:
                 sock.close()
-            wait("En attente de l'app sur la tablette (ouvre TabX)…")
+            wait("En attente de l'app sur la tablette (ouvre Orizon X)…")
             continue
         if not isinstance(hello, protocol.Hello):
             sys.exit(f"Premier message inattendu de la tablette : {hello}")

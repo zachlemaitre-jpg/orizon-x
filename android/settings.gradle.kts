@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TabX"
+rootProject.name = "OrizonX"
 include(":app")

@@ -5,7 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="TabX"
+        android:label="Orizon X"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
         <!-- App 100 % Compose sans ressources qualifiées : on gère tous les changements pour ne jamais couper le flux. -->
         <activity

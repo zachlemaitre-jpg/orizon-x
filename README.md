@@ -1,4 +1,4 @@
-# TabX
+# Orizon X
 
 Tablette Android comme second écran pour Windows, via câble USB-C.
 
@@ -27,7 +27,7 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
    $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
    cd android; .\gradlew.bat :app:installDebug; cd ..
    ```
-2. Ouvrir **TabX** sur la tablette : écran d'attente en verre dépoli.
+2. Ouvrir **Orizon X** sur la tablette : écran d'attente en verre dépoli.
 3. Lancer le relais :
    ```powershell
    cd host-prototype; py relay.py --encoder amf; cd ..
@@ -110,7 +110,7 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 - [ ] **Arrière-plan / premier plan ×20** pendant le flux (bouton Accueil puis retour, écran éteint/allumé) : pas de plantage, le flux reprend, jamais de « Port 27183 déjà utilisé » bloqué.
 - [ ] **Relais relancé sans tuer l'app** : nouveau CONFIG, première image en moins d'1 s, pas de plantage.
 - [ ] **Changements de configuration en plein flux** (mode sombre, zoom d'écran, clavier Book Cover) : le flux continue sans coupure.
-- [ ] **Composition** (HUD masqué) : `adb shell dumpsys SurfaceFlinger` → la couche du SurfaceView en composition DEVICE (pas CLIENT). `adb shell dumpsys gfxinfo dev.tabx.client` → aucune nouvelle frame UI pendant le flux.
+- [ ] **Composition** (HUD masqué) : `adb shell dumpsys SurfaceFlinger` → la couche du SurfaceView en composition DEVICE (pas CLIENT). `adb shell dumpsys gfxinfo com.orizonx.client` → aucune nouvelle frame UI pendant le flux.
 - [ ] **Appui long à 4 doigts** : bascule le HUD exactement une fois, uniquement pendant le flux ; aucun geste One UI ne l'intercepte.
 - [ ] **Barres système** : restent masquées après arrière-plan, volet de notifications, écran partagé.
 - [ ] **Thermique de l'écran d'attente** : le laisser 30 min (flou plein écran animé), puis `adb shell dumpsys thermalservice` et noter le p50/p99 de la session suivante. Si la tablette chauffe ou bride, remplacer le flou par des dégradés radiaux (`Brush.radialGradient`) dans `WaitingScreen.kt`.

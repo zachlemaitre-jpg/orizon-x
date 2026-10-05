@@ -321,7 +321,7 @@ class _ProbeWindow:
         _user32.RegisterClassW(ctypes.byref(window_class))
         ex_style = 0x00000008 | 0x00000080 | 0x08000000  # TOPMOST | TOOLWINDOW | NOACTIVATE
         self._hwnd = _user32.CreateWindowExW(
-            ex_style, self._class_name, "TabX selftest", 0x80000000 | 0x10000000,  # POPUP | VISIBLE
+            ex_style, self._class_name, "Orizon X selftest", 0x80000000 | 0x10000000,  # POPUP | VISIBLE
             centre[0] - width // 2, centre[1] - height // 2, width, height, None, None, None, None)
 
     def _on_message(self, hwnd, message, wparam, lparam):
