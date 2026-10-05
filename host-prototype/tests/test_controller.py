@@ -238,6 +238,34 @@ class ControllerTest(unittest.TestCase):
         self.controller.restart(Config(encoder="amf", position="left", scale="150")).join(2)
         self.assertEqual(FakeEngine.instances[1].relayouts, [])  # aucun appel en double sur le nouveau moteur
 
+    def test_quick_relayouts_are_coalesced_in_order_and_end_on_the_latest(self):
+        entered, gate = threading.Event(), threading.Event()
+
+        class SlowRelayoutEngine(FakeEngine):
+            def relayout(self, position, scale):
+                super().relayout(position, scale)
+                if len(self.relayouts) == 1:  # Windows déplace l'écran : environ une seconde
+                    entered.set()
+                    gate.wait(5)
+                return True
+
+        controller = Controller(SlowRelayoutEngine, Config())
+        controller.start()
+        worker = controller.relayout("left", "150")
+        self.assertTrue(entered.wait(2))
+        self.assertIs(controller.relayout("above", "125"), worker)  # un seul fil de relayout à la fois
+        self.assertIs(controller.relayout("below", "175"), worker)
+        gate.set()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        engine = FakeEngine.instances[0]
+        # L'intermédiaire n'est jamais envoyé ; le dernier l'est, une fois, après le premier.
+        self.assertEqual(engine.relayouts, [("left", "150"), ("below", "175")])
+        again = controller.relayout("right", "auto")  # le fil fini, un nouveau prend le relais
+        self.assertIsNot(again, worker)
+        again.join(2)
+        self.assertEqual(engine.relayouts[-1], ("right", "auto"))
+
     def test_relayout_without_an_engine_only_updates_the_config(self):
         self.assertIsNone(self.controller.relayout("below", "auto"))
         self.assertEqual(self.controller.config, Config(position="below", scale="auto"))

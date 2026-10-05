@@ -69,6 +69,8 @@ class Controller(QObject):
         # Intention de l'utilisateur : un redémarrage en cours ne relance le moteur que si personne ne l'a arrêté entre-temps.
         self._want_running = False
         self._restarts: list[threading.Thread] = []  # redémarrages en cours, attendus par stop_blocking
+        self._relayout_worker: threading.Thread | None = None  # fil qui envoie position/échelle au moteur
+        self._relayout_pending = False  # une valeur plus récente que la dernière envoyée attend ce fil
         # RLock : un signal émis depuis le thread Qt appelle ses slots tout de suite, et ils peuvent relancer une commande.
         self._lock = threading.RLock()
         self.state = State.STOPPED
@@ -164,16 +166,33 @@ class Controller(QObject):
 
     def relayout(self, position: str, scale: str) -> threading.Thread | None:
         """Position/Scale changed: kept for the next engines, and applied by the running one in a worker thread
-        (Windows takes about a second to move a screen). Returns that thread (for tests), or None without engine."""
+        (Windows takes about a second to move a screen). Returns that thread (for tests), or None without engine.
+
+        Coalesced: one worker at a time; it sends the LATEST values, read when it is about to apply them, and
+        loops while new ones arrive. Changes made during an apply are never sent out of order.
+        """
         with self._lock:
             self._config = dataclasses.replace(self._config, position=position, scale=scale)
-            engine = self._engine
-        if engine is None:
-            return None
-        worker = threading.Thread(target=engine.relayout, args=(position, scale), name="engine-relayout",
-                                  daemon=True)
+            if self._engine is None:
+                return None
+            self._relayout_pending = True
+            if self._relayout_worker is not None:
+                return self._relayout_worker  # il verra la nouvelle valeur avant de s'arrêter
+            worker = threading.Thread(target=self._relayout_loop, name="engine-relayout", daemon=True)
+            self._relayout_worker = worker
         worker.start()
         return worker
+
+    def _relayout_loop(self) -> None:
+        while True:
+            with self._lock:
+                engine = self._engine
+                if not self._relayout_pending or engine is None:
+                    self._relayout_worker = None  # sous le verrou : un relayout suivant lance un nouveau fil
+                    return
+                self._relayout_pending = False
+                position, scale = self._config.position, self._config.scale
+            engine.relayout(position, scale)
 
     def _start_locked(self) -> None:
         if self._engine is not None and self._engine.is_running():
