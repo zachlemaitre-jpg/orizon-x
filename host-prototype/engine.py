@@ -244,3 +244,333 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
             if info.is_idr and info.sps is None and last_sps is not None:
                 unit = annexb.insert_parameter_sets(unit, last_sps, last_pps)
             send(protocol.encode_video(now_us(), unit, protocol.FLAG_KEY if info.is_idr else 0))
+
+
+@dataclass
+class Deps:
+    """Everything the engine touches outside Python; tests swap in fakes."""
+    run: Run = subprocess.run
+    popen: Callable[..., Any] = subprocess.Popen
+    create_connection: Callable[..., socket.socket] = socket.create_connection
+    create_injector: Callable[[int, int, Callable[[str], None]], Any] = injector.create_for_stream
+    poll_s: float = 1.0
+    retry_delay_s: float = RETRY_DELAY_S
+
+
+@dataclass(frozen=True)
+class SessionResult:
+    ffmpeg_died: bool  # ffmpeg s'est arrêté seul (ni la tablette ni stop())
+    sent_video: bool
+    stderr_tail: list[str]
+
+
+class RelayEngine:
+    """Runs the relay loop in its own thread until stop() or a fatal error (state ERROR)."""
+
+    def __init__(self, config: Config, listener: Listener, *, ffmpeg: str, adb: str,
+                 deps: Deps | None = None) -> None:
+        self._config = config
+        self._listener = listener
+        self._ffmpeg = ffmpeg
+        self._adb = adb
+        self._deps = deps or Deps()
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._active_sock: socket.socket | None = None
+        self._active_ffmpeg: Any = None
+        self._state = State.STOPPED
+        self._detail = ""
+        self._last_encoder_line: str | None = None
+
+    @property
+    def state(self) -> State:
+        return self._state
+
+    def is_running(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def start(self) -> None:
+        """Starts the loop; does nothing if it is already running."""
+        with self._lock:
+            if self.is_running():
+                return
+            self._stop_event = threading.Event()
+            self._thread = threading.Thread(target=self._run, name="relay-engine", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        """Blocks up to STOP_TIMEOUT_S: kills ffmpeg, closes the socket, lifts every touch contact."""
+        with self._lock:
+            self._stop_event.set()
+            thread = self._thread
+            # Fermer le socket et tuer ffmpeg débloque tous les threads de la session.
+            if self._active_sock is not None:
+                with contextlib.suppress(OSError):
+                    self._active_sock.close()
+            if self._active_ffmpeg is not None:
+                with contextlib.suppress(OSError):
+                    self._active_ffmpeg.kill()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(STOP_TIMEOUT_S)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """True once the engine thread has ended."""
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
+
+    # --- thread du moteur ---
+
+    def _run(self) -> None:
+        try:
+            self._loop()
+        except FatalError as e:
+            self._set_state(State.ERROR, str(e))
+            return
+        except Exception as e:  # noqa: BLE001 — l'appli ne doit jamais planter : on montre l'erreur
+            self._log(traceback.format_exc().rstrip())
+            self._set_state(State.ERROR, f"Erreur inattendue : {e}")
+            return
+        finally:
+            with self._lock:
+                sock, self._active_sock = self._active_sock, None
+                ffmpeg, self._active_ffmpeg = self._active_ffmpeg, None
+            # Une exception inattendue entre le lancement de ffmpeg et le finally de la session ne doit rien laisser ouvert.
+            if sock is not None:
+                with contextlib.suppress(OSError):
+                    sock.close()
+            if ffmpeg is not None:
+                with contextlib.suppress(OSError):
+                    ffmpeg.kill()
+        self._set_state(State.STOPPED, "Arrêté.")
+
+    def _loop(self) -> None:
+        failures = 0
+        while not self._stop_event.is_set():
+            encoder = self._pick_encoder()
+            # Sondage avant la connexion : une fois le HELLO reçu, la tablette attend des PONG (5 s de silence = coupure).
+            outputs = probe_outputs(self._ffmpeg, run=self._deps.run) if self._config.output == "auto" else []
+            connection = self._connect()
+            if connection is None:
+                return
+            sock, rfile, hello = connection
+            self._log(f"Tablette connectée : écran {hello.width}x{hello.height}, {hello.dpi} dpi")
+            try:
+                output = pick_output(self._config.output, outputs, hello.width, hello.height)
+            except FatalError:
+                self._close_socket(sock)
+                raise
+            if self._config.output == "auto":
+                self._log(f"Écran capturé : --output {output} ({hello.width}x{hello.height}, choisi automatiquement)")
+            result = self._session(sock, rfile, hello, encoder, output)
+            if self._stop_event.is_set():
+                return
+            if result.ffmpeg_died:
+                self._log("ffmpeg s'est arrêté de lui-même. Dernières lignes :\n  " + "\n  ".join(result.stderr_tail))
+                failures = 0 if result.sent_video else failures + 1
+                if failures >= MAX_FFMPEG_FAILURES:
+                    last = result.stderr_tail[-1] if result.stderr_tail else "aucun message"
+                    raise FatalError(f"ffmpeg s'arrête sans cesse ({failures} fois de suite). Dernier message : {last}")
+                self._stop_event.wait(self._deps.retry_delay_s)
+            else:
+                failures = 0
+            self._log("Nouvelle tentative de connexion…")
+
+    def _pick_encoder(self) -> str:
+        encoder, line = resolve_encoder(self._ffmpeg, self._config.encoder, self._deps.run)
+        if line != self._last_encoder_line:
+            self._log(line)
+            self._last_encoder_line = line
+        return encoder
+
+    def _connect(self) -> tuple[socket.socket, SocketReader, protocol.Hello] | None:
+        """Waits for a tablet, redoing the adb forward on each try, then connects and waits for HELLO."""
+        while not self._stop_event.is_set():
+            problem = ensure_forward(self._adb, self._deps.run)
+            if problem is not None:
+                self._set_state(State.WAITING_DEVICE, problem)
+                self._stop_event.wait(self._deps.poll_s)
+                continue
+            try:
+                sock = self._deps.create_connection(("127.0.0.1", protocol.PORT), timeout=2)
+            except OSError:
+                self._wait_for_app()
+                continue
+            with self._lock:
+                if self._stop_event.is_set():
+                    sock.close()
+                    return None
+                self._active_sock = sock
+            try:
+                with contextlib.suppress(OSError):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # adb accepte la connexion locale même si rien n'écoute sur la tablette : seul le HELLO prouve que l'app est là.
+                rfile = SocketReader(sock)
+                hello = protocol.read_message(rfile)
+                sock.settimeout(None)
+            except (OSError, EOFError, protocol.ProtocolError):
+                self._close_socket(sock)
+                if self._stop_event.is_set():
+                    return None
+                self._wait_for_app()
+                continue
+            if not isinstance(hello, protocol.Hello):
+                self._close_socket(sock)
+                raise FatalError(f"Premier message inattendu de la tablette : {hello}")
+            if hello.version != protocol.VERSION:
+                self._close_socket(sock)
+                raise FatalError(f"Protocole incompatible : tablette v{hello.version}, PC v{protocol.VERSION}. "
+                                 "Mets à jour l'app ou le relais.")
+            return sock, rfile, hello
+        return None
+
+    def _wait_for_app(self) -> None:
+        self._set_state(State.WAITING_APP, WAITING_APP_DETAIL)
+        self._stop_event.wait(self._deps.poll_s)
+
+    def _session(self, sock: socket.socket, rfile: SocketReader, hello: protocol.Hello, encoder: str,
+                 output: int) -> SessionResult:
+        """Streams until the tablet leaves, stop() is called, or ffmpeg exits on its own."""
+        send_lock = threading.Lock()
+        sent_video = threading.Event()
+
+        def send(data: bytes) -> None:
+            with send_lock:
+                sock.sendall(data)
+            sent_video.set()  # stream() n'envoie rien avant la première IDR : tout envoi est de la vidéo
+
+        def send_pong(t_tab_us: int) -> None:
+            with send_lock:  # l'horodatage est pris sous le verrou : pas d'attente entre la mesure et l'envoi
+                sock.sendall(protocol.encode_pong(t_tab_us, now_us()))
+
+        command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
+        ffmpeg = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
+        with self._lock:
+            self._active_ffmpeg = ffmpeg
+            if self._stop_event.is_set():
+                ffmpeg.kill()
+        self._set_state(State.STREAMING, "Démarrage du flux…")
+        stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
+        disconnected = threading.Event()
+        closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
+        keyframe_requests = 0  # la tablette en envoie une juste après chaque CONFIG (normal) : on ne journalise que les suivantes
+        input_failed = False  # un échec d'injection n'est journalisé qu'une fois par session
+        stream_size: tuple[int, int] | None = None
+        pointer_injector: Any = None
+        injector_lock = threading.Lock()
+
+        def on_stream_size(width: int, height: int) -> None:
+            nonlocal pointer_injector, stream_size
+            stream_size = (width, height)
+            self._set_state(State.STREAMING, f"Flux {width}×{height}")
+            with injector_lock:
+                if pointer_injector is not None:
+                    self._close_injector(pointer_injector)
+                    pointer_injector = None
+                try:
+                    pointer_injector = self._deps.create_injector(width, height, self._log)
+                except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
+                    self._log(f"Tactile désactivé : {e}. La vidéo continue.")
+                    pointer_injector = None
+
+        def pump_stderr() -> None:
+            try:
+                for line in ffmpeg.stderr:
+                    text = line.decode(errors="replace").rstrip()
+                    stderr_tail.append(text)
+                    self._log(f"[ffmpeg] {text}")
+            except (OSError, ValueError):
+                pass  # le thread ne doit jamais mourir tant que ffmpeg écrit
+
+        def read_tablet() -> None:
+            nonlocal keyframe_requests, input_failed
+            try:
+                while True:
+                    message = protocol.read_message(rfile)
+                    if isinstance(message, protocol.Ping):
+                        send_pong(message.t_tab_us)
+                    elif isinstance(message, protocol.Stats):
+                        size = stream_size
+                        if size is not None:
+                            self._listener.on_stats(StreamStats(
+                                size[0], size[1], message.fps, message.latency_avg_us / 1000,
+                                message.latency_max_us / 1000, message.dropped, message.rtt_us / 1000))
+                    elif isinstance(message, protocol.KeyframeRequest):
+                        keyframe_requests += 1
+                        if keyframe_requests >= 2:
+                            self._log("Keyframe demandée par la tablette : prochaine IDR sous 1 s (GOP fixe)")
+                    elif isinstance(message, protocol.Input):
+                        with injector_lock:
+                            target = pointer_injector
+                        if target is not None:
+                            try:
+                                target.handle(message)
+                            except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
+                                if not input_failed:
+                                    input_failed = True
+                                    self._log(f"Tactile en échec, entrées ignorées : {e}")
+            except (EOFError, OSError, protocol.ProtocolError) as e:
+                if not closing.is_set() and not self._stop_event.is_set():
+                    self._log(f"Tablette déconnectée ({e})")
+            finally:
+                disconnected.set()
+                with contextlib.suppress(OSError):
+                    sock.close()  # sous Windows, seul closesocket() interrompt un sendall bloqué dans stream()
+                with contextlib.suppress(OSError):
+                    ffmpeg.kill()
+
+        stderr_thread = threading.Thread(target=pump_stderr, name="ffmpeg-stderr", daemon=True)
+        stderr_thread.start()
+        threading.Thread(target=read_tablet, name="tablet-reader", daemon=True).start()
+        send_failed = False
+        try:
+            stream(ffmpeg.stdout, send, self._config.fps, disconnected, on_stream_size, self._log)
+        except OSError:
+            send_failed = True  # sendall a échoué : la tablette est partie
+        finally:
+            with injector_lock:
+                if pointer_injector is not None:
+                    self._close_injector(pointer_injector)  # lève tous les contacts : rien ne reste « posé » dans Windows
+                    pointer_injector = None
+            tablet_gone = send_failed or disconnected.is_set()
+            with contextlib.suppress(OSError):
+                ffmpeg.kill()
+            ffmpeg.wait()
+            closing.set()
+            self._close_socket(sock)
+            with self._lock:
+                self._active_ffmpeg = None
+        died = not tablet_gone and not self._stop_event.is_set()
+        if died:
+            stderr_thread.join(timeout=0.5)  # laisse le pump finir de lire avant de rendre la fin du stderr
+        return SessionResult(died, sent_video.is_set(), list(stderr_tail))
+
+    # --- utilitaires ---
+
+    def _close_socket(self, sock: socket.socket) -> None:
+        with self._lock:
+            if self._active_sock is sock:
+                self._active_sock = None
+        with contextlib.suppress(OSError):
+            sock.close()
+
+    def _close_injector(self, target: Any) -> None:
+        try:
+            target.close()
+        except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fermeture de la session
+            self._log(f"Fermeture du tactile en échec : {e}")
+
+    def _set_state(self, state: State, detail: str) -> None:
+        if (state, detail) == (self._state, self._detail):
+            return
+        self._state = state
+        self._detail = detail
+        self._listener.on_state(state, detail)
+
+    def _log(self, line: str) -> None:
+        self._listener.on_log(line)
