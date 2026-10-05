@@ -14,7 +14,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(settings.load(self.path), settings.Settings())
 
     def test_round_trip(self):
-        saved = settings.Settings(output="2", encoder="amf", first_close_hint_shown=True)
+        saved = settings.Settings(output="2", encoder="amf", first_close_hint_shown=True, language="fr")
         settings.save(saved, self.path)
         self.assertEqual(settings.load(self.path), saved)
 
@@ -28,6 +28,13 @@ class SettingsTest(unittest.TestCase):
         self.path.write_text(json.dumps({"output": "deux", "encoder": "amf", "first_close_hint_shown": "oui"}),
                              encoding="utf-8")
         self.assertEqual(settings.load(self.path), settings.Settings(encoder="amf"))
+
+    def test_language_follows_the_installer_until_chosen(self):
+        self.assertIsNone(settings.Settings().language)
+        for raw, expected in (("en", "en"), ("fr", "fr"), ("de", None), (None, None), (1, None)):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps({"language": raw}), encoding="utf-8")
+            self.assertEqual(settings.load(self.path).language, expected, raw)
 
     def test_non_object_json_gives_defaults(self):
         self.path.parent.mkdir(parents=True)

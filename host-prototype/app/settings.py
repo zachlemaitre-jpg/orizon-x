@@ -6,6 +6,8 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from messages import LANGUAGES
+
 ENCODERS = ("auto", "nvenc", "amf")
 
 
@@ -14,6 +16,7 @@ class Settings:
     output: str = "auto"  # "auto" ou un index ddagrab
     encoder: str = "auto"
     first_close_hint_shown: bool = False  # bulle « Orizon X tourne toujours » déjà montrée
+    language: str | None = None  # None : la langue choisie à l'installation (registre), sinon l'anglais
 
 
 def default_path() -> Path:
@@ -39,6 +42,9 @@ def load(path: Path) -> Settings:
     hint = raw.get("first_close_hint_shown")
     if isinstance(hint, bool):
         result.first_close_hint_shown = hint
+    language = raw.get("language")
+    if language in LANGUAGES:
+        result.language = language
     return result
 
 
