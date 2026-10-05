@@ -13,3 +13,7 @@ __pycache__/
 
 # APK générés
 dist/
+
+# Dev env PC app
+host-prototype/.venv/
+build/

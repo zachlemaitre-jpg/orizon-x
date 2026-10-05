@@ -1,0 +1,3 @@
+# Appli PC Orizon X (fenêtre Qt + exe). Le relais lui-même n'utilise que la bibliothèque standard.
+PySide6-Essentials==6.11.2
+pyinstaller==6.22.3
