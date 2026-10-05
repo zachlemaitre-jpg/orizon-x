@@ -67,7 +67,7 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
 **Au HELLO de la tablette** (largeur, hauteur, dpi), en mode *Extend* :
 1. `ensure_resolution(w, h, 60)`, puis `set_display_count(1)`.
 2. Attente de l'écran Windows de taille `w×h`, avec `injector.monitors()` interrogé toutes les 200 ms et un **délai maximal de 10 s**.
-3. **Première apparition seulement** (un drapeau `layout_applied` est gardé dans les réglages) : application de la **position** et de l'**échelle** réglées. Les fois suivantes, Windows restaure la disposition, car le moniteur VDD garde la même identité.
+3. **Première apparition seulement** (la paire `applied_position`/`applied_scale` déjà appliquée est gardée dans les réglages ; l'ancien drapeau `layout_applied` est encore lu) : application de la **position** et de l'**échelle** réglées quand elles diffèrent de cette paire. Les fois suivantes, Windows restaure la disposition, car le moniteur VDD garde la même identité. Une position ou une échelle changée pendant la préparation est appliquée dès que l'écran est allumé.
 4. Repérage de l'écran ddagrab de même taille (`probe_outputs`), puis démarrage de la capture.
 5. **Pendant les étapes 1 à 4**, le moteur répond déjà aux PING de la tablette (le lecteur de session démarre avant la préparation de l'écran). Sinon la tablette coupe après 5 s de silence.
 
@@ -78,11 +78,11 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
 **Mode *Duplicate*** : aucun écran virtuel ; capture de l'écran principal (index ddagrab 0), comme l'ancien mode `--output 0`.
 
 **Position** (À droite par défaut, ou À gauche / Au-dessus / En dessous) :
-- calculée contre l'écran **principal**, centrée sur le bord choisi, en pixels physiques ;
+- calculée contre **tous les autres écrans actifs** : au-delà de leur bord le plus éloigné du côté choisi (À droite : x = le plus grand bord droit), centrée sur l'écran **principal** dans l'autre axe, en pixels physiques ; elle ne chevauche donc jamais un second écran physique. Une échelle seule changée ne déplace pas l'écran ;
 - appliquée via `SetDisplayConfig` (QueryDisplayConfig, modification de `sourceMode.position`, puis `SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES`).
 
 **Échelle** :
-- **Auto** = densité de la tablette ÷ 96 × 0,75, arrondie au palier Windows le plus proche (100, 125, 150, 175, 200, 225, 250, 300 %), bornée à 100–300 %. Pour 2880×1800 à 274 dpi : 274/96 × 0,75 ≈ 2,14, soit **200 %**. Le facteur 0,75 tient compte de la tablette tenue plus près des yeux qu'un moniteur. La formule est isolée et testée.
+- **Auto** = densité de la tablette ÷ 96 × 0,75, arrondie au palier inférieur (le palier Windows à ou sous cette valeur : 100, 125, 150, 175, 200, 225, 250, 300 %), bornée à 100–300 %. Pour 2880×1800 à 274 dpi : 274/96 × 0,75 ≈ 2,14, soit **200 %**. Le facteur 0,75 tient compte de la tablette tenue plus près des yeux qu'un moniteur. La formule est isolée et testée.
 - Appliquée par `DisplayConfigSetDeviceInfo` avec le type non documenté `DISPLAYCONFIG_DEVICE_INFO_SET_DPI_SCALE` (-4), en valeur relative au palier recommandé (lu par le type -3). C'est la méthode connue et utilisée par les outils de la communauté.
 - En cas d'échec : journalisé, le flux continue.
 

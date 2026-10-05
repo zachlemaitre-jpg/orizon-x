@@ -102,9 +102,9 @@ class VddController:
 **Interface (pure):**
 ```python
 @dataclass(frozen=True) class Rect: left: int; top: int; width: int; height: int
-def place(primary: Rect, size: tuple[int, int], side: str) -> tuple[int, int]   # side: right|left|above|below; centred on that edge
+def place(primary: Rect, size: tuple[int, int], side: str, monitors: Iterable[Rect] | None = None) -> tuple[int, int]   # side: right|left|above|below; past the outermost edge of all monitors on that side, centred on the primary (monitors None: the primary alone)
 SCALE_STEPS = (100, 125, 150, 175, 200, 225, 250, 300)
-def auto_scale(dpi: int) -> int     # round(dpi/96*0.75) to nearest step, clamp 100..300 ; 274 -> 200
+def auto_scale(dpi: int) -> int     # dpi/96*0.75 rounded DOWN to the step at or below, clamp 100..300 ; 274 -> 200
 def relative_scale_index(target: int, recommended: int) -> int   # per Task 1 semantics
 ```
 **Interface (Windows, ctypes):** `active_monitors() -> list[MonitorPath]` (QueryDisplayConfig: adapter/source ids, position, size, is_primary), `set_position(path, x, y)` (SetDisplayConfig with supplied config, SDC_APPLY|SDC_USE_SUPPLIED_DISPLAY_CONFIG|SDC_SAVE_TO_DATABASE|SDC_ALLOW_CHANGES), `get_scale(path) -> (current, recommended)`, `set_scale(path, percent)`.
