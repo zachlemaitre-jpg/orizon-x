@@ -43,12 +43,12 @@ L'écran d'attente de la tablette et la fenêtre PC portent l'identité du logo 
 - **`MainWindow`** :
   - La barre du haut ne garde que la zone de déplacement et les boutons « — » et « ✕ ». Le logo 18 px et le libellé « Orizon X » en sont retirés.
   - Bloc central, centré :
-    - le logo à 44 px ;
+    - le logo à 64 px (le glyphe n’occupe que ~53 % de la hauteur du SVG) ;
     - « Orizon X » en MAZAGLA, 26 px ;
     - puis une ligne de statut : un petit point coloré de 10 px, suivi du titre d'état (« Connecté »…) en 16 px, gras ;
     - puis la ligne de détail.
   - `StatusDot` est réduit à un point de 10 px, sans halo.
-  - La hauteur de la fenêtre passe à 380 px. La largeur reste 360 px.
+  - La hauteur de la fenêtre passe à 400 px. La largeur reste 360 px.
   - Le constructeur `MainWindow(logo)` garde sa signature. Le pixmap passé sert à l'icône de fenêtre ; le logo du bloc central vient de `brand.logo_pixmap`.
 - **Packaging** : `--add-data app/assets` couvre déjà les nouveaux fichiers. Il faut vérifier que PyInstaller embarque le module QtSvg (`PySide6.QtSvg` est importé par `brand.py`, donc détecté).
 

@@ -119,7 +119,7 @@ class MainWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle("Orizon X")
         self.setWindowIcon(QIcon(logo))
-        self.setFixedSize(360, 380)
+        self.setFixedSize(360, 400)
         brand_family = brand.load_brand_font()
         self.setStyleSheet(build_style(brand_family))
         self._acrylic = False
@@ -283,7 +283,7 @@ class MainWindow(QWidget):
     # --- événements Qt ---
 
     def _refresh_logo(self) -> None:
-        self._logo.setPixmap(brand.logo_pixmap(44, self.devicePixelRatioF()))
+        self._logo.setPixmap(brand.logo_pixmap(64, self.devicePixelRatioF()))
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
