@@ -91,6 +91,9 @@ class Tray(QObject):
     def tooltip(self) -> str:
         return self._icon.toolTip()
 
+    def is_visible(self) -> bool:
+        return self._icon.isVisible()
+
     def autostart_action_enabled(self) -> bool:
         return self._autostart.isEnabled()
 
