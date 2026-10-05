@@ -20,6 +20,7 @@ SEE_MASK_NOCLOSEPROCESS = 0x00000040
 SEE_MASK_NOASYNC = 0x00000100
 ERROR_CANCELLED = 1223  # l'utilisateur a refusé l'invite UAC
 WAIT_OBJECT_0 = 0
+WAIT_FAILED = 0xFFFFFFFF
 ADMIN_TIMEOUT_S = 180.0  # pnputil /restart-device prend quelques secondes ; au-delà, quelque chose est bloqué
 READY_TIMEOUT_S = 20.0  # le pilote redémarré répond de nouveau au PING
 READY_POLL_S = 0.5
@@ -53,11 +54,13 @@ class Win32Shell:
         self._close.argtypes = [wintypes.HANDLE]
         self._close.restype = wintypes.BOOL
 
-    def shell_execute(self, verb: str, file: str, parameters: str, show: int) -> tuple[Any, int]:
-        """(process handle or None, Windows error code)."""
+    def shell_execute(self, verb: str, file: str, parameters: str, show: int,
+                      hwnd: int | None = None) -> tuple[Any, int]:
+        """(process handle or None, Windows error code). hwnd: owner window, so the UAC prompt comes to the front."""
         info = SHELLEXECUTEINFOW()
         info.cbSize = ctypes.sizeof(info)
         info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+        info.hwnd = hwnd
         info.lpVerb = verb
         info.lpFile = file
         info.lpParameters = parameters
@@ -67,7 +70,11 @@ class Win32Shell:
         return info.hProcess, 0
 
     def wait(self, process: Any, timeout_ms: int) -> bool:
-        return self._wait(process, timeout_ms) == WAIT_OBJECT_0
+        """True once the process has ended, False on timeout; OSError if the wait itself failed."""
+        result = self._wait(process, timeout_ms)
+        if result == WAIT_FAILED:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return result == WAIT_OBJECT_0
 
     def exit_code(self, process: Any) -> int:
         code = wintypes.DWORD()
@@ -93,16 +100,22 @@ def self_command(arguments: list[str], *, frozen: bool | None = None, executable
     return file, subprocess.list2cmdline([str(script or SCRIPT), *arguments])
 
 
-def run_as_admin(file: str, parameters: str, *, api: Any = None, timeout_s: float = ADMIN_TIMEOUT_S) -> int | None:
+def run_as_admin(file: str, parameters: str, *, hwnd: int | None = None, api: Any = None,
+                 timeout_s: float = ADMIN_TIMEOUT_S) -> int | None:
     """Runs `file parameters` elevated and hidden, waits for it, returns its exit code; None if UAC was refused.
 
-    Raises OSError if it could not be launched, TimeoutError if it is still running after timeout_s.
+    hwnd: the app's main window, owner of the UAC prompt (brought to the front instead of blinking in the taskbar).
+    Raises OSError if it could not be launched or gave no process handle to wait for, TimeoutError if it is still
+    running after timeout_s.
     """
     api = api or Win32Shell()
-    process, error = api.shell_execute("runas", file, parameters, SW_HIDE)
-    if process is None:
+    process, error = api.shell_execute("runas", file, parameters, SW_HIDE, hwnd)
+    if not process:
         if error == ERROR_CANCELLED:
             return None
+        if error == 0:
+            raise OSError("ShellExecuteExW succeeded but gave no process handle: the administrator process "
+                          "cannot be waited for")
         raise OSError(error, f"ShellExecuteExW failed (Windows error {error})")
     try:
         if not api.wait(process, int(timeout_s * 1000)):
@@ -117,18 +130,19 @@ def _driver_ready() -> bool:
     return vdd.VddController().is_installed()
 
 
-def add_resolution(width: int, height: int, *, run: Callable[[str, str], int | None] = run_as_admin,
+def add_resolution(width: int, height: int, *, hwnd: int | None = None,
+                   run: Callable[..., int | None] = run_as_admin,
                    driver_ready: Callable[[], bool] = _driver_ready, sleep: Callable[[float], None] = time.sleep,
                    clock: Callable[[], float] = time.monotonic,
                    command: Callable[[list[str]], tuple[str, str]] = self_command) -> int | None:
-    """One UAC prompt: `--add-resolution WxH` as admin. Blocking (worker thread).
+    """One UAC prompt (owned by the window `hwnd`): `--add-resolution WxH` as admin. Blocking (worker thread).
 
     Returns the admin process's exit code (0 = added and device restarted), or None if UAC was refused. After a
     success, waits (up to READY_TIMEOUT_S) for the restarted driver to answer PING again, so that the engine
     restarted next does not report "driver not found" while it is still coming back.
     """
     file, parameters = command(["--add-resolution", f"{width}x{height}"])
-    code = run(file, parameters)
+    code = run(file, parameters, hwnd=hwnd)
     if code == 0:
         deadline = clock() + READY_TIMEOUT_S
         while not driver_ready() and clock() < deadline:

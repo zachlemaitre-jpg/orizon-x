@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import functools
 import logging
 import os
+import subprocess
 import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QIcon, QPixmap
@@ -36,13 +38,17 @@ INSTANCE_NAME = f"OrizonX-PC-{os.environ.get('USERNAME', 'user')}"
 SHOW_MESSAGE = b"show"
 ASFW_ANY = -1  # AllowSetForegroundWindow : n'importe quel processus
 DISPLAY_SETTINGS_URI = "ms-settings:display"
+LOG_NAME = "relay.log"
+# Commandes admin (installateur, invite UAC) : leur propre fichier. Écrire relay.log depuis un second processus
+# ferait tourner (renommer) le fichier que l'appli a ouvert.
+ADMIN_LOG_NAME = "relay-admin.log"
 logger = logging.getLogger("orizonx")
 
 
-def setup_logging() -> Path:
+def setup_logging(name: str = LOG_NAME) -> Path:
     directory = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "OrizonX"
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / "relay.log"
+    path = directory / name
     handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.setLevel(logging.INFO)
@@ -236,9 +242,14 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: Sett
     resolution_result = _ResolutionResult(controller)  # enfant du contrôleur : vit aussi longtemps que lui
 
     def on_add_resolution(width: int, height: int) -> None:
-        logger.info("Add exact resolution %dx%d: asking for administrator rights", width, height)
+        logger.info("Add exact resolution %dx%d: stopping the stream, asking for administrator rights",
+                    width, height)
+        # Le périphérique va redémarrer : plus de capture ni de tactile sur un écran qui disparaît.
+        stopping = controller.stop()
 
         def work() -> None:
+            if stopping is not None:
+                stopping.join(engine.STOP_TIMEOUT_S + 0.5)  # avant l'invite UAC
             try:
                 result: object = add_resolution(width, height)
             except Exception as e:  # noqa: BLE001 — rapporté au thread Qt, jamais perdu
@@ -252,14 +263,15 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: Sett
         title = i18n.tr("tray.resolution_title", lang)
         if result == 0:
             logger.info("Resolution %dx%d added: restarting the engine so the tablet reconnects", width, height)
-            controller.restart(keeper.config())
         elif result is None:
-            logger.info("Add exact resolution %dx%d: administrator rights refused", width, height)
+            logger.info("Add exact resolution %dx%d: administrator rights refused, restarting the engine",
+                        width, height)
             tray.show_message(title, i18n.tr("tray.resolution_refused", lang))
         else:
-            logger.error("Add exact resolution %dx%d failed: %s", width, height,
+            logger.error("Add exact resolution %dx%d failed (%s): restarting the engine", width, height,
                          f"exit code {result}" if isinstance(result, int) else repr(result))
             tray.show_message(title, i18n.tr("tray.resolution_failed", lang))
+        controller.restart(keeper.config())  # dans tous les cas : le flux reprend (bandes noires sinon)
 
     def on_quit() -> None:
         logger.info("Quit requested")
@@ -305,18 +317,38 @@ def refresh_autostart() -> None:
             logger.exception("Start with Windows: cannot update the path")
 
 
+class UsageError(Exception):
+    """The command line is wrong (argparse's message)."""
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # L'exe est fenêtré : argparse écrirait sur une console absente puis sortirait sans trace.
+        raise UsageError(message)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="OrizonX")
+    """Raises UsageError on a wrong command line."""
+    parser = _Parser(prog="OrizonX")
     parser.add_argument("--minimized", action="store_true", help="start in the notification area")
     admin.add_arguments(parser)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    try:
+        args = parse_args(argv)
+    except UsageError as e:
+        # Le plus souvent l'installateur : journal des commandes admin, code 2 comme argparse.
+        setup_logging(ADMIN_LOG_NAME)
+        logger.error("Command line error: %s (arguments: %s)", e, subprocess.list2cmdline(argv))
+        return 2
+    except SystemExit as e:  # --help
+        return e.code if isinstance(e.code, int) else 0
     if admin.requested(args):
         # Installateur ou invite UAC : ni fenêtre, ni instance unique, ni Qt ; code de sortie 0/1, détails au journal.
-        setup_logging()
+        setup_logging(ADMIN_LOG_NAME)
         return admin.run(args, log=logger)
 
     app = QApplication(sys.argv[:1])
@@ -353,8 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     window.set_encoder(current.encoder)
     tray = Tray(logo, autostart_supported=autostart.supported(),
                 autostart_enabled=autostart.supported() and autostart.is_enabled())
+    # Invite UAC de « Résolution exacte » rattachée à la fenêtre : au premier plan, pas un bouton qui clignote.
     wire(controller=controller, window=window, tray=tray, keeper=keeper, log_path=log_path, quit_app=app.quit,
-         display=display)
+         display=display, add_resolution=functools.partial(elevate.add_resolution, hwnd=int(window.winId())))
     serve_instance(server, window.show_and_raise)
 
     controller.start()

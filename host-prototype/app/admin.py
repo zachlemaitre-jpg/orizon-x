@@ -8,7 +8,8 @@
     --remove-driver           remove the device and its driver package (admin)
     --add-resolution WxH      add WxH at 60 Hz to the XML, then restart the device (admin, "Add exact resolution")
 
-Exit code 0 on success, 1 on failure. The exe is windowed (no console): nothing is printed, details go to the log.
+Exit code 0 on success, 1 on failure (2: wrong command line, see app/main.py). The exe is windowed (no console):
+nothing is printed, details go to the admin log (relay-admin.log). The XML is the driver's own file (VDDPATH).
 Every Windows-touching piece is a parameter of run() so tests use fakes.
 """
 from __future__ import annotations
@@ -55,9 +56,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def requested(args: argparse.Namespace) -> bool:
-    """True if the command line asks for an admin command instead of the app."""
+    """True if the command line asks for an admin command instead of the app (--restart alone: an error there)."""
     return bool(args.cleanup or args.configure_vdd or args.install_driver or args.remove_driver
-                or args.add_resolution)
+                or args.add_resolution or args.restart)
 
 
 # --- GPU de l'écran principal ---
@@ -109,6 +110,7 @@ def cleanup(*, vdd_factory: Callable[[], Any], display_factory: Callable[..., An
 
 def configure_vdd(*, controller: Any, device: Any, gpu_name: Callable[[], str | None], restart: bool,
                   log: logging.Logger) -> int:
+    log.info("VDD settings file: %s", controller.settings_path)
     gpu = gpu_name()
     if gpu is None:
         log.warning("Configure VDD: GPU of the primary display not found, the XML keeps its GPU setting")
@@ -128,8 +130,10 @@ def configure_vdd(*, controller: Any, device: Any, gpu_name: Callable[[], str | 
 
 
 def install_driver(inf: str, *, device: Any, log: logging.Logger) -> int:
-    device.install_driver(inf)
+    reboot = device.install_driver(inf)
     log.info("Virtual display driver installed from %s", inf)
+    if reboot:
+        log.warning("Virtual display driver: Windows must restart before the driver is fully installed")
     return 0
 
 
@@ -141,6 +145,11 @@ def remove_driver(*, device: Any, log: logging.Logger) -> int:
 
 def add_resolution(size: tuple[int, int], *, controller: Any, device: Any, log: logging.Logger) -> int:
     width, height = size
+    if not device.is_admin():
+        # Sans droits, le redémarrage du périphérique échouerait : le XML resterait changé sans effet.
+        log.error("--add-resolution needs administrator rights: the VDD settings are left untouched")
+        return 1
+    log.info("VDD settings file: %s", controller.settings_path)
     changed = controller.add_resolutions([(width, height, 60)])
     log.info("Resolution %dx%d@60 %s", width, height, "added" if changed else "already in the XML")
     device.restart_device()  # même déjà présente : le pilote ne l'a pas chargée, sinon on ne serait pas là
@@ -152,7 +161,10 @@ def run(args: argparse.Namespace, *, log: logging.Logger, vdd_factory: Callable[
         device: Any = None, display_factory: Callable[..., Any] | None = None,
         gpu_name: Callable[[], str | None] = primary_gpu_name) -> int:
     """Runs the admin command of `args`; 0 on success, 1 on any failure (logged with its traceback)."""
-    vdd_factory = vdd_factory or vdd.VddController
+    vdd_factory = vdd_factory or vdd.VddController  # fichier du pilote, VDDPATH compris
+    if args.restart and not args.configure_vdd:
+        log.error("--restart only goes with --configure-vdd")
+        return 1
     try:
         device = device or _default_device()
         if args.cleanup:

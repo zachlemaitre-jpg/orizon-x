@@ -16,6 +16,7 @@ class FakeVdd:
     def __init__(self, fail=None):
         self.calls = []
         self.fail = fail or {}
+        self.settings_path = r"C:\VirtualDisplayDriver\vdd_settings.xml"
 
     def _call(self, name, *args):
         self.calls.append((name,) + args)
@@ -36,9 +37,11 @@ class FakeVdd:
 class FakeDevice:
     """vdd_device stand-in: never touches SetupAPI or pnputil."""
 
-    def __init__(self, present=True, fail=None):
+    def __init__(self, present=True, fail=None, admin=True, reboot=False):
         self.present = present
         self.fail = fail or {}
+        self.admin = admin
+        self.reboot = reboot
         self.calls = []
 
     def _call(self, name, *args):
@@ -46,12 +49,17 @@ class FakeDevice:
         if name in self.fail:
             raise self.fail[name]
 
+    def is_admin(self):
+        self.calls.append(("is_admin",))
+        return self.admin
+
     def find_device(self):
         self.calls.append(("find",))
         return VDD_DEVICE if self.present else None
 
     def install_driver(self, inf):
         self._call("install", inf)
+        return self.reboot
 
     def remove_driver(self):
         self._call("remove")
@@ -82,7 +90,7 @@ class ParseTest(unittest.TestCase):
         self.assertFalse(admin.requested(parse()))
 
     def test_each_flag_is_an_admin_command(self):
-        for argv in (["--cleanup"], ["--configure-vdd"], ["--configure-vdd", "--restart"],
+        for argv in (["--cleanup"], ["--configure-vdd"], ["--configure-vdd", "--restart"], ["--restart"],
                      ["--install-driver", r"C:\x\MttVDD.inf"], ["--remove-driver"], ["--add-resolution", "2560x1600"]):
             with self.subTest(argv=argv):
                 self.assertTrue(admin.requested(parse(*argv)))
@@ -181,6 +189,31 @@ class RunTest(unittest.TestCase):
     def test_install_driver(self):
         self.assertEqual(self.run_admin("--install-driver", r"C:\Program Files\Orizon X\vdd\MttVDD.inf"), 0)
         self.assertEqual(self.device.calls, [("install", r"C:\Program Files\Orizon X\vdd\MttVDD.inf")])
+        self.assertNotIn("Windows must restart", self.logs)
+
+    def test_install_driver_needing_a_reboot_says_so(self):
+        self.device.reboot = True
+        self.assertEqual(self.run_admin("--install-driver", "MttVDD.inf"), 0)
+        self.assertIn("Windows must restart", self.logs)
+
+    def test_restart_alone_is_an_error(self):
+        self.assertEqual(self.run_admin("--restart"), 1)
+        self.assertIn("--restart only goes with --configure-vdd", self.logs)
+        self.assertEqual((self.vdd.calls, self.device.calls), ([], []))
+
+    def test_add_resolution_without_admin_rights_leaves_the_xml_alone(self):
+        self.device.admin = False
+        self.assertEqual(self.run_admin("--add-resolution", "2800x1752"), 1)
+        self.assertEqual(self.vdd.calls, [])
+        self.assertEqual(self.device.calls, [("is_admin",)])
+        self.assertIn("administrator", self.logs)
+
+    def test_xml_commands_log_the_settings_file(self):
+        self.vdd.settings_path = r"D:\VDD\vdd_settings.xml"
+        for argv in (["--configure-vdd"], ["--add-resolution", "2800x1752"]):
+            with self.subTest(argv=argv):
+                self.run_admin(*argv)
+                self.assertIn(r"D:\VDD\vdd_settings.xml", self.logs)
 
     def test_install_driver_failure(self):
         self.device.fail["install"] = VddDeviceError("install_driver", 5, "administrator rights required")
@@ -198,7 +231,7 @@ class RunTest(unittest.TestCase):
     def test_add_resolution_adds_it_at_60_hz_then_restarts_the_device(self):
         self.assertEqual(self.run_admin("--add-resolution", "2800x1752"), 0)
         self.assertEqual(self.vdd.calls, [("resolutions", [(2800, 1752, 60)])])
-        self.assertEqual(self.device.calls, [("restart",)])
+        self.assertEqual(self.device.calls, [("is_admin",), ("restart",)])
 
     def test_add_resolution_restart_failure(self):
         self.device.fail["restart"] = VddDeviceError("restart_device", 1168, "no Root\\MttVDD device")
@@ -214,16 +247,17 @@ class RunTest(unittest.TestCase):
 class FakeShell:
     """ShellExecuteExW and process-handle stand-in."""
 
-    def __init__(self, ok=True, error=0, exit_code=0, finishes=True):
+    def __init__(self, ok=True, error=0, exit_code=0, finishes=True, process="process"):
         self.ok = ok
         self.error = error
         self.code = exit_code
         self.finishes = finishes
+        self.process = process
         self.calls = []
 
-    def shell_execute(self, verb, file, parameters, show):
-        self.calls.append(("shell", verb, file, parameters, show))
-        return ("process" if self.ok else None), self.error
+    def shell_execute(self, verb, file, parameters, show, hwnd=None):
+        self.calls.append(("shell", verb, file, parameters, show, hwnd))
+        return (self.process if self.ok else None), self.error
 
     def wait(self, process, timeout_ms):
         self.calls.append(("wait", process, timeout_ms))
@@ -259,8 +293,40 @@ class ElevateTest(unittest.TestCase):
         shell = FakeShell(exit_code=0)
         self.assertEqual(elevate.run_as_admin("OrizonX.exe", "--add-resolution 2800x1752", api=shell), 0)
         self.assertEqual(shell.calls[0], ("shell", "runas", "OrizonX.exe", "--add-resolution 2800x1752",
-                                          elevate.SW_HIDE))
+                                          elevate.SW_HIDE, None))
         self.assertEqual([c[0] for c in shell.calls], ["shell", "wait", "exit_code", "close"])
+
+    def test_the_owner_window_is_given_so_the_uac_prompt_comes_to_the_front(self):
+        shell = FakeShell()
+        elevate.run_as_admin("OrizonX.exe", "--x", hwnd=0x1234, api=shell)
+        self.assertEqual(shell.calls[0][-1], 0x1234)
+
+    def test_no_process_handle_is_an_explicit_error_not_a_timeout(self):
+        for process in (None, 0):
+            with self.subTest(process=process):
+                shell = FakeShell(process=process)
+                with self.assertRaises(OSError) as caught:
+                    elevate.run_as_admin("OrizonX.exe", "--x", api=shell)
+                self.assertNotIsInstance(caught.exception, TimeoutError)
+                self.assertIn("no process handle", str(caught.exception))
+                self.assertEqual([c[0] for c in shell.calls], ["shell"])  # rien à attendre ni à fermer
+
+    def test_a_failed_wait_is_an_error_not_a_timeout(self):
+        class FailingWaitShell(FakeShell):
+            def wait(self, process, timeout_ms):
+                raise OSError(6, "invalid handle")
+
+        shell = FailingWaitShell()
+        with self.assertRaises(OSError) as caught:
+            elevate.run_as_admin("OrizonX.exe", "--x", api=shell)
+        self.assertNotIsInstance(caught.exception, TimeoutError)
+        self.assertEqual(shell.calls[-1], ("close", "process"))
+
+    def test_add_resolution_passes_the_owner_window(self):
+        seen = []
+        elevate.add_resolution(2800, 1752, hwnd=77, run=lambda f, p, hwnd=None: seen.append(hwnd) or 1,
+                               command=lambda args: ("exe", " ".join(args)))
+        self.assertEqual(seen, [77])
 
     def test_uac_refused_is_none(self):
         shell = FakeShell(ok=False, error=elevate.ERROR_CANCELLED)
@@ -284,7 +350,7 @@ class ElevateTest(unittest.TestCase):
         calls, ready = [], iter([False, False, True])
         clock = [0.0]
 
-        def run(file, params):
+        def run(file, params, hwnd=None):
             calls.append((file, params))
             return 0
 
@@ -301,7 +367,7 @@ class ElevateTest(unittest.TestCase):
         for result in (None, 1):
             with self.subTest(result=result):
                 waited = []
-                code = elevate.add_resolution(2800, 1752, run=lambda f, p: result,
+                code = elevate.add_resolution(2800, 1752, run=lambda f, p, hwnd=None: result,
                                               driver_ready=lambda: waited.append(1) or True,
                                               command=lambda args: ("exe", " ".join(args)))
                 self.assertEqual((code, waited), (result, []))
@@ -312,8 +378,8 @@ class ElevateTest(unittest.TestCase):
         def sleep(s):
             clock[0] += s
 
-        code = elevate.add_resolution(2800, 1752, run=lambda f, p: 0, driver_ready=lambda: False, sleep=sleep,
-                                      clock=lambda: clock[0], command=lambda args: ("exe", " ".join(args)))
+        code = elevate.add_resolution(2800, 1752, run=lambda f, p, hwnd=None: 0, driver_ready=lambda: False,
+                                      sleep=sleep, clock=lambda: clock[0], command=lambda args: ("exe", " ".join(args)))
         self.assertEqual(code, 0)
         self.assertGreaterEqual(clock[0], elevate.READY_TIMEOUT_S)
 

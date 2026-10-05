@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -77,6 +78,8 @@ class WireTest(unittest.TestCase):
 
     def fake_add_resolution(self, width, height):
         self.resolution_calls.append((width, height, threading.current_thread() is threading.main_thread()))
+        # Moteurs déjà arrêtés quand l'invite UAC s'ouvre (le redémarrage du périphérique coupe l'écran virtuel).
+        self.stopped_at_elevation = [e.stopped.is_set() for e in FakeEngine.instances]
         result = self.resolution_results.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -167,29 +170,42 @@ class WireTest(unittest.TestCase):
         self.controller.state_changed.emit(State.STREAMING, msg("state.starting_stream"))
         self.assertTrue(self.window.add_resolution_visible())
 
-    def test_add_exact_resolution_runs_elevated_in_a_worker_then_restarts(self):
+    def test_add_exact_resolution_stops_the_stream_runs_elevated_in_a_worker_then_restarts(self):
+        first = self.start_engine()
         self.resolution_results = [0]
         with mock.patch.object(self.controller, "restart") as restart, \
                 mock.patch.object(self.tray, "show_message") as show:
             self.window.add_resolution_clicked.emit(2800, 1752)
             pump_until(lambda: restart.called)
         self.assertEqual(self.resolution_calls, [(2800, 1752, False)])  # jamais sur le thread Qt (UAC bloquant)
+        self.assertEqual(first.stop_calls, [False])
+        self.assertEqual(self.stopped_at_elevation, [True])  # arrêté avant l'invite UAC
         restart.assert_called_once_with(self.keeper.config())
         show.assert_not_called()
 
-    def test_add_exact_resolution_refused_or_failed_shows_a_tray_message(self):
+    def test_add_exact_resolution_without_a_running_engine_still_restarts(self):
+        self.resolution_results = [0]
+        with mock.patch.object(self.controller, "restart") as restart:
+            self.window.add_resolution_clicked.emit(2800, 1752)
+            pump_until(lambda: restart.called)
+        restart.assert_called_once_with(self.keeper.config())
+
+    def test_add_exact_resolution_refused_or_failed_shows_a_tray_message_and_restarts(self):
         cases = ((None, "Droits administrateur refusés : la tablette garde ses bandes noires."),
                  (1, "La résolution n'a pas pu être ajoutée. Voir le journal."),
                  (OSError(2, "introuvable"), "La résolution n'a pas pu être ajoutée. Voir le journal."))
         for result, text in cases:
+            first = self.start_engine()
             with self.subTest(result=result), mock.patch.object(self.controller, "restart") as restart, \
                     mock.patch.object(self.tray, "show_message") as show, self.assertLogs("orizonx", "INFO") as logs:
                 self.resolution_results = [result]
                 self.window.add_resolution_clicked.emit(2800, 1752)
-                pump_until(lambda: show.called)
+                pump_until(lambda: show.called and restart.called)
                 show.assert_called_once_with("Résolution exacte", text)
-                restart.assert_not_called()
-            self.assertIn("2800x1752", logs.output[-1])
+                restart.assert_called_once_with(self.keeper.config())  # le flux reprend, bandes noires comprises
+                self.assertEqual(self.stopped_at_elevation[-1], True)
+                self.assertEqual(first.stop_calls, [False])
+            self.assertTrue(any("2800x1752" in line for line in logs.output))
 
     def test_use_duplicate_switches_mode_and_restarts(self):
         self.controller.state_changed.emit(State.ERROR, msg("display.vdd_missing"))
@@ -334,11 +350,40 @@ class AdminCommandLineTest(unittest.TestCase):
                     mock.patch.object(main, "setup_logging") as setup_logging, \
                     mock.patch.object(main.admin, "run", return_value=7) as run:
                 self.assertEqual(main.main(argv), 7)
-                setup_logging.assert_called_once_with()
+                setup_logging.assert_called_once_with(main.ADMIN_LOG_NAME)  # pas relay.log : pas de conflit
                 args = run.call_args.args[0]
                 self.assertTrue(getattr(args, expected))
                 self.assertIs(run.call_args.kwargs["log"], main.logger)
         self.assertEqual(args.add_resolution, (2800, 1752))
+        self.assertEqual(main.ADMIN_LOG_NAME, "relay-admin.log")
+
+    def test_usage_errors_are_logged_and_exit_2(self):
+        for argv in (["--add-resolution", "huge"], ["--cleanup", "--remove-driver"], ["--bogus"]):
+            with self.subTest(argv=argv), \
+                    mock.patch.object(main, "QApplication", side_effect=AssertionError("Qt started")), \
+                    mock.patch.object(main, "setup_logging") as setup_logging, \
+                    mock.patch.object(main.admin, "run", side_effect=AssertionError("ran")), \
+                    mock.patch("sys.stderr") as stderr, self.assertLogs("orizonx", "ERROR") as logs:
+                self.assertEqual(main.main(argv), 2)
+                setup_logging.assert_called_once_with(main.ADMIN_LOG_NAME)
+                self.assertIn("Command line error", logs.output[-1])
+                self.assertIn(argv[-1], logs.output[-1])
+                stderr.write.assert_not_called()  # pas de console (exe fenêtré) : tout va au journal
+
+    def test_setup_logging_writes_the_given_file_in_localappdata(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        hooks = (sys.excepthook, threading.excepthook)
+        self.addCleanup(lambda: (setattr(sys, "excepthook", hooks[0]), setattr(threading, "excepthook", hooks[1])))
+        before = list(main.logger.handlers)
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": temp.name}):
+            path = main.setup_logging(main.ADMIN_LOG_NAME)
+        added = [h for h in main.logger.handlers if h not in before]
+        for handler in added:
+            self.addCleanup(handler.close)
+            self.addCleanup(main.logger.removeHandler, handler)
+        self.assertEqual(path, Path(temp.name) / "OrizonX" / "relay-admin.log")
+        self.assertEqual([Path(h.baseFilename) for h in added], [path])
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 absent")
