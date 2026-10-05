@@ -5,6 +5,7 @@ import unittest
 HAVE_QT = importlib.util.find_spec("PySide6") is not None
 if HAVE_QT:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QCoreApplication, Qt
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication
 
@@ -72,6 +73,32 @@ class WindowTest(unittest.TestCase):
         self.window.close()
         self.assertFalse(self.window.isVisible())
         self.assertEqual(self.events, [("closed",)])
+
+    def test_close_while_quitting_is_accepted_silently(self):
+        self.window.show()
+        self.window.prepare_quit()
+        self.assertTrue(self.window.close())
+        self.assertEqual(self.events, [])
+
+    def test_frameless_but_minimizable_from_the_taskbar(self):
+        flags = self.window.windowFlags()
+        for flag in (Qt.WindowType.FramelessWindowHint, Qt.WindowType.WindowMinimizeButtonHint,
+                     Qt.WindowType.WindowSystemMenuHint):
+            self.assertTrue(flags & flag, flag)
+
+    def test_outputs_wait_for_the_open_list_to_close(self):
+        self.window.show()
+        self.window.set_outputs([(0, (2560, 1600))], "auto")
+        self.window._outputs.showPopup()
+        self.window.set_outputs([(0, (2560, 1600)), (1, (2880, 1800))], "auto")
+        self.assertEqual(len(self.window.output_items()), 2)  # liste ouverte : pas de saut sous le curseur
+        # Clic sur un élément : Qt ferme la liste puis émet activated avec l'index de l'ancienne liste.
+        self.window._outputs.hidePopup()
+        self.window.choose_output("0")
+        QCoreApplication.processEvents()
+        self.assertEqual([value for _label, value in self.window.output_items()], ["auto", "0", "1"])
+        self.assertEqual(self.window.selected_output(), "0")  # le choix de l'utilisateur est gardé
+        self.assertEqual(self.events, [("output", "0")])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Main window: frameless frosted glass with status, settings and the start/stop button."""
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
@@ -58,6 +58,44 @@ class StatusDot(QWidget):
         painter.drawEllipse(QRectF(self.rect()).adjusted(17, 17, -17, -17))
 
 
+class OutputCombo(QComboBox):
+    """Screen list that is never rebuilt while open: the list would jump under the cursor."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._popup_open = False
+        self._pending: Outputs | None = None
+
+    def set_outputs(self, outputs: Outputs, selected: str) -> None:
+        if self._popup_open:
+            self._pending = outputs  # appliqué à la fermeture de la liste
+            return
+        self._pending = None
+        self.clear()
+        self.addItem(AUTO_OUTPUT_LABEL, "auto")
+        for index, size in outputs:
+            label = f"Écran {index} — {size[0]}×{size[1]}" if size else f"Écran {index}"
+            self.addItem(label, str(index))
+        if self.findData(selected) < 0:
+            self.addItem(f"Écran {selected}", selected)  # réglage gardé même si l'écran est absent
+        self.setCurrentIndex(self.findData(selected))
+
+    def showPopup(self) -> None:
+        self._popup_open = True
+        super().showPopup()
+
+    def hidePopup(self) -> None:
+        super().hidePopup()
+        self._popup_open = False
+        if self._pending is not None:
+            # Au prochain tour de boucle : Qt émet activated juste après hidePopup, avec un index de l'ancienne liste.
+            QTimer.singleShot(0, self._apply_pending)
+
+    def _apply_pending(self) -> None:
+        if self._pending is not None and not self._popup_open:
+            self.set_outputs(self._pending, self.currentData())  # garde le choix fait dans la liste
+
+
 class TitleBar(QWidget):
     """Custom title bar: dragging it moves the window natively (keeps Aero Snap)."""
 
@@ -75,13 +113,16 @@ class MainWindow(QWidget):
     shown = Signal()
 
     def __init__(self, logo: QPixmap) -> None:
-        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        # Réduire et menu système : sans eux, un clic sur l'icône de la barre des tâches ne réduit pas la fenêtre sans cadre.
+        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowSystemMenuHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle("Orizon X")
         self.setFixedSize(360, 340)
         self.setStyleSheet(STYLE)
         self._acrylic = False
         self._state = State.STOPPED
+        self._quitting = False
 
         bar = TitleBar(self)
         bar.setFixedHeight(40)
@@ -118,7 +159,7 @@ class MainWindow(QWidget):
         self._detail.setWordWrap(True)
         self._detail.setMinimumHeight(34)
 
-        self._outputs = QComboBox(self)
+        self._outputs = OutputCombo(self)
         self._outputs.addItem(AUTO_OUTPUT_LABEL, "auto")
         self._outputs.activated.connect(lambda _i: self.output_changed.emit(self._outputs.currentData()))
         self._encoders = QComboBox(self)
@@ -177,14 +218,7 @@ class MainWindow(QWidget):
             self._detail.setText(status.stream_detail(stats))
 
     def set_outputs(self, outputs: Outputs, selected: str) -> None:
-        self._outputs.clear()
-        self._outputs.addItem(AUTO_OUTPUT_LABEL, "auto")
-        for index, size in outputs:
-            label = f"Écran {index} — {size[0]}×{size[1]}" if size else f"Écran {index}"
-            self._outputs.addItem(label, str(index))
-        if self._outputs.findData(selected) < 0:
-            self._outputs.addItem(f"Écran {selected}", selected)  # réglage gardé même si l'écran est absent
-        self._outputs.setCurrentIndex(self._outputs.findData(selected))
+        self._outputs.set_outputs(outputs, selected)
 
     def set_encoder(self, selected: str) -> None:
         self._encoders.setCurrentIndex(max(0, self._encoders.findData(selected)))
@@ -193,6 +227,10 @@ class MainWindow(QWidget):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def prepare_quit(self) -> None:
+        """From now on a close really closes (no hide-to-tray, no hint)."""
+        self._quitting = True
 
     # --- accès pour les tests (et choix simulés de l'utilisateur) ---
 
@@ -228,6 +266,9 @@ class MainWindow(QWidget):
         self.shown.emit()
 
     def closeEvent(self, event) -> None:
+        if self._quitting:
+            event.accept()
+            return
         event.ignore()  # la croix cache la fenêtre ; seul « Quitter » ferme l'appli
         self.hide()
         self.closed_to_tray.emit()
