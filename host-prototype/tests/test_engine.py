@@ -274,6 +274,7 @@ class FakeDisplay:
 
     def __init__(self, result=None, error=None, block=False, on_prepare=None):
         self.result = result or PrepareResult(VDD_RECT, True, (2880, 1800))
+        self.layout_result = VDD_RECT  # où apply_layout dit que l'écran se trouve ensuite
         self.error = error
         self.on_prepare = on_prepare
         self.calls = []
@@ -298,6 +299,13 @@ class FakeDisplay:
 
     def release(self, immediate=False):
         self.calls.append(("release", immediate))
+
+    def apply_layout(self, position, scale, dpi):
+        self.calls.append(("apply_layout", position, scale, dpi))
+        return self.layout_result
+
+    def layouts(self):
+        return [c for c in self.calls if c[0] == "apply_layout"]
 
     def releases(self):
         return [c for c in self.calls if c[0] == "release"]
@@ -959,6 +967,79 @@ class DisplayTest(unittest.TestCase):
         self.assertEqual([call[6] for call in display.prepares()], [True, False])
         self.assertEqual(len(asked), 2)
         self.assertEqual(applied, [1])
+
+    def test_relayout_while_streaming_moves_the_screen_and_touch_follows_without_restarting_ffmpeg(self):
+        moved = Rect(-2880, 0, 2880, 1800)
+        applied = []
+        display = FakeDisplay()
+        display.layout_result = moved
+        popen, injectors = FakePopen(live), FakeInjectors()
+        relay, rec, connect, tablet = self.streaming_engine(display, popen=popen, injectors=injectors,
+                                                            on_layout_applied=lambda: applied.append(1))
+        wait_until(lambda: injectors.created)
+        self.assertTrue(relay.relayout("left", "200"))
+        self.assertEqual(display.layouts(), [("apply_layout", "left", "200", 274)])
+        self.assertEqual(injectors.rects, [VDD_RECT, moved])
+        self.assertTrue(injectors.created[0].closed)  # contacts levés à l'ancien emplacement
+        self.assertEqual(applied, [1])
+        tablet.send(touch_frame((0, 1, 100, 100, 0, 0, 0)))
+        wait_until(lambda: injectors.created[1].handled)
+        self.assertEqual(injectors.created[0].handled, [])
+        self.assertEqual(len(popen.calls), 1)  # le flux continue : ffmpeg n'est pas relancé
+        self.assertEqual(display.releases(), [])
+
+    def test_relayout_during_prepare_is_not_applied_then_works_once_streaming(self):
+        moved = Rect(0, -1800, 2880, 1800)
+        display = FakeDisplay(block=True)
+        display.layout_result = moved
+        run, appear = self.vdd_run()
+        display.on_prepare = appear
+        injectors, connect = FakeInjectors(), FakeConnect()
+        relay, rec = make_engine(self, run=run, injectors=injectors, connect=connect, config=self.EXTEND,
+                                 display=display)
+        relay.start()
+        self.assertTrue(display.entered.wait(5))
+        self.assertFalse(relay.relayout("above", "auto"))  # écran en préparation : rien à déplacer encore
+        self.assertEqual(display.layouts(), [])
+        display.proceed.set()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        self.assertTrue(relay.relayout("above", "auto"))
+        self.assertEqual(injectors.rects[-1], moved)
+
+    def test_relayout_without_a_session_is_kept_for_the_next_first_time_layout(self):
+        display = FakeDisplay()
+        run, appear = self.vdd_run()
+        display.on_prepare = appear
+        connect = FakeConnect()
+        relay, rec = make_engine(self, run=run, connect=connect, config=self.EXTEND, display=display,
+                                 first_time=lambda: True)
+        self.assertFalse(relay.relayout("above", "125"))
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        self.assertEqual(display.prepares(), [("prepare", 2880, 1800, 274, "above", "125", True)])
+        self.assertEqual(display.layouts(), [])
+
+    def test_relayout_after_the_tablet_left_does_nothing(self):
+        display, injectors = FakeDisplay(), FakeInjectors()
+        relay, rec, connect, tablet = self.streaming_engine(display, injectors=injectors)
+        wait_until(lambda: injectors.created)
+        connect.refuse = True
+        tablet.leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertFalse(relay.relayout("left", "auto"))
+        self.assertEqual(display.layouts(), [])
+        self.assertEqual(len(injectors.created), 1)
+
+    def test_relayout_in_duplicate_mode_does_nothing(self):
+        display, connect, injectors = FakeDisplay(), FakeConnect(), FakeInjectors()
+        relay, rec = make_engine(self, connect=connect, injectors=injectors, display=display,
+                                 config=engine.Config(encoder="amf", mode="duplicate"))
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        self.assertFalse(relay.relayout("left", "auto"))
+        self.assertEqual(display.calls, [])
 
     def test_duplicate_mode_captures_the_main_screen_without_the_virtual_display(self):
         left = Rect(-1920, 0, 1920, 1080)

@@ -441,9 +441,14 @@ class ApplyLayoutTest(unittest.TestCase):
         h.display.apply_layout("right", "auto", 160)
         self.assertIn(("scale", VDD_KEY, 125), h.layout.calls)
 
+    def test_returns_where_the_screen_now_is(self):
+        h = Harness()
+        h.prepare()
+        self.assertEqual(h.display.apply_layout("below", "125", 274), Rect(-160, 1600, 2880, 1800))
+
     def test_does_nothing_when_the_screen_is_off(self):
         h = Harness()
-        h.display.apply_layout("left", "auto", 274)
+        self.assertIsNone(h.display.apply_layout("left", "auto", 274))
         self.assertEqual(h.layout.layout_calls(), [])
 
     def test_errors_are_logged(self):

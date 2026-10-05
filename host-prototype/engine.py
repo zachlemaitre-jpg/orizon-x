@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import dataclasses
 import re
 import socket
 import subprocess
@@ -73,6 +74,8 @@ class Display(Protocol):
                 should_stop: Callable[[], bool]) -> Any: ...  # PrepareResult(rect, exact, mode) | None
 
     def release(self, immediate: bool = False) -> None: ...
+
+    def apply_layout(self, position: str, scale: str, dpi: int) -> Rect | None: ...  # où est l'écran ensuite
 
 
 @dataclass(frozen=True)
@@ -362,7 +365,7 @@ class RelayEngine:
     first_time: asked before each prepare; True makes prepare apply config.position and config.scale (the app
         returns "layout never applied" from its settings).
     on_layout_applied: called after a prepare that was asked to apply the layout (the app then saves the flag).
-    Both callbacks run on the engine thread.
+    Both callbacks run on the engine thread (on_layout_applied also on the thread calling relayout).
     """
 
     def __init__(self, config: Config, listener: Listener, *, ffmpeg: str, adb: str,
@@ -379,6 +382,8 @@ class RelayEngine:
         self._on_layout_applied = on_layout_applied
         self._display_used = False  # prepare() a été appelé au moins une fois : il y a peut-être un écran à éteindre
         self._immediate_release = False  # posé par stop(immediate_display_release=True) : pas de grâce
+        # Session dont l'écran virtuel est allumé et capturé : (dpi de la tablette, fonction qui déplace le tactile).
+        self._display_session: tuple[int, Callable[[Rect], None]] | None = None
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -432,6 +437,29 @@ class RelayEngine:
             thread.join(STOP_TIMEOUT_S)
         if immediate_display_release and self._display is not None and self._display_used:
             self._release_display(immediate=True)
+
+    def relayout(self, position: str, scale: str) -> bool:
+        """The user changed Position or Scale. Thread-safe; blocks while Windows applies it (about a second).
+
+        While a session shows the virtual screen, it is moved and scaled now and touch follows it to its new place
+        (ffmpeg keeps capturing the same output: no restart). Returns False when there is no such session: the new
+        values are then kept for the next prepare that applies the layout (first_time).
+        """
+        with self._lock:
+            self._config = dataclasses.replace(self._config, position=position, scale=scale)
+            session = self._display_session
+        if session is None or self._display is None:
+            return False
+        dpi, retarget = session
+        try:
+            rect = self._display.apply_layout(position, scale, dpi)
+        except Exception as e:  # noqa: BLE001 — la disposition n'est jamais fatale
+            self._log(f"Virtual screen: layout failed: {e}")
+            return False
+        self._on_layout_applied()
+        if rect is not None:
+            retarget(rect)
+        return True
 
     def wait(self, timeout: float | None = None) -> bool:
         """True once the engine thread has ended."""
@@ -661,6 +689,24 @@ class RelayEngine:
         injector_lock = threading.Lock()
         ffmpeg: Any = None  # lancé après le choix de l'écran ; le lecteur le tue s'il existe quand la tablette part
         target_rect: Rect | None = None  # écran Windows capturé, s'il est connu : le tactile le vise directement
+        session_over = False  # posé sous injector_lock à la fin : un retarget tardif ne crée plus d'injecteur
+
+        def retarget(rect: Rect) -> None:
+            """The virtual screen moved (relayout): touch follows it; the video is untouched."""
+            nonlocal pointer_injector, target_rect
+            with injector_lock:
+                if session_over:
+                    return
+                target_rect = rect
+                if pointer_injector is None or stream_size is None:
+                    return  # on_stream_size visera directement le nouvel emplacement
+                self._close_injector(pointer_injector)  # lève les contacts posés à l'ancien emplacement
+                pointer_injector = None
+                try:
+                    pointer_injector = self._deps.create_injector(stream_size[0], stream_size[1], self._log,
+                                                                  rect=rect)
+                except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
+                    self._log(f"Touch disabled: {e}. Video continues.")
 
         def on_stream_size(width: int, height: int) -> None:
             nonlocal pointer_injector, stream_size
@@ -735,7 +781,11 @@ class RelayEngine:
             capture = self._choose_capture(hello, outputs, should_stop)
             if capture is None or should_stop():
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
-            output, target_rect = capture
+            with injector_lock:
+                output, target_rect = capture
+            if self._uses_display():
+                with self._lock:
+                    self._display_session = (hello.dpi, retarget)
             command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
             ffmpeg = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
@@ -754,7 +804,10 @@ class RelayEngine:
             except OSError:
                 send_failed = True  # sendall a échoué : la tablette est partie
         finally:
+            with self._lock:
+                self._display_session = None
             with injector_lock:
+                session_over = True
                 if pointer_injector is not None:
                     self._close_injector(pointer_injector)  # lève tous les contacts : rien ne reste « posé » dans Windows
                     pointer_injector = None

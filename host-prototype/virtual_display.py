@@ -6,7 +6,7 @@ docs/notes/vdd-control.md); this module only switches its Windows display path o
 command except PING (``VddController.is_installed``).
 
 Threads: ``prepare``/``release`` run on the engine thread, the grace timer on its own thread and
-``apply_layout`` on the Qt thread. One re-entrant lock serialises every Windows call and the timer
+``apply_layout`` on an app worker thread (via ``RelayEngine.relayout``). One re-entrant lock serialises every Windows call and the timer
 state; the waits (``sleep``) happen outside it so the other threads are never blocked for long.
 A grace timer that fires after being cancelled sees a newer generation and does nothing.
 """
@@ -120,10 +120,14 @@ class VirtualDisplay:
         with self._lock:
             self._cancel_timer()
 
-    def apply_layout(self, position: str, scale: str | int, dpi: int) -> None:
-        """Move and scale the virtual screen now (settings changed while streaming). Never raises."""
+    def apply_layout(self, position: str, scale: str | int, dpi: int) -> Rect | None:
+        """Move and scale the virtual screen now (settings changed while streaming). Never raises.
+
+        Returns where the screen now is (the touch target), or None if it is off or cannot be located.
+        """
         with self._lock:
-            self._apply_layout(position, scale, dpi)
+            size = self._apply_layout(position, scale, dpi)
+            return self._locate(size) if size is not None else None
 
     # ---------- steps ----------
 
@@ -215,12 +219,14 @@ class VirtualDisplay:
             return monitor.rect
         return None
 
-    def _apply_layout(self, position: str, scale: str | int, dpi: int) -> None:
-        """Position then scale of the active virtual screen; every failure is logged. Lock held."""
+    def _apply_layout(self, position: str, scale: str | int, dpi: int) -> tuple[int, int] | None:
+        """Position then scale of the active virtual screen; every failure is logged. Lock held.
+
+        Returns the screen's size, or None if it is off."""
         monitor = self._find_monitor()
         if monitor is None or not monitor.active or monitor.rect is None:
             self._log("Virtual screen: off, layout not applied")
-            return
+            return None
         size = (monitor.rect.width, monitor.rect.height)
         try:
             primary = next(rect for rect, is_primary, _name in self._monitors() if is_primary)
@@ -235,6 +241,7 @@ class VirtualDisplay:
             self._log(f"Virtual screen scale: {applied} %")
         except Exception as e:  # noqa: BLE001
             self._log(f"Virtual screen: cannot set the scale {scale!r}: {e!r}")
+        return size
 
     # ---------- release ----------
 
