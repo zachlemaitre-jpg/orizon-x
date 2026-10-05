@@ -12,6 +12,18 @@
 
 **Why this plan specifies interfaces and tests rather than verbatim code:** the VDD pipe protocol is only known after Task 1. Each task gives the exact public interface, behaviour and test cases; implementers write the code test-first.
 
+
+## REVISION after Task 1 (overrides Tasks 3, 5, 7, 9 where they conflict)
+
+Read `docs/notes/vdd-control.md` and spec §8. Changes:
+
+- **Task 3 `vdd.py`:** `VddController` keeps only `is_installed()` (pipe `PING`, UTF-16LE, overlapped read per the notes), XML helpers (`read_resolutions()`, `add_resolutions(list)` → bool changed; atomic write + one-time backup; `count` forced to 1), `set_gpu_in_xml(name)`, and device helpers (in a separate module `vdd_device.py`, Windows-only, admin): `find_device()` (registry scan for hardware ID `Root\MttVDD` under `HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\DISPLAY`, no admin), `install_driver(inf_path)` (SetupAPI root device + `UpdateDriverForPlugAndPlayDevicesW`), `remove_driver()` (`SetupDiRemoveDevice` + `pnputil /delete-driver`), `restart_device()` (`pnputil /restart-device <instance id>`). No `SETDISPLAYCOUNT`/`RELOAD_DRIVER`/`SETGPU` over the pipe, ever. `COMMON_RESOLUTIONS` list from spec §8 lives here.
+- **Task 4 `display_layout.py`:** add `set_path_active(monitor_key, active: bool)` (SetDisplayConfig: enable/disable the VDD target's path; keep `SDC_SAVE_TO_DATABASE` so Windows remembers), `find_vdd_monitor()` (CCD: the path whose target device path / EDID manufacturer identifies VDD — the notes give the identification; key = adapter LUID + target id), `available_modes(monitor_key)`; `pick_mode(available, w, h)` (pure: exact, else same aspect ±1 % largest, else largest that fits).
+- **Task 5 `virtual_display.py`:** `prepare()` = find VDD monitor → pick mode → activate path with that mode → wait for the Windows monitor of that size (≤ 10 s) → first-time layout. Returns `(rect, exact: bool)`. `release()` = deactivate path after grace (immediate on Quit). `cleanup_on_start()` = deactivate path. No pipe commands.
+- **Task 7 app:** CLI flags become `--cleanup` (deactivate path), `--install-driver <inf>`, `--remove-driver`, `--configure-vdd` (GPU friendly name + `COMMON_RESOLUTIONS` into XML, count 1; no restart), `--add-resolution WxH` (admin: add to XML + `restart_device()`). Window: when `exact` is False, show "Add exact resolution" button → `ShellExecuteW(None, "runas", sys.executable, "--add-resolution WxH", ...)`. Settings/UI/i18n keys accordingly.
+- **Task 9 installer:** no devcon. Order in `[Code]`/`[Run]` (elevated, hidden, exit codes checked): `--configure-vdd` → if no existing device: show the SignPath info page, then `--install-driver "{app}dd\MttVDD.inf"` (record `VddInstalledByUs=1`) else `restart_device` via `--add-resolution` path equivalent (`--configure-vdd --restart`) so the new resolutions load → icacls on `C:\VirtualDisplayDriver` → language to HKCU and HKLM. Uninstall: `--cleanup`, then if `VddInstalledByUs=1` ask, then `--remove-driver`. `installer/vdd/` = `MttVDD.inf`, `MttVDD.dll`, `mttvdd.cat`, `LICENSE` (MIT text fetched from the GitHub repo), `SOURCE.txt`.
+- **Task 8 (real PC)** also checks: path deactivation hides the screen and reactivation restores position/scale; plugging another monitor while the app is closed does not wrongly re-enable the virtual screen (or, if it does, `cleanup_on_start` fixes it at next launch).
+
 ## Ground rules (all tasks)
 
 - Repo `D:\TumorScreen App`, branch `pc-app`. Tests: `cd host-prototype; .\.venv\Scripts\python.exe -m unittest discover -s tests` (all) and `py -m unittest discover -s tests` (Qt tests skip). 183 pass at the start.
