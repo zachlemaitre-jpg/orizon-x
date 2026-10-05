@@ -6,7 +6,9 @@ Facts this module relies on (docs/notes/vdd-control.md):
 - every reload command (RELOAD_DRIVER, SETDISPLAYCOUNT, SETGPU…) crashes the driver host (upstream issue #351):
   this module only ever sends PING;
 - the driver reads the XML only when the device starts, so XML edits take effect after a device restart
-  (vdd_device.restart_device, admin).
+  (vdd_device.restart_device, admin);
+- the XML is <folder>\\vdd_settings.xml, the folder being HKLM\\SOFTWARE\\MikeTheTech\\VirtualDisplayDriver\\VDDPATH
+  when set, else C:\\VirtualDisplayDriver (resolve_settings_path).
 
 XML limits: ElementTree keeps elements, attributes, text and comments inside <vdd_settings>, but not comments or
 processing instructions outside the root element, nor the original declaration quoting and attribute order. The
@@ -24,7 +26,11 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 PIPE_NAME = r"\\.\pipe\MTTVirtualDisplayPipe"
-DEFAULT_SETTINGS_PATH = Path(r"C:\VirtualDisplayDriver\vdd_settings.xml")
+SETTINGS_FILE_NAME = "vdd_settings.xml"
+DEFAULT_SETTINGS_PATH = Path(r"C:\VirtualDisplayDriver") / SETTINGS_FILE_NAME
+# Dossier des réglages choisi à l'installation du pilote (son « confpath ») ; il y lit VDDPATH\vdd_settings.xml.
+VDDPATH_KEY = r"SOFTWARE\MikeTheTech\VirtualDisplayDriver"
+VDDPATH_VALUE = "VDDPATH"
 BACKUP_SUFFIX = ".bak-orizonx"
 PIPE_TIMEOUT_S = 2.0
 # Le serveur n'a aucune instance de canal pendant quelques ms entre deux clients : on réessaie un peu, pas 2 s,
@@ -89,13 +95,45 @@ class PipeError(VddError):
         self.winerror = winerror
 
 
-class VddController:
-    """Detects the driver (pipe PING) and edits its XML settings (effective at the next device start)."""
+def read_vddpath() -> str | None:
+    """HKLM\\SOFTWARE\\MikeTheTech\\VirtualDisplayDriver\\VDDPATH (64-bit view, read-only), or None if absent."""
+    try:
+        import winreg
+    except ImportError:  # pas Windows
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, VDDPATH_KEY, 0,
+                            winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            value, kind = winreg.QueryValueEx(key, VDDPATH_VALUE)
+    except OSError:
+        return None
+    if not isinstance(value, str):
+        return None
+    return winreg.ExpandEnvironmentStrings(value) if kind == winreg.REG_EXPAND_SZ else value
 
-    def __init__(self, settings_path: Path = DEFAULT_SETTINGS_PATH,
+
+def resolve_settings_path(read_registry: Callable[[], str | None] = read_vddpath) -> Path:
+    """Where the driver reads its XML: <VDDPATH>\\vdd_settings.xml when VDDPATH is set (a folder, as in the
+    driver's initpath(): docs/notes/vdd-control.md §2), else C:\\VirtualDisplayDriver\\vdd_settings.xml."""
+    try:
+        folder = read_registry()
+    except OSError:
+        folder = None
+    folder = (folder or "").strip().strip('"').strip()
+    return Path(folder) / SETTINGS_FILE_NAME if folder else DEFAULT_SETTINGS_PATH
+
+
+class VddController:
+    """Detects the driver (pipe PING) and edits its XML settings (effective at the next device start).
+
+    settings_path None (the app, the admin commands): the driver's own file, VDDPATH override included.
+    """
+
+    def __init__(self, settings_path: Path | None = None,
                  transport: Callable[[str], bytes] | None = None, pipe_name: str = PIPE_NAME,
-                 timeout: float = PIPE_TIMEOUT_S) -> None:
-        self.settings_path = Path(settings_path)
+                 timeout: float = PIPE_TIMEOUT_S, read_registry: Callable[[], str | None] = read_vddpath) -> None:
+        self.settings_path = (Path(settings_path) if settings_path is not None
+                              else resolve_settings_path(read_registry))
         self.backup_path = self.settings_path.with_name(self.settings_path.name + BACKUP_SUFFIX)
         self._transport = transport or (lambda message: pipe_transport(message, pipe_name=pipe_name,
                                                                        timeout=timeout))

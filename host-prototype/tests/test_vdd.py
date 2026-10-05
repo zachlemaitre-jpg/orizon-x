@@ -275,6 +275,48 @@ class SetGpuTest(XmlTestCase):
             self.controller().set_gpu_in_xml("  ")
 
 
+class SettingsPathTest(unittest.TestCase):
+    """VDDPATH (HKLM\\SOFTWARE\\MikeTheTech\\VirtualDisplayDriver) is the driver's settings FOLDER (its confpath:
+    the driver reads <VDDPATH>\\vdd_settings.xml); without it, C:\\VirtualDisplayDriver."""
+
+    def test_registry_folder_overrides_the_default(self):
+        self.assertEqual(vdd.resolve_settings_path(read_registry=lambda: r"D:\Tools\VDD"),
+                         Path(r"D:\Tools\VDD") / "vdd_settings.xml")
+        self.assertEqual(vdd.resolve_settings_path(read_registry=lambda: '  "D:\\Tools\\VDD\\"  '),
+                         Path(r"D:\Tools\VDD") / "vdd_settings.xml")
+
+    def test_no_or_empty_value_gives_the_default(self):
+        for value in (None, "", "   "):
+            with self.subTest(value=value):
+                self.assertEqual(vdd.resolve_settings_path(read_registry=lambda value=value: value),
+                                 vdd.DEFAULT_SETTINGS_PATH)
+        self.assertEqual(vdd.DEFAULT_SETTINGS_PATH, Path(r"C:\VirtualDisplayDriver\vdd_settings.xml"))
+
+    def test_unreadable_registry_gives_the_default(self):
+        def failing():
+            raise OSError(5, "access denied")
+        self.assertEqual(vdd.resolve_settings_path(read_registry=failing), vdd.DEFAULT_SETTINGS_PATH)
+
+    def test_controller_without_a_path_uses_the_registry(self):
+        folder = Path(tempfile.mkdtemp())
+        controller = vdd.VddController(read_registry=lambda: str(folder), transport=lambda _m: b"PONG")
+        self.assertEqual(controller.settings_path, folder / "vdd_settings.xml")
+        self.assertEqual(controller.backup_path, folder / "vdd_settings.xml.bak-orizonx")
+        self.assertTrue(controller.add_resolutions([(2800, 1752, 60)]))
+        self.assertTrue((folder / "vdd_settings.xml").exists())
+
+    def test_explicit_path_wins_and_skips_the_registry(self):
+        def never():
+            raise AssertionError("registry read")
+        path = Path(tempfile.mkdtemp()) / "x.xml"
+        self.assertEqual(vdd.VddController(settings_path=path, read_registry=never).settings_path, path)
+
+    @unittest.skipUnless(os.name == "nt", "registre Windows uniquement")
+    def test_real_registry_read_is_harmless(self):
+        value = vdd.read_vddpath()   # lecture seule ; None sur ce PC (notes §2 : clé absente)
+        self.assertTrue(value is None or isinstance(value, str))
+
+
 class IsInstalledTest(unittest.TestCase):
     def test_pong_means_installed_and_ping_is_the_only_command(self):
         sent = []
