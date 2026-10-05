@@ -21,15 +21,23 @@ class FakeEngine:
         self.config = config
         self.listener = listener
         self.running = False
+        self.stopping = threading.Event()
         self.stopped = threading.Event()
+        self.announced = threading.Event()  # premier état transmis au listener
         FakeEngine.instances.append(self)
 
     def start(self):
         self.running = True
+
+        def announce():
+            self.listener.on_state(State.WAITING_DEVICE, "branche")
+            self.announced.set()
+
         # comme le vrai moteur : les rappels arrivent depuis un autre thread
-        threading.Thread(target=self.listener.on_state, args=(State.WAITING_DEVICE, "branche"), daemon=True).start()
+        threading.Thread(target=announce, daemon=True).start()
 
     def stop(self):
+        self.stopping.set()
         time.sleep(0.2)  # le vrai stop() bloque jusqu'à 3 s
         self.running = False
         self.stopped.set()
@@ -90,6 +98,61 @@ class ControllerTest(unittest.TestCase):
         self.assertTrue(FakeEngine.instances[0].stopped.is_set())
         self.assertEqual(FakeEngine.instances[1].config, new_config)
         self.assertEqual(self.controller.config, new_config)
+
+    def test_commands_during_a_restart_do_not_wait_for_the_old_engine(self):
+        self.controller.start()
+        new_config = Config(output="1", encoder="amf")
+        worker = self.controller.restart(new_config)
+        self.assertTrue(FakeEngine.instances[0].stopping.wait(2))
+        started = time.monotonic()
+        self.controller.start()  # clic pendant le redémarrage : le thread Qt ne doit pas rester figé
+        self.assertLess(time.monotonic() - started, 0.1)
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(FakeEngine.instances), 2)  # le start du redémarrage n'en a pas créé un 3ᵉ
+        self.assertEqual(FakeEngine.instances[1].config, new_config)
+
+    def test_late_callbacks_from_a_replaced_engine_are_ignored(self):
+        late_sent = threading.Event()
+
+        class LateStopEngine(FakeEngine):
+            def stop(self):
+                self.running = False
+                self.stopped.set()
+
+                def late():  # le STOPPED de l'ancien moteur arrive après le premier état du nouveau
+                    deadline = time.monotonic() + 2
+                    while len(FakeEngine.instances) < 2 and time.monotonic() < deadline:
+                        time.sleep(0.005)
+                    FakeEngine.instances[-1].announced.wait(2)
+                    self.listener.on_state(State.STOPPED, "Arrêté.")
+                    late_sent.set()
+
+                threading.Thread(target=late, daemon=True).start()
+
+        def factory(config, listener):
+            return (FakeEngine if FakeEngine.instances else LateStopEngine)(config, listener)
+
+        controller = Controller(factory, Config())
+        received = []
+        controller.state_changed.connect(lambda state, detail: received.append(state))
+        controller.start()
+        pump_until(lambda: received)
+        controller.restart(Config(encoder="amf")).join(2)
+        self.assertTrue(late_sent.wait(3))
+        pump_until(lambda: len(received) >= 2)
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:  # laisse arriver un éventuel signal en retard
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        self.assertEqual(received, [State.WAITING_DEVICE, State.WAITING_DEVICE])
+        self.assertIs(controller.state, State.WAITING_DEVICE)
+
+    def test_stopped_engine_still_reports_stopped(self):
+        self.controller.start()
+        pump_until(lambda: self.received)
+        self.controller.stop().join(2)
+        pump_until(lambda: self.controller.state is State.STOPPED)
 
     def test_factory_failure_becomes_error_state(self):
         def failing(config, listener):

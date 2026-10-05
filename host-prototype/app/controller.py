@@ -20,8 +20,29 @@ class Engine(Protocol):
 EngineFactory = Callable[[Config, Listener], Engine]
 
 
+class _EngineListener:
+    """One per engine: forwards its callbacks only while it is the controller's latest engine.
+
+    A replaced engine can still call back while it stops (STOPPED, last log lines): showing them would
+    say « Arrêté » over a stream that the new engine is running.
+    """
+
+    def __init__(self, controller: Controller, generation: int) -> None:
+        self._controller = controller
+        self._generation = generation
+
+    def on_state(self, state: State, detail: str) -> None:
+        self._controller._forward(self._generation, self._controller.on_state, state, detail)
+
+    def on_log(self, line: str) -> None:
+        self._controller._forward(self._generation, self._controller.on_log, line)
+
+    def on_stats(self, stats: StreamStats) -> None:
+        self._controller._forward(self._generation, self._controller.on_stats, stats)
+
+
 class Controller(QObject):
-    """Engine Listener whose callbacks are re-emitted as Qt signals.
+    """Re-emits the current engine's Listener callbacks (received through _EngineListener) as Qt signals.
 
     Signals emitted from engine threads are queued to the GUI thread, so slots never touch widgets off-thread.
     """
@@ -35,7 +56,9 @@ class Controller(QObject):
         self._factory = factory
         self._config = config
         self._engine: Engine | None = None
-        self._lock = threading.Lock()
+        self._generation = 0  # numéro du dernier moteur créé ; un arrêt ne le change pas (son STOPPED compte)
+        # RLock : un signal émis depuis le thread Qt appelle ses slots tout de suite, et ils peuvent relancer une commande.
+        self._lock = threading.RLock()
         self.state = State.STOPPED
         self.detail = "Arrêté."
         self.state_changed.connect(self._remember)
@@ -58,6 +81,13 @@ class Controller(QObject):
 
     def on_stats(self, stats: StreamStats) -> None:
         self.stats.emit(stats)
+
+    def _forward(self, generation: int, emit: Callable[..., None], *args: object) -> None:
+        # Vérification et émission sous le verrou : aucun nouveau moteur ne peut naître entre les deux.
+        # Depuis un thread du moteur, emit() ne fait que mettre le signal en file : le verrou n'est tenu qu'un instant.
+        with self._lock:
+            if generation == self._generation:
+                emit(*args)
 
     # --- commandes (thread Qt) ---
 
@@ -87,9 +117,11 @@ class Controller(QObject):
             with self._lock:
                 old, self._engine = self._engine, None
                 self._config = config
-                if old is not None:
-                    old.stop()
-                self._start_locked()
+            # Hors du verrou : l'arrêt prend jusqu'à 3 s, un clic pendant ce temps ne doit pas figer le thread Qt.
+            if old is not None:
+                old.stop()
+            with self._lock:
+                self._start_locked()  # sans effet si un start() a déjà relancé un moteur entre-temps
 
         worker = threading.Thread(target=work, name="engine-restart", daemon=True)
         worker.start()
@@ -98,8 +130,9 @@ class Controller(QObject):
     def _start_locked(self) -> None:
         if self._engine is not None and self._engine.is_running():
             return
+        self._generation += 1  # les rappels des moteurs précédents sont désormais ignorés
         try:
-            self._engine = self._factory(self._config, self)
+            self._engine = self._factory(self._config, _EngineListener(self, self._generation))
         except Exception as e:  # noqa: BLE001 — ex. ToolMissing : on l'affiche au lieu de planter
             self._engine = None
             self.on_state(State.ERROR, str(e))
