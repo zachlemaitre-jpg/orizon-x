@@ -6,3 +6,4 @@ gradlew text eol=lf
 *.ai binary
 *.png binary
 *.ico binary
+*.otf binary
