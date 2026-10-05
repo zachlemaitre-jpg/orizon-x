@@ -33,10 +33,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 class PrintListener:
-    """Engine listener that prints everything, like the phase-1 relay did."""
+    """Engine listener that prints logs, stats and the states that tell the user what to do."""
+
+    # STREAMING et STOPPED doublonnent les lignes de journal (« Flux … ») et le « Arrêt. » du Ctrl+C.
+    PRINTED_STATES = frozenset({engine.State.WAITING_DEVICE, engine.State.WAITING_APP, engine.State.ERROR})
 
     def on_state(self, state: engine.State, detail: str) -> None:
-        print(detail)
+        if state in self.PRINTED_STATES:
+            print(detail)
 
     def on_log(self, line: str) -> None:
         print(line)

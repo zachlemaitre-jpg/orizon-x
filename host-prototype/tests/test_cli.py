@@ -35,6 +35,16 @@ class PrintListenerTest(unittest.TestCase):
             " 60 fps | latence moy  18.2 ms, max  40.0 ms | perdues 2 | RTT 0.50 ms",
         ])
 
+    def test_prints_only_the_states_that_say_what_to_do(self):
+        out = io.StringIO()
+        listener = relay.PrintListener()
+        with contextlib.redirect_stdout(out):
+            listener.on_state(engine.State.WAITING_DEVICE, "Aucune tablette détectée.")
+            listener.on_state(engine.State.STREAMING, "Flux 2880×1800")  # doublon des lignes de journal
+            listener.on_state(engine.State.ERROR, "Protocole incompatible")
+            listener.on_state(engine.State.STOPPED, "Arrêté.")  # doublon de « Arrêt. »
+        self.assertEqual(out.getvalue().splitlines(), ["Aucune tablette détectée.", "Protocole incompatible"])
+
 
 class FakeEngine:
     def __init__(self, config, listener, *, ffmpeg, adb):
