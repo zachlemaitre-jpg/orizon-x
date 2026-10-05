@@ -122,7 +122,8 @@ class RelayEngine:
   - un encodeur forcé n'est pas sondé.
 
   Le sondage étant refait à chaque connexion, un changement secteur/batterie entre deux sessions est pris en compte.
-- **Stats** : chaque message `STATS` de la tablette produit un `on_stats`, avec la taille du flux en cours. Le `print` actuel devient un `on_log`.
+- **Premier état** : dès le lancement du thread, avant les sondages (encodeur et écrans, plusieurs secondes possibles), le moteur émet `WAITING_DEVICE` avec « Préparation de la capture… », pour que l'interface ne reste pas sur `STOPPED`. Les sondages vérifient l'arrêt entre deux exécutions de ffmpeg : `stop()` n'attend pas les sondes restantes.
+- **Stats** : chaque message `STATS` de la tablette produit un `on_stats`, avec la taille du flux en cours. Les stats passent uniquement par `on_stats` : la CLI les affiche avec `format_stats`, l'appli les montre mais ne les écrit pas dans le fichier journal (1 ligne/s le remplirait).
 - `probe_outputs`, `ffmpeg_command` et `adb_problem` prennent le chemin de l'outil en paramètre au lieu de `"ffmpeg"` / `adb` en dur.
 - La DPI awareness est l'affaire de l'appelant :
   - le moteur n'appelle pas `enable_dpi_awareness` ;

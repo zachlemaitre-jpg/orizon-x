@@ -1,4 +1,5 @@
 import ctypes
+import sys
 import time
 import unittest
 from unittest import mock
@@ -36,6 +37,14 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual(pen.pointerInfo.pointerFlags, inputstate.POINTER_FLAG_UPDATE)
         self.assertEqual((pen.pressure, pen.tiltX, pen.tiltY), (512, -30, 45))
         self.assertEqual((pen.penFlags, pen.penMask), (inputstate.PEN_FLAG_BARREL, inputstate.PEN_MASK_PRESSURE))
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows uniquement")
+class DpiAwarenessTest(unittest.TestCase):
+    def test_calling_twice_is_harmless(self):
+        # Le 2ᵉ appel trouve le contexte déjà fixé (comme sous Qt 6) : SetProcessDpiAwarenessContext échoue sans lever.
+        injector.enable_dpi_awareness()
+        injector.enable_dpi_awareness()
 
 
 class FindTargetTest(unittest.TestCase):
