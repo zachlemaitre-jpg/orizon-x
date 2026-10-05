@@ -60,6 +60,23 @@ TEXTS: dict[str, dict[str, str]] = {
                                 "fr": "Protocole incompatible : tablette v{tablet}, PC v{pc}. "
                                       "Mets à jour l'app ou le relais."},
     "error.unexpected": {"en": "Unexpected error: {error}", "fr": "Erreur inattendue : {error}"},
+    # --- écran virtuel (VDD) ---
+    "display.vdd_missing": {
+        "en": "Virtual display driver not found. Reinstall Orizon X, or switch to Duplicate mode.",
+        "fr": "Pilote d'écran virtuel introuvable. Réinstalle Orizon X, ou passe en mode Dupliquer.",
+    },
+    "display.timeout": {
+        "en": "The virtual screen did not appear. Try again, or switch to Duplicate mode.",
+        "fr": "L'écran virtuel n'est pas apparu. Réessaie, ou passe en mode Dupliquer.",
+    },
+    "display.no_mode": {
+        "en": "The virtual screen has no resolution that fits the tablet ({width}×{height}). Reinstall Orizon X.",
+        "fr": "L'écran virtuel n'a aucune résolution adaptée à la tablette ({width}×{height}). Réinstalle Orizon X.",
+    },
+    "display.activate_failed": {
+        "en": "Windows could not turn on the virtual screen: {error}",
+        "fr": "Windows n'a pas pu allumer l'écran virtuel : {error}",
+    },
     # --- outils externes ---
     "tools.ffmpeg_missing": {
         "en": "ffmpeg not found. Rebuild the app (build-pc.ps1) or install ffmpeg (winget install Gyan.FFmpeg).",
