@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import tools
+from messages import msg
 
 EXE = ".exe" if os.name == "nt" else ""
 
@@ -49,10 +50,14 @@ class FindToolTest(unittest.TestCase):
     def test_missing_tool_raises_readable_error(self):
         with self.assertRaises(tools.ToolMissing) as raised:
             self.find("ffmpeg")
-        self.assertIn("ffmpeg introuvable", str(raised.exception))
+        self.assertEqual(raised.exception.msg, msg("tools.ffmpeg_missing"))
+        self.assertIn("ffmpeg introuvable", raised.exception.msg.text("fr"))
+        self.assertIn("ffmpeg not found", str(raised.exception))
         with self.assertRaises(tools.ToolMissing) as raised:
             self.find("adb")
-        self.assertIn("adb introuvable", str(raised.exception))
+        self.assertEqual(raised.exception.msg, msg("tools.adb_missing"))
+        self.assertIn("adb introuvable", raised.exception.msg.text("fr"))
+        self.assertIn("adb not found", str(raised.exception))
 
     def test_unknown_tool_is_a_programming_error(self):
         with self.assertRaises(ValueError):

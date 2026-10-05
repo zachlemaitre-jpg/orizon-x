@@ -21,6 +21,7 @@ import annexb
 import injector
 import protocol
 import tools
+from messages import MessageError, Msg, msg
 
 
 class State(Enum):
@@ -51,17 +52,20 @@ class StreamStats:
 
 
 class Listener(Protocol):
-    """Called from the engine's threads: must not block. `detail` is a French sentence ready to show."""
+    """Called from the engine's threads: must not block.
 
-    def on_state(self, state: State, detail: str) -> None: ...
+    `detail` is a Msg the listener translates (the CLI in English, the app in its language); log lines are English.
+    """
+
+    def on_state(self, state: State, detail: Msg) -> None: ...
 
     def on_log(self, line: str) -> None: ...
 
     def on_stats(self, stats: StreamStats) -> None: ...
 
 
-class FatalError(Exception):
-    """Stops the engine; the message is shown to the user as is."""
+class FatalError(MessageError):
+    """Stops the engine; its Msg is shown to the user."""
 
 
 class _Stopped(Exception):
@@ -85,15 +89,13 @@ ENCODER_PROBE_TIMEOUT_S = 10
 ADB_TIMEOUT_S = 10
 FFMPEG_WAIT_S = 2  # après kill()
 
-PREPARING_DETAIL = "Préparation de la capture…"
-WAITING_APP_DETAIL = "Tablette branchée : ouvre Orizon X dessus."
-_ADB_TIMEOUT_PROBLEM = "adb ne répond pas (délai dépassé)."
+PREPARING_DETAIL = msg("state.preparing_capture")
+WAITING_APP_DETAIL = msg("state.waiting_app")
+STOPPED_DETAIL = msg("state.stopped")
+_ADB_TIMEOUT_PROBLEM = msg("adb.timeout")
 
 Run = Callable[..., subprocess.CompletedProcess]
 Outputs = list[tuple[int, tuple[int, int] | None]]
-
-_ONLY_DEFAULT_GPU = ("Seuls les écrans du GPU par défaut sont listés "
-                     "(sur un portable hybride, ceux branchés sur l'autre GPU n'apparaissent pas).")
 
 
 def now_us() -> int:
@@ -138,11 +140,12 @@ def probe_outputs(ffmpeg: str, max_outputs: int = 8, run: Run = subprocess.run,
     return outputs
 
 
-def describe_outputs(outputs: Outputs) -> str:
+def describe_outputs(outputs: Outputs) -> Msg:
     if not outputs:
-        return "Aucun écran capturable (ffmpeg/ddagrab indisponible ?)"
-    lines = [f"--output {i} : {f'{s[0]}x{s[1]}' if s else 'taille inconnue'}" for i, s in outputs]
-    return "\n".join(lines + [_ONLY_DEFAULT_GPU])
+        return msg("outputs.none")
+    lines = [msg("outputs.line", index=i, width=s[0], height=s[1]) if s else msg("outputs.line_unknown", index=i)
+             for i, s in outputs]
+    return msg("outputs.list", lines=lines)
 
 
 def pick_output(choice: str, outputs: Outputs, width: int, height: int) -> int:
@@ -152,9 +155,7 @@ def pick_output(choice: str, outputs: Outputs, width: int, height: int) -> int:
     for index, size in outputs:
         if size == (width, height):
             return index
-    raise FatalError(f"Aucun écran en {width}x{height} (taille de la tablette). Règle l'écran virtuel à cette "
-                     "résolution, ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de "
-                     f"commande) :\n{describe_outputs(outputs)}")
+    raise FatalError(msg("error.no_matching_screen", width=width, height=height, outputs=describe_outputs(outputs)))
 
 
 def ffmpeg_command(ffmpeg: str, encoder: str, output: int, fps: int, bitrate: str) -> list[str]:
@@ -184,24 +185,24 @@ def probe_encoder(ffmpeg: str, encoder: str, run: Run = subprocess.run) -> bool:
 
 def resolve_encoder(ffmpeg: str, choice: str, run: Run = subprocess.run,
                     should_stop: Callable[[], bool] = lambda: False) -> tuple[str, str]:
-    """(encoder, log line). 'auto' probes NVENC then AMF; a forced encoder is trusted as is.
+    """(encoder, English log line). 'auto' probes NVENC then AMF; a forced encoder is trusted as is.
 
     Raises _Stopped instead of running the next probe once should_stop() turns true.
     """
     if choice != "auto":
-        return choice, f"Encodeur : {ENCODER_NAMES[choice]} (forcé)"
+        return choice, f"Encoder: {ENCODER_NAMES[choice]} (forced)"
     unavailable: list[str] = []
     for name in AUTO_ORDER:
         if should_stop():
             raise _Stopped
         if probe_encoder(ffmpeg, name, run):
-            suffix = f" ({', '.join(unavailable)} indisponible)" if unavailable else ""
-            return name, f"Encodeur : {ENCODER_NAMES[name]}{suffix}"
+            suffix = f" ({', '.join(unavailable)} unavailable)" if unavailable else ""
+            return name, f"Encoder: {ENCODER_NAMES[name]}{suffix}"
         unavailable.append(ENCODER_NAMES[name])
-    raise FatalError("Aucun encodeur matériel H.264 (AMF/NVENC) disponible.")
+    raise FatalError(msg("error.no_encoder"))
 
 
-def adb_problem(adb: str, run: Run = subprocess.run) -> str | None:
+def adb_problem(adb: str, run: Run = subprocess.run) -> Msg | None:
     """None if exactly one authorized device is ready, else a message saying what to do."""
     try:
         result = run([adb, "devices"], capture_output=True, text=True, creationflags=tools.NO_WINDOW,
@@ -209,18 +210,18 @@ def adb_problem(adb: str, run: Run = subprocess.run) -> str | None:
     except subprocess.TimeoutExpired:
         return _ADB_TIMEOUT_PROBLEM
     if result.returncode != 0:
-        return f"adb ne répond pas : {result.stderr.strip()}"
+        return msg("adb.failed", error=result.stderr.strip())
     states = [line.split("\t")[1] for line in result.stdout.splitlines()[1:] if "\t" in line]
     if not states:
-        return "Aucune tablette détectée : branche le câble USB et active le débogage USB."
+        return msg("adb.no_device")
     if "unauthorized" in states:
-        return "Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la tablette."
+        return msg("adb.unauthorized")
     if states.count("device") != 1:
-        return f"Il faut exactement une tablette prête. État actuel : {states}"
+        return msg("adb.not_exactly_one", states=", ".join(states))
     return None
 
 
-def ensure_forward(adb: str, run: Run = subprocess.run) -> str | None:
+def ensure_forward(adb: str, run: Run = subprocess.run) -> Msg | None:
     """(Re)creates the adb forward; returns a message if it can't. adb drops forwards when the device reconnects."""
     problem = adb_problem(adb, run)
     if problem is not None:
@@ -231,13 +232,13 @@ def ensure_forward(adb: str, run: Run = subprocess.run) -> str | None:
     except subprocess.TimeoutExpired:
         return _ADB_TIMEOUT_PROBLEM
     if result.returncode != 0:
-        return f"adb forward a échoué : {result.stderr.strip()}"
+        return msg("adb.forward_failed", error=result.stderr.strip())
     return None
 
 
 def format_stats(stats: StreamStats) -> str:
-    return (f"{stats.fps:3d} fps | latence moy {stats.latency_avg_ms:5.1f} ms, "
-            f"max {stats.latency_max_ms:5.1f} ms | perdues {stats.dropped} | RTT {stats.rtt_ms:.2f} ms")
+    return (f"{stats.fps:3d} fps | latency avg {stats.latency_avg_ms:5.1f} ms, "
+            f"max {stats.latency_max_ms:5.1f} ms | dropped {stats.dropped} | RTT {stats.rtt_ms:.2f} ms")
 
 
 def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: threading.Event,
@@ -261,14 +262,14 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
                     new_size = annexb.parse_sps_size(info.sps)
                 except ValueError as e:
                     if info.sps != bad_sps:
-                        log(f"SPS illisible ({e}) : unité ignorée")
+                        log(f"Unreadable SPS ({e}): unit skipped")
                         bad_sps = info.sps
                     continue
                 if new_size != size:
                     size = new_size
                     on_size(size[0], size[1])
                     send(protocol.encode_config(size[0], size[1], fps))
-                    log(f"Flux : {size[0]}x{size[1]} @ {fps} fps")
+                    log(f"Stream: {size[0]}x{size[1]} @ {fps} fps")
                 codec_config = annexb.START_CODE + info.sps + annexb.START_CODE + info.pps
                 send(protocol.encode_video(now_us(), codec_config, protocol.FLAG_CODEC_CONFIG))
                 last_sps = info.sps
@@ -312,7 +313,7 @@ class RelayEngine:
         self._active_sock: socket.socket | None = None
         self._active_ffmpeg: Any = None
         self._state = State.STOPPED
-        self._detail = ""
+        self._detail: Msg | None = None
         self._last_encoder_line: str | None = None
 
     @property
@@ -331,7 +332,7 @@ class RelayEngine:
             self._stop_event = threading.Event()
             # Une instance relancée réannonce ses états et son encodeur, même identiques à ceux d'avant.
             self._state = State.STOPPED
-            self._detail = ""
+            self._detail = None
             self._last_encoder_line = None
             self._thread = threading.Thread(target=self._run, name="relay-engine", daemon=True)
             self._thread.start()
@@ -362,21 +363,21 @@ class RelayEngine:
     # --- thread du moteur ---
 
     def _run(self) -> None:
-        error: str | None = None
+        error: Msg | None = None
         try:
             self._loop()
         except FatalError as e:
-            error = str(e)
+            error = e.msg
         except Exception as e:  # noqa: BLE001 — l'appli ne doit jamais planter : on montre l'erreur
             self._log(traceback.format_exc().rstrip())
-            error = f"Erreur inattendue : {e}"
+            error = msg("error.unexpected", error=str(e))
         finally:
             # Avant d'annoncer la fin : un listener qui relance sur ERROR ne doit jamais faire tourner deux ffmpeg.
             self._release_active()
         if error is not None:
             self._set_state(State.ERROR, error)
         else:
-            self._set_state(State.STOPPED, "Arrêté.")
+            self._set_state(State.STOPPED, STOPPED_DETAIL)
 
     def _release_active(self) -> None:
         """Safety net: an unexpected exception between ffmpeg's launch and the session's finally leaves nothing open."""
@@ -410,27 +411,27 @@ class RelayEngine:
             if connection is None:
                 return
             sock, rfile, hello = connection
-            self._log(f"Tablette connectée : écran {hello.width}x{hello.height}, {hello.dpi} dpi")
+            self._log(f"Tablet connected: screen {hello.width}x{hello.height}, {hello.dpi} dpi")
             try:
                 output = pick_output(self._config.output, outputs, hello.width, hello.height)
             except FatalError:
                 self._close_socket(sock)
                 raise
             if self._config.output == "auto":
-                self._log(f"Écran capturé : n° {output} ({hello.width}x{hello.height}, choisi automatiquement)")
+                self._log(f"Captured screen: #{output} ({hello.width}x{hello.height}, picked automatically)")
             result = self._session(sock, rfile, hello, encoder, output)
             if self._stop_event.is_set():
                 return
             if result.ffmpeg_died:
-                self._log("ffmpeg s'est arrêté de lui-même. Dernières lignes :\n  " + "\n  ".join(result.stderr_tail))
+                self._log("ffmpeg stopped on its own. Last lines:\n  " + "\n  ".join(result.stderr_tail))
                 failures = 0 if result.sent_video else failures + 1
                 if failures >= MAX_FFMPEG_FAILURES:
-                    last = result.stderr_tail[-1] if result.stderr_tail else "aucun message"
-                    raise FatalError(f"ffmpeg s'arrête sans cesse ({failures} fois de suite). Dernier message : {last}")
+                    last = result.stderr_tail[-1] if result.stderr_tail else msg("error.no_message")
+                    raise FatalError(msg("error.ffmpeg_keeps_stopping", count=failures, last=last))
                 self._stop_event.wait(self._deps.retry_delay_s)
             else:
                 failures = 0
-            self._log("Nouvelle tentative de connexion…")
+            self._log("Trying to connect again…")
 
     def _pick_encoder(self, should_stop: Callable[[], bool]) -> str:
         encoder, line = resolve_encoder(self._ffmpeg, self._config.encoder, self._deps.run, should_stop)
@@ -472,11 +473,10 @@ class RelayEngine:
                 continue
             if not isinstance(hello, protocol.Hello):
                 self._close_socket(sock)
-                raise FatalError(f"Premier message inattendu de la tablette : {hello}")
+                raise FatalError(msg("error.unexpected_first_message", message=str(hello)))
             if hello.version != protocol.VERSION:
                 self._close_socket(sock)
-                raise FatalError(f"Protocole incompatible : tablette v{hello.version}, PC v{protocol.VERSION}. "
-                                 "Mets à jour l'app ou le relais.")
+                raise FatalError(msg("error.protocol_mismatch", tablet=hello.version, pc=protocol.VERSION))
             return sock, rfile, hello
         return None
 
@@ -509,7 +509,7 @@ class RelayEngine:
             self._active_ffmpeg = ffmpeg
             if self._stop_event.is_set():
                 ffmpeg.kill()
-        self._set_state(State.STREAMING, "Démarrage du flux…")
+        self._set_state(State.STREAMING, msg("state.starting_stream"))
         stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
         disconnected = threading.Event()
         closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
@@ -522,7 +522,7 @@ class RelayEngine:
         def on_stream_size(width: int, height: int) -> None:
             nonlocal pointer_injector, stream_size
             stream_size = (width, height)
-            self._set_state(State.STREAMING, f"Flux {width}×{height}")
+            self._set_state(State.STREAMING, msg("state.streaming", width=width, height=height))
             with injector_lock:
                 if pointer_injector is not None:
                     self._close_injector(pointer_injector)
@@ -530,7 +530,7 @@ class RelayEngine:
                 try:
                     pointer_injector = self._deps.create_injector(width, height, self._log)
                 except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
-                    self._log(f"Tactile désactivé : {e}. La vidéo continue.")
+                    self._log(f"Touch disabled: {e}. Video continues.")
                     pointer_injector = None
 
         def pump_stderr() -> None:
@@ -558,7 +558,7 @@ class RelayEngine:
                     elif isinstance(message, protocol.KeyframeRequest):
                         keyframe_requests += 1
                         if keyframe_requests >= 2:
-                            self._log("Keyframe demandée par la tablette : prochaine IDR sous 1 s (GOP fixe)")
+                            self._log("Keyframe requested by the tablet: next IDR within 1 s (fixed GOP)")
                     elif isinstance(message, protocol.Input):
                         with injector_lock:
                             target = pointer_injector
@@ -568,10 +568,10 @@ class RelayEngine:
                             except Exception as e:  # noqa: BLE001 — le tactile ne doit jamais interrompre la vidéo
                                 if not input_failed:
                                     input_failed = True
-                                    self._log(f"Tactile en échec, entrées ignorées : {e}")
+                                    self._log(f"Touch failed, input ignored: {e}")
             except (EOFError, OSError, protocol.ProtocolError) as e:
                 if not closing.is_set() and not self._stop_event.is_set():
-                    self._log(f"Tablette déconnectée ({e})")
+                    self._log(f"Tablet disconnected ({e})")
             finally:
                 disconnected.set()
                 with contextlib.suppress(OSError):
@@ -619,9 +619,9 @@ class RelayEngine:
         try:
             target.close()
         except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fermeture de la session
-            self._log(f"Fermeture du tactile en échec : {e}")
+            self._log(f"Closing touch failed: {e}")
 
-    def _set_state(self, state: State, detail: str) -> None:
+    def _set_state(self, state: State, detail: Msg) -> None:
         if (state, detail) == (self._state, self._detail):
             return
         self._state = state

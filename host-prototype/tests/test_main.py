@@ -14,7 +14,7 @@ if HAVE_QT:
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication
 
-    from app import main
+    from app import i18n, main
     from app.controller import Controller
     from app.settings import Settings
     from app.tray import Tray
@@ -29,6 +29,7 @@ if HAVE_QT:
 
 import tools
 from engine import State
+from messages import msg
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 absent")
@@ -38,6 +39,8 @@ class WireTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        i18n.set_language("fr")
+        self.addCleanup(i18n.set_language, "en")
         FakeEngine.instances.clear()
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -70,6 +73,25 @@ class WireTest(unittest.TestCase):
                 self.window.choose_encoder("amf")
             restart.assert_called_once_with(main.engine.Config(output="auto", encoder="amf"))
         self.assertEqual(self.current.encoder, "amf")
+
+    def test_state_is_logged_in_english(self):
+        with self.assertLogs("orizonx", "INFO") as logs:
+            self.controller.state_changed.emit(State.WAITING_DEVICE, msg("adb.no_device"))
+        self.assertEqual(logs.records[-1].getMessage(),
+                         "State: waiting_device — No tablet found. Plug in the USB cable and turn on USB debugging.")
+        self.assertEqual(self.window.detail_text(),
+                         "Aucune tablette détectée : branche le câble USB et active le débogage USB.")
+
+    def test_close_hint_is_in_the_current_language_and_shown_once(self):
+        i18n.set_language("en")
+        with mock.patch.object(self.tray, "show_message") as show:
+            self.window.show()
+            self.window.close()
+            self.window.show()
+            self.window.close()
+        show.assert_called_once_with("Orizon X is still running",
+                                     "The stream continues. Click the Orizon X icon to open the window again.")
+        self.assertTrue(self.current.first_close_hint_shown)
 
     def test_quit_hides_first_then_stops_without_the_close_hint(self):
         self.window.show()
@@ -114,7 +136,7 @@ class InstanceAndProberTest(unittest.TestCase):
         def find_tool(name):
             calls.append(name)
             release.wait(2)
-            raise tools.ToolMissing("ffmpeg introuvable.")
+            raise tools.ToolMissing(msg("tools.ffmpeg_missing"))
 
         prober = main.OutputProber()
         results = []

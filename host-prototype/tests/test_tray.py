@@ -8,9 +8,10 @@ if HAVE_QT:
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication
 
-    from app import tray
+    from app import i18n, tray
 
 from engine import State
+from messages import msg
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 absent")
@@ -20,6 +21,8 @@ class TrayTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        i18n.set_language("fr")
+        self.addCleanup(i18n.set_language, "en")
         logo = QPixmap(64, 64)
         logo.fill()
         self.tray = tray.Tray(logo, autostart_supported=False, autostart_enabled=False)
@@ -33,12 +36,28 @@ class TrayTest(unittest.TestCase):
         self.assertFalse(tray.badge_icon(logo, "#4ADE80").isNull())
 
     def test_state_updates_menu_and_tooltip(self):
-        self.tray.set_state(State.STREAMING, "Flux 2880×1800")
+        self.tray.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))
         self.assertEqual(self.tray.toggle_text(), "Arrêter")
         self.assertIn("Connecté", self.tray.status_text())
         self.assertIn("Flux 2880×1800", self.tray.tooltip())
-        self.tray.set_state(State.ERROR, "boom")
+        self.tray.set_state(State.ERROR, msg("error.unexpected", error="boom"))
         self.assertEqual(self.tray.toggle_text(), "Réessayer")
+        self.assertEqual(self.tray.status_text(), "Erreur — Erreur inattendue : boom")
+
+    def test_language_switch_retranslates_live(self):
+        self.tray.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))
+        self.assertEqual(self.tray.menu_texts(), ["Connecté — Flux 2880×1800", "Arrêter", "Ouvrir la fenêtre",
+                                                  "Ouvrir le journal", "Lancer avec Windows", "Quitter"])
+        self.assertEqual(self.tray.autostart_tooltip(), "Disponible dans l'appli compilée (OrizonX.exe)")
+        i18n.set_language("en")
+        self.assertEqual(self.tray.menu_texts(), ["Connected — Stream 2880×1800", "Stop", "Open window", "Open log",
+                                                  "Start with Windows", "Quit"])
+        self.assertEqual(self.tray.tooltip(), "Orizon X — Connected\nStream 2880×1800")
+        self.assertEqual(self.tray.autostart_tooltip(), "Available in the built app (OrizonX.exe)")
+        seen = []
+        self.tray.quit_requested.connect(lambda: seen.append("quit"))
+        self.tray.trigger("Quit")
+        self.assertEqual(seen, ["quit"])
 
     def test_autostart_entry_disabled_from_source(self):
         self.assertFalse(self.tray.autostart_action_enabled())

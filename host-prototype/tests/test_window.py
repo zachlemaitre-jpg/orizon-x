@@ -9,9 +9,11 @@ if HAVE_QT:
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication
 
+    from app import i18n
     from app.window import MainWindow
 
 from engine import State, StreamStats
+from messages import msg
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 absent")
@@ -21,6 +23,8 @@ class WindowTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        i18n.set_language("fr")  # les textes historiques ; l'anglais est vérifié par les tests de bascule
+        self.addCleanup(i18n.set_language, "en")
         pixmap = QPixmap(32, 32)
         pixmap.fill()
         self.window = MainWindow(pixmap)
@@ -33,19 +37,20 @@ class WindowTest(unittest.TestCase):
         self.window.deleteLater()
 
     def test_state_drives_texts(self):
-        self.window.set_state(State.WAITING_APP, "Tablette branchée : ouvre Orizon X dessus.")
+        self.window.set_state(State.WAITING_APP, msg("state.waiting_app"))
         self.assertEqual(self.window.title_text(), "Ouvre Orizon X sur la tablette")
         self.assertEqual(self.window.detail_text(), "Tablette branchée : ouvre Orizon X dessus.")
         self.assertEqual(self.window.primary_text(), "Arrêter")
-        self.window.set_state(State.ERROR, "boom")
+        self.window.set_state(State.ERROR, msg("error.unexpected", error="boom"))
+        self.assertEqual(self.window.detail_text(), "Erreur inattendue : boom")
         self.assertEqual(self.window.primary_text(), "Réessayer")
 
     def test_stats_only_shown_while_streaming(self):
         stats = StreamStats(2880, 1800, 60, 18.0, 30.0, 0, 0.4)
-        self.window.set_state(State.WAITING_APP, "x")
+        self.window.set_state(State.WAITING_APP, msg("state.waiting_app"))
         self.window.set_stats(stats)
-        self.assertEqual(self.window.detail_text(), "x")
-        self.window.set_state(State.STREAMING, "Flux 2880×1800")
+        self.assertEqual(self.window.detail_text(), "Tablette branchée : ouvre Orizon X dessus.")
+        self.window.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))
         self.window.set_stats(stats)
         self.assertEqual(self.window.detail_text(), "2880×1800 · 60 fps · 18 ms")
 
@@ -99,6 +104,36 @@ class WindowTest(unittest.TestCase):
         self.assertEqual([value for _label, value in self.window.output_items()], ["auto", "0", "1"])
         self.assertEqual(self.window.selected_output(), "0")  # le choix de l'utilisateur est gardé
         self.assertEqual(self.events, [("output", "0")])
+
+    def test_language_switch_retranslates_live(self):
+        self.window.set_outputs([(0, (2560, 1600))], "0")
+        self.window.set_state(State.STOPPED, msg("state.stopped"))
+        self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
+                         ("Arrêté", "Clique sur Démarrer.", "Démarrer"))
+        self.assertEqual(self.window.field_labels(), ["Écran", "Encodeur"])
+        self.assertEqual(self.window.tooltips(), ["Réduire", "Fermer (Orizon X continue dans la zone de notification)"])
+        i18n.set_language("en")
+        self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
+                         ("Stopped", "Click Start.", "Start"))
+        self.assertEqual(self.window.field_labels(), ["Screen", "Encoder"])
+        self.assertEqual(self.window.tooltips(), ["Minimize", "Close (Orizon X keeps running in the notification area)"])
+        self.assertEqual(self.window.output_items(), [("Auto (tablet size)", "auto"), ("Screen 0 — 2560×1600", "0")])
+        self.assertEqual(self.window.selected_output(), "0")
+        self.window.set_state(State.WAITING_APP, msg("state.waiting_app"))
+        self.assertEqual(self.window.primary_text(), "Stop")
+        self.assertEqual(self.window.detail_text(), "Tablet plugged in. Open Orizon X on it.")
+        i18n.set_language("fr")
+        self.assertEqual(self.window.primary_text(), "Arrêter")
+        self.assertEqual(self.window.title_text(), "Ouvre Orizon X sur la tablette")
+        self.assertEqual(self.window.detail_text(), "Tablette branchée : ouvre Orizon X dessus.")
+        self.assertEqual(self.window.output_items(), [("Auto (taille de la tablette)", "auto"), ("Écran 0 — 2560×1600", "0")])
+        self.assertEqual(self.events, [])  # changer de langue ne touche pas aux réglages
+
+    def test_language_switch_keeps_the_stream_stats(self):
+        self.window.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))
+        self.window.set_stats(StreamStats(2880, 1800, 60, 18.0, 30.0, 0, 0.4))
+        i18n.set_language("en")
+        self.assertEqual((self.window.title_text(), self.window.detail_text()), ("Connected", "2880×1800 · 60 fps · 18 ms"))
 
     def test_brand_title_uses_mazagla_and_title_bar_has_no_name(self):
         self.assertEqual(self.window.brand_title_family(), "MAZAGLA")

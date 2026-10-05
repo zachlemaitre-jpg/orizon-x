@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication
 
 import engine
 import tools
-from app import autostart
+from app import autostart, i18n
 from app import settings as settings_store
 from app.controller import Controller
 from app.glass import apply_glass
@@ -40,9 +40,9 @@ def setup_logging() -> Path:
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
-    sys.excepthook = lambda kind, value, tb: logger.error("Exception non gérée", exc_info=(kind, value, tb))
+    sys.excepthook = lambda kind, value, tb: logger.error("Unhandled exception", exc_info=(kind, value, tb))
     # pythonw n'a pas de console : sans ce crochet, une exception dans un thread disparaîtrait sans trace.
-    threading.excepthook = lambda a: logger.error("Exception non gérée (thread %s)", a.thread.name if a.thread else "?",
+    threading.excepthook = lambda a: logger.error("Unhandled exception (thread %s)", a.thread.name if a.thread else "?",
                                                   exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
     return path
 
@@ -108,10 +108,10 @@ class OutputProber(QObject):
             try:
                 outputs = engine.probe_outputs(tools.find_tool("ffmpeg"))
             except tools.ToolMissing as e:  # déjà affiché par l'état ERROR du moteur : une ligne suffit
-                logger.info("Liste des écrans impossible : %s", e)
+                logger.info("Cannot list the screens: %s", e)
                 outputs = []
             except Exception:  # noqa: BLE001 — liste vide : seul « Auto » reste proposé
-                logger.exception("Liste des écrans impossible")
+                logger.exception("Cannot list the screens")
                 outputs = []
             finally:
                 self._busy.release()
@@ -129,10 +129,10 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
         try:
             settings_store.save(current, settings_path)
         except OSError:
-            logger.exception("Réglages non enregistrés")
+            logger.exception("Settings not saved")
 
-    def on_state(state: engine.State, detail: str) -> None:
-        logger.info("État : %s — %s", state.value, detail)
+    def on_state(state: engine.State, detail: i18n.Msg) -> None:
+        logger.info("State: %s — %s", state.value, detail.text("en"))
         window.set_state(state, detail)
         tray.set_state(state, detail)
 
@@ -151,8 +151,8 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
 
     def on_closed_to_tray() -> None:
         if not current.first_close_hint_shown:
-            tray.show_message("Orizon X tourne toujours",
-                              "Le flux continue. Clique sur l'icône Orizon X pour rouvrir la fenêtre.")
+            lang = i18n.current_language()
+            tray.show_message(i18n.tr("tray.still_running_title", lang), i18n.tr("tray.still_running_text", lang))
             current.first_close_hint_shown = True
             save_settings()
 
@@ -163,11 +163,11 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
             else:
                 autostart.disable()
         except OSError:
-            logger.exception("Lancer avec Windows : échec")
+            logger.exception("Start with Windows: failed")
         tray.set_autostart_checked(autostart.is_enabled())
 
     def on_quit() -> None:
-        logger.info("Arrêt demandé")
+        logger.info("Quit requested")
         tray.hide()  # disparaissent tout de suite : l'arrêt du moteur peut prendre jusqu'à 3 s
         window.prepare_quit()
         window.hide()
@@ -191,18 +191,18 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
 
 
 def refresh_autostart() -> None:
-    """The app folder was moved: points 'Lancer avec Windows' at this exe again (packaged app only)."""
+    """The app folder was moved: points 'Start with Windows' at this exe again (packaged app only)."""
     if autostart.supported() and autostart.is_stale():
         try:
             autostart.enable(sys.executable)
-            logger.info("Lancer avec Windows : chemin mis à jour (%s)", sys.executable)
+            logger.info("Start with Windows: path updated (%s)", sys.executable)
         except OSError:
-            logger.exception("Lancer avec Windows : mise à jour impossible")
+            logger.exception("Start with Windows: cannot update the path")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="OrizonX")
-    parser.add_argument("--minimized", action="store_true", help="démarre dans la zone de notification")
+    parser.add_argument("--minimized", action="store_true", help="start in the notification area")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     app = QApplication(sys.argv[:1])
@@ -216,17 +216,18 @@ def main(argv: list[str] | None = None) -> int:
     server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
     QLocalServer.removeServer(INSTANCE_NAME)  # nettoie un nom resté après un plantage
     if not server.listen(INSTANCE_NAME):
-        logger.error("Instance unique impossible (%s) : une autre Orizon X tourne peut-être en administrateur.",
+        logger.error("Cannot ensure a single instance (%s): another Orizon X may be running as administrator.",
                      server.errorString())
         return 1
 
-    logger.info("Orizon X démarre")
+    logger.info("Orizon X starting")
     refresh_autostart()
     logo = QPixmap(str(ASSETS / "orizonx.png"))
     app.setWindowIcon(QIcon(str(ASSETS / "orizonx.ico")))
 
     settings_path = settings_store.default_path()
     current = settings_store.load(settings_path)
+    i18n.set_language(i18n.detect_language(current.language))  # avant de créer la fenêtre et l'icône
     controller = Controller(make_engine, engine.Config(output=current.output, encoder=current.encoder))
     window = MainWindow(logo)
     window.set_acrylic(apply_glass(int(window.winId())))

@@ -26,7 +26,7 @@ def load_brand_font(path: Path = FONT_PATH, cache: bool = True) -> str:
     if families:
         family = families[0]
     else:
-        logger.warning("Police du titre introuvable (%s) : police système utilisée", path)
+        logger.warning("Title font not found (%s): using the system font", path)
         family = QGuiApplication.font().family()
     if cache:
         _family = family

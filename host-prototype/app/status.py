@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from engine import State, StreamStats
+from messages import Msg, tr
 
-TITLES = {
-    State.STOPPED: "Arrêté",
-    State.WAITING_DEVICE: "En attente de la tablette",
-    State.WAITING_APP: "Ouvre Orizon X sur la tablette",
-    State.STREAMING: "Connecté",
-    State.ERROR: "Erreur",
+TITLE_KEYS = {
+    State.STOPPED: "status.stopped",
+    State.WAITING_DEVICE: "status.waiting_device",
+    State.WAITING_APP: "status.waiting_app",
+    State.STREAMING: "status.streaming",
+    State.ERROR: "status.error",
 }
 
 COLORS = {
@@ -27,14 +28,20 @@ def is_active(state: State) -> bool:
     return state in _ACTIVE
 
 
-def primary_label(state: State) -> str:
+def title(state: State, lang: str) -> str:
+    return tr(TITLE_KEYS[state], lang)
+
+
+def primary_label(state: State, lang: str) -> str:
     if is_active(state):
-        return "Arrêter"
-    return "Réessayer" if state is State.ERROR else "Démarrer"
+        return tr("button.stop", lang)
+    return tr("button.retry" if state is State.ERROR else "button.start", lang)
 
 
-def detail_for(state: State, detail: str) -> str:
-    return "Clique sur Démarrer." if state is State.STOPPED else detail
+def detail_for(state: State, detail: Msg | None, lang: str) -> str:
+    if state is State.STOPPED:
+        return tr("status.click_start", lang)
+    return detail.text(lang) if detail is not None else ""
 
 
 def stream_detail(stats: StreamStats) -> str:

@@ -7,7 +7,8 @@ from typing import Callable, Protocol
 
 from PySide6.QtCore import QObject, Signal
 
-from engine import STOP_TIMEOUT_S, Config, Listener, State, StreamStats
+from engine import STOP_TIMEOUT_S, STOPPED_DETAIL, Config, Listener, State, StreamStats
+from messages import MessageError, Msg, msg
 
 
 class Engine(Protocol):
@@ -32,7 +33,7 @@ class _EngineListener:
         self._controller = controller
         self._generation = generation
 
-    def on_state(self, state: State, detail: str) -> None:
+    def on_state(self, state: State, detail: Msg) -> None:
         self._controller._forward(self._generation, self._controller.on_state, state, detail)
 
     def on_log(self, line: str) -> None:
@@ -48,7 +49,7 @@ class Controller(QObject):
     Signals emitted from engine threads are queued to the GUI thread, so slots never touch widgets off-thread.
     """
 
-    state_changed = Signal(object, str)
+    state_changed = Signal(object, object)  # (State, Msg)
     log = Signal(str)
     stats = Signal(object)
 
@@ -64,20 +65,20 @@ class Controller(QObject):
         # RLock : un signal émis depuis le thread Qt appelle ses slots tout de suite, et ils peuvent relancer une commande.
         self._lock = threading.RLock()
         self.state = State.STOPPED
-        self.detail = "Arrêté."
+        self.detail: Msg = STOPPED_DETAIL
         self.state_changed.connect(self._remember)
 
     @property
     def config(self) -> Config:
         return self._config
 
-    def _remember(self, state: State, detail: str) -> None:
+    def _remember(self, state: State, detail: Msg) -> None:
         self.state = state
         self.detail = detail
 
     # --- Listener (appelé depuis les threads du moteur) ---
 
-    def on_state(self, state: State, detail: str) -> None:
+    def on_state(self, state: State, detail: Msg) -> None:
         self.state_changed.emit(state, detail)
 
     def on_log(self, line: str) -> None:
@@ -151,6 +152,6 @@ class Controller(QObject):
             self._engine = self._factory(self._config, _EngineListener(self, self._generation))
         except Exception as e:  # noqa: BLE001 — ex. ToolMissing : on l'affiche au lieu de planter
             self._engine = None
-            self.on_state(State.ERROR, str(e))
+            self.on_state(State.ERROR, e.msg if isinstance(e, MessageError) else msg("error.unexpected", error=str(e)))
             return
         self._engine.start()

@@ -12,7 +12,9 @@ if HAVE_QT:
 
     from app.controller import Controller
 
+import tools
 from engine import Config, State
+from messages import msg
 
 
 class FakeEngine:
@@ -31,7 +33,7 @@ class FakeEngine:
         self.running = True
 
         def announce():
-            self.listener.on_state(State.WAITING_DEVICE, "branche")
+            self.listener.on_state(State.WAITING_DEVICE, msg("adb.no_device"))
             self.announced.set()
 
         # comme le vrai moteur : les rappels arrivent depuis un autre thread
@@ -42,7 +44,7 @@ class FakeEngine:
         time.sleep(0.2)  # le vrai stop() bloque jusqu'à 3 s
         self.running = False
         self.stopped.set()
-        self.listener.on_state(State.STOPPED, "Arrêté.")
+        self.listener.on_state(State.STOPPED, msg("state.stopped"))
 
     def is_running(self):
         return self.running
@@ -74,7 +76,7 @@ class ControllerTest(unittest.TestCase):
         self.controller.start()
         pump_until(lambda: self.received)
         state, detail, thread = self.received[0]
-        self.assertEqual((state, detail), (State.WAITING_DEVICE, "branche"))
+        self.assertEqual((state, detail), (State.WAITING_DEVICE, msg("adb.no_device")))
         self.assertIs(thread, threading.main_thread())
         self.assertIs(self.controller.state, State.WAITING_DEVICE)
 
@@ -126,7 +128,7 @@ class ControllerTest(unittest.TestCase):
                     while len(FakeEngine.instances) < 2 and time.monotonic() < deadline:
                         time.sleep(0.005)
                     FakeEngine.instances[-1].announced.wait(2)
-                    self.listener.on_state(State.STOPPED, "Arrêté.")
+                    self.listener.on_state(State.STOPPED, msg("state.stopped"))
                     late_sent.set()
 
                 threading.Thread(target=late, daemon=True).start()
@@ -155,13 +157,24 @@ class ControllerTest(unittest.TestCase):
         self.controller.stop().join(2)
         pump_until(lambda: self.controller.state is State.STOPPED)
 
+    def test_initial_state_is_stopped(self):
+        self.assertEqual((self.controller.state, self.controller.detail), (State.STOPPED, msg("state.stopped")))
+
     def test_factory_failure_becomes_error_state(self):
         def failing(config, listener):
-            raise RuntimeError("ffmpeg introuvable.")
+            raise RuntimeError("panne")
         controller = Controller(failing, Config())
         controller.start()
         pump_until(lambda: controller.state is State.ERROR)
-        self.assertEqual(controller.detail, "ffmpeg introuvable.")
+        self.assertEqual(controller.detail, msg("error.unexpected", error="panne"))
+
+    def test_missing_tool_shows_its_own_message(self):
+        def failing(config, listener):
+            raise tools.ToolMissing(msg("tools.ffmpeg_missing"))
+        controller = Controller(failing, Config())
+        controller.start()
+        pump_until(lambda: controller.state is State.ERROR)
+        self.assertEqual(controller.detail, msg("tools.ffmpeg_missing"))
 
     def test_start_after_error_creates_a_new_engine(self):
         self.controller.start()

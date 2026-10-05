@@ -64,7 +64,7 @@ class FindTargetTest(unittest.TestCase):
     def test_ambiguous_match(self):
         rect, problem = injector.find_target(2880, 1800, self.MONITORS + [(Rect(-2880, 0, 2880, 1800), False, "X")])
         self.assertIsNone(rect)
-        self.assertIn("2 écrans", problem)
+        self.assertIn("2 screens", problem)
 
 
 class FakeWin32:
@@ -136,7 +136,7 @@ class InjectorTest(_InjectorCase):
         self.injector.handle(self.TOUCH(self.contact(0, self.DOWN)))
         self.injector.handle(self.TOUCH(self.contact(0, self.DOWN)))
         self.assertEqual(len(self.log), 1)
-        self.assertIn("administrateur", self.log[0])
+        self.assertIn("administrator", self.log[0])
         self.assertTrue(self.injector.enabled)
         self.assertEqual(len(self.win32.kinds("inject")), 2)
 

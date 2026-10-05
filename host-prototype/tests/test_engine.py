@@ -10,6 +10,7 @@ from pathlib import Path
 import engine
 import protocol
 import tools
+from messages import msg
 
 SAMPLE = (Path(__file__).parent / "sample.h264").read_bytes()
 State = engine.State
@@ -348,8 +349,8 @@ class StreamingTest(unittest.TestCase):
         self.assertEqual(fps, 60)
         self.assertEqual([(i.width, i.height) for i in injectors.created], [(width, height)])
         self.assertIs(rec.last_state(), State.STREAMING)
-        self.assertIn("Tablette connectée : écran 2880x1800, 274 dpi", rec.logs)
-        self.assertIn("Écran capturé : n° 0 (2880x1800, choisi automatiquement)", rec.logs)
+        self.assertIn("Tablet connected: screen 2880x1800, 274 dpi", rec.logs)
+        self.assertIn("Captured screen: #0 (2880x1800, picked automatically)", rec.logs)
 
     def test_first_state_is_shown_before_the_probes(self):
         run = BlockingProbeRun()
@@ -357,7 +358,7 @@ class StreamingTest(unittest.TestCase):
         self.addCleanup(run.release.set)  # avant le stop() du nettoyage (ordre inverse)
         relay.start()
         self.assertTrue(run.probing.wait(5))
-        self.assertEqual(rec.states, [(State.WAITING_DEVICE, "Préparation de la capture…")])
+        self.assertEqual(rec.states, [(State.WAITING_DEVICE, msg("state.preparing_capture"))])
 
     def test_ping_gets_a_pong_with_the_same_tablet_time(self):
         connect = FakeConnect()
@@ -399,8 +400,8 @@ class StreamingTest(unittest.TestCase):
         tablet.send(touch_frame((0, down, 10, 10, 0, 0, 0)))
         tablet.send(touch_frame((0, down, 20, 20, 0, 0, 0)))
         wait_until(lambda: len(injectors.created[0].handled) == 2)
-        failures = [line for line in rec.logs if line.startswith("Tactile en échec")]
-        self.assertEqual(failures, ["Tactile en échec, entrées ignorées : pilote absent"])
+        failures = [line for line in rec.logs if line.startswith("Touch failed")]
+        self.assertEqual(failures, ["Touch failed, input ignored: pilote absent"])
         after_failure = engine.now_us()
         stdout.feed(SAMPLE)
         while True:  # une image horodatée après l'échec prouve que la vidéo continue
@@ -415,7 +416,7 @@ class StreamingTest(unittest.TestCase):
         relay, rec = make_engine(self, connect=connect, popen=popen)
         relay.start()
         rec.wait_state(State.WAITING_APP)
-        self.assertEqual(rec.states[-1], (State.WAITING_APP, engine.WAITING_APP_DETAIL))
+        self.assertEqual(rec.states[-1], (State.WAITING_APP, msg("state.waiting_app")))
         self.assertGreaterEqual(connect.silent_calls, 1)
         self.assertEqual(popen.calls, [])
 
@@ -442,8 +443,8 @@ class StreamingTest(unittest.TestCase):
         run = FakeRun(devices="")
         relay, rec = make_engine(self, run=run)
         relay.start()
-        rec.wait_for(lambda: any("Aucune tablette détectée" in detail for _, detail in rec.states))
-        self.assertEqual(rec.states[0], (State.WAITING_DEVICE, "Préparation de la capture…"))
+        rec.wait_for(lambda: (State.WAITING_DEVICE, msg("adb.no_device")) in rec.states)
+        self.assertEqual(rec.states[0], (State.WAITING_DEVICE, msg("state.preparing_capture")))
         run.devices = "R52\tdevice"
         rec.wait_state(State.STREAMING)
 
@@ -453,7 +454,7 @@ class StreamingTest(unittest.TestCase):
         relay, rec = make_engine(self, connect=connect)
         relay.start()
         rec.wait_state(State.WAITING_APP)
-        self.assertEqual(rec.states[-1][1], engine.WAITING_APP_DETAIL)
+        self.assertEqual(rec.states[-1][1], msg("state.waiting_app"))
 
     def test_returns_to_waiting_when_tablet_leaves(self):
         connect, injectors, popen = FakeConnect(), FakeInjectors(), FakePopen(live)
@@ -466,7 +467,7 @@ class StreamingTest(unittest.TestCase):
         rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
         self.assertTrue(popen.procs[0].killed.is_set())
         self.assertTrue(injectors.created[0].closed)
-        self.assertTrue(any(line.startswith("Tablette déconnectée") for line in rec.logs))
+        self.assertTrue(any(line.startswith("Tablet disconnected") for line in rec.logs))
 
     def test_auto_encoder_falls_back_to_amf(self):
         popen = FakePopen(live)
@@ -475,7 +476,7 @@ class StreamingTest(unittest.TestCase):
         relay.start()
         rec.wait_state(State.STREAMING)
         self.assertIn("h264_amf", popen.calls[0][0])
-        self.assertIn("Encodeur : AMF (NVENC indisponible)", rec.logs)
+        self.assertIn("Encoder: AMF (NVENC unavailable)", rec.logs)
 
     def test_subprocesses_never_open_a_console(self):
         run, popen = FakeRun(), FakePopen(live)
@@ -509,9 +510,9 @@ class StopTest(unittest.TestCase):
         self.assertFalse(relay.is_running())
         self.assertTrue(popen.procs[0].killed.is_set())
         self.assertTrue(injectors.created[0].closed)
-        self.assertIs(rec.last_state(), State.STOPPED)
+        self.assertEqual(rec.states[-1], (State.STOPPED, msg("state.stopped")))
         tablet.wait_closed()
-        self.assertFalse(any(line.startswith("Tablette déconnectée") for line in rec.logs))
+        self.assertFalse(any(line.startswith("Tablet disconnected") for line in rec.logs))
 
     def test_stop_during_encoder_probe_skips_the_remaining_probes(self):
         run = BlockingProbeRun()
@@ -536,7 +537,7 @@ class StopTest(unittest.TestCase):
 
             def on_log(self, line):
                 super().on_log(line)
-                if line.startswith("Tablette connectée"):
+                if line.startswith("Tablet connected"):
                     self.relay.stop()  # depuis le thread du moteur : pose le drapeau sans attendre
 
         popen = FakePopen(live)
@@ -555,7 +556,7 @@ class StopTest(unittest.TestCase):
         relay.stop()
         relay.start()
         rec.wait_for(lambda: sum(1 for s, _ in rec.states if s is State.STREAMING) >= 2)
-        self.assertEqual(rec.logs.count("Encodeur : AMF (forcé)"), 2)  # l'instance relancée repart de zéro
+        self.assertEqual(rec.logs.count("Encoder: AMF (forced)"), 2)  # l'instance relancée repart de zéro
 
     def test_start_twice_is_harmless(self):
         popen = FakePopen(live)
@@ -568,41 +569,48 @@ class StopTest(unittest.TestCase):
 
 
 class FatalTest(unittest.TestCase):
-    def assert_fatal(self, rec, relay, text):
+    def assert_fatal(self, rec, relay, key):
+        """Returns the error's Msg once the engine has ended in ERROR with that message key."""
         rec.wait_state(State.ERROR)
-        self.assertIn(text, rec.states[-1][1])
+        detail = rec.states[-1][1]
+        self.assertEqual(detail.key, key)
         self.assertTrue(relay.wait(2.0))
         self.assertIs(relay.state, State.ERROR)
+        return detail
 
     def test_incompatible_protocol(self):
         relay, rec = make_engine(self, connect=FakeConnect(version=99))
         relay.start()
-        self.assert_fatal(rec, relay, "Protocole incompatible")
+        detail = self.assert_fatal(rec, relay, "error.protocol_mismatch")
+        self.assertEqual(detail, msg("error.protocol_mismatch", tablet=99, pc=protocol.VERSION))
 
     def test_no_screen_with_tablet_size(self):
         relay, rec = make_engine(self, run=FakeRun(outputs=((0, (1920, 1080)),)))
         relay.start()
-        self.assert_fatal(rec, relay, "--output 0 : 1920x1080")
+        detail = self.assert_fatal(rec, relay, "error.no_matching_screen")
+        self.assertEqual(detail.args["outputs"], engine.describe_outputs([(0, (1920, 1080))]))
+        self.assertIn("--output 0 : 1920x1080", detail.text("fr"))
         self.assertIn("ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de commande) :",
-                      rec.states[-1][1])
+                      detail.text("fr"))
 
     def test_no_encoder(self):
         relay, rec = make_engine(self, run=FakeRun(encoders_ok=()), config=engine.Config(encoder="auto"))
         relay.start()
-        self.assert_fatal(rec, relay, "Aucun encodeur matériel H.264")
+        self.assertEqual(self.assert_fatal(rec, relay, "error.no_encoder"), msg("error.no_encoder"))
 
     def test_ffmpeg_dying_three_times_without_video(self):
         popen = FakePopen(dead)
         relay, rec = make_engine(self, popen=popen)
         relay.start()
-        self.assert_fatal(rec, relay, "boom")
+        self.assertEqual(self.assert_fatal(rec, relay, "error.ffmpeg_keeps_stopping"),
+                         msg("error.ffmpeg_keeps_stopping", count=engine.MAX_FFMPEG_FAILURES, last="boom"))
         self.assertEqual(len(popen.calls), engine.MAX_FFMPEG_FAILURES)
 
     def test_session_with_video_resets_the_failure_count(self):
         popen = FakePopen(dead, video_then_dead, dead)
         relay, rec = make_engine(self, popen=popen)
         relay.start()
-        self.assert_fatal(rec, relay, "boom")
+        self.assertEqual(self.assert_fatal(rec, relay, "error.ffmpeg_keeps_stopping").args["last"], "boom")
         self.assertEqual(len(popen.calls), 5)
 
     def test_unexpected_exception_becomes_an_error_state(self):
@@ -611,7 +619,9 @@ class FatalTest(unittest.TestCase):
 
         relay, rec = make_engine(self, popen=explode)
         relay.start()
-        self.assert_fatal(rec, relay, "Erreur inattendue : panne")
+        detail = self.assert_fatal(rec, relay, "error.unexpected")
+        self.assertEqual(detail, msg("error.unexpected", error="panne"))
+        self.assertEqual(detail.text("fr"), "Erreur inattendue : panne")
         self.assertTrue(any("Traceback" in line for line in rec.logs))
 
     def test_unexpected_exception_in_a_session_cleans_up_before_the_error(self):
@@ -636,7 +646,7 @@ class FatalTest(unittest.TestCase):
         tablet = first_tablet(connect)
         tablet.next_message(protocol.CONFIG)
         tablet.leave()
-        self.assert_fatal(rec, relay, "Erreur inattendue : wait en panne")
+        self.assertEqual(self.assert_fatal(rec, relay, "error.unexpected"), msg("error.unexpected", error="wait en panne"))
         self.assertTrue(popen.procs[0].killed.is_set())
         # le filet de _run a tué puis attendu ffmpeg (1 s max) avant d'annoncer ERROR
         self.assertEqual(rec.waits_at_error[1:], [1])
@@ -645,7 +655,7 @@ class FatalTest(unittest.TestCase):
     def test_same_error_is_reported_again_after_a_restart(self):
         relay, rec = make_engine(self, connect=FakeConnect(version=99))
         relay.start()
-        self.assert_fatal(rec, relay, "Protocole incompatible")
+        self.assert_fatal(rec, relay, "error.protocol_mismatch")
         relay.start()
         rec.wait_for(lambda: sum(1 for s, _ in rec.states if s is State.ERROR) == 2)
 

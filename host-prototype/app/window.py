@@ -5,10 +5,11 @@ from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontInfo, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
-from app import brand, status
+from app import brand, i18n, status
+from app.i18n import tr
 from engine import Outputs, State, StreamStats
+from messages import Msg
 
-AUTO_OUTPUT_LABEL = "Auto (taille de la tablette)"
 ENCODER_ITEMS = (("Auto", "auto"), ("AMF (AMD)", "amf"), ("NVENC (NVIDIA)", "nvenc"))
 RADIUS = 14.0
 
@@ -65,20 +66,34 @@ class OutputCombo(QComboBox):
         super().__init__(parent)
         self._popup_open = False
         self._pending: Outputs | None = None
+        self._sizes: dict[str, tuple[int, int] | None] = {}
 
     def set_outputs(self, outputs: Outputs, selected: str) -> None:
         if self._popup_open:
             self._pending = outputs  # appliqué à la fermeture de la liste
             return
         self._pending = None
+        self._sizes = {str(index): size for index, size in outputs}
         self.clear()
-        self.addItem(AUTO_OUTPUT_LABEL, "auto")
-        for index, size in outputs:
-            label = f"Écran {index} — {size[0]}×{size[1]}" if size else f"Écran {index}"
-            self.addItem(label, str(index))
+        for value in ["auto", *self._sizes]:
+            self.addItem(self._label(value), value)
         if self.findData(selected) < 0:
-            self.addItem(f"Écran {selected}", selected)  # réglage gardé même si l'écran est absent
+            self.addItem(self._label(selected), selected)  # réglage gardé même si l'écran est absent
         self.setCurrentIndex(self.findData(selected))
+
+    def retranslate(self) -> None:
+        """Relabels the items in place: neither the selection nor an open list moves."""
+        for i in range(self.count()):
+            self.setItemText(i, self._label(self.itemData(i)))
+
+    def _label(self, value: str) -> str:
+        lang = i18n.current_language()
+        if value == "auto":
+            return tr("window.output_auto", lang)
+        size = self._sizes.get(value)
+        if size:
+            return tr("window.output_size", lang, index=value, width=size[0], height=size[1])
+        return tr("window.output", lang, index=value)
 
     def showPopup(self) -> None:
         self._popup_open = True
@@ -124,6 +139,8 @@ class MainWindow(QWidget):
         self.setStyleSheet(build_style(brand_family))
         self._acrylic = False
         self._state = State.STOPPED
+        self._detail_msg: Msg | None = None
+        self._stats: StreamStats | None = None  # dernières stats du flux en cours, gardées pour un changement de langue
         self._quitting = False
 
         bar = TitleBar(self)
@@ -131,13 +148,12 @@ class MainWindow(QWidget):
         self._title_bar = bar
         minimize = QToolButton(bar)
         minimize.setText("—")
-        minimize.setToolTip("Réduire")
         minimize.clicked.connect(self.showMinimized)
         close = QToolButton(bar)
         close.setObjectName("close")
         close.setText("✕")
-        close.setToolTip("Fermer (Orizon X continue dans la zone de notification)")
         close.clicked.connect(self.close)
+        self._tool_buttons = ((minimize, "window.minimize"), (close, "window.close"))
         bar_layout = QHBoxLayout(bar)
         bar_layout.setContentsMargins(14, 0, 8, 0)
         bar_layout.setSpacing(8)
@@ -163,7 +179,7 @@ class MainWindow(QWidget):
         self._detail.setMinimumHeight(34)
 
         self._outputs = OutputCombo(self)
-        self._outputs.addItem(AUTO_OUTPUT_LABEL, "auto")
+        self._outputs.set_outputs([], "auto")
         self._outputs.activated.connect(lambda _i: self.output_changed.emit(self._outputs.currentData()))
         self._encoders = QComboBox(self)
         for label, value in ENCODER_ITEMS:
@@ -173,9 +189,11 @@ class MainWindow(QWidget):
         form = QGridLayout()
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(8)
-        for row, (text, combo) in enumerate((("Écran", self._outputs), ("Encodeur", self._encoders))):
-            label = QLabel(text, self)
+        self._field_labels: list[tuple[QLabel, str]] = []
+        for row, (key, combo) in enumerate((("window.screen", self._outputs), ("window.encoder", self._encoders))):
+            label = QLabel(self)
             label.setObjectName("field")
+            self._field_labels.append((label, key))
             form.addWidget(label, row, 0)
             form.addWidget(combo, row, 1)
         form.setColumnStretch(1, 1)
@@ -209,7 +227,9 @@ class MainWindow(QWidget):
         root.addWidget(bar)
         root.addLayout(body)
         root.addStretch(1)
-        self.set_state(State.STOPPED, "")
+        self.set_state(State.STOPPED, None)
+        self.retranslate()
+        i18n.language_changed.connect(self.retranslate)
 
     # --- mises à jour depuis le contrôleur ---
 
@@ -217,16 +237,36 @@ class MainWindow(QWidget):
         self._acrylic = enabled
         self.update()
 
-    def set_state(self, state: State, detail: str) -> None:
+    def set_state(self, state: State, detail: Msg | None) -> None:
         self._state = state
+        self._detail_msg = detail
+        self._stats = None
         self._dot.set_color(status.COLORS[state])
-        self._title.setText(status.TITLES[state])
-        self._detail.setText(status.detail_for(state, detail))
-        self._primary.setText(status.primary_label(state))
+        self._show_state()
 
     def set_stats(self, stats: StreamStats) -> None:
         if self._state is State.STREAMING:
+            self._stats = stats
             self._detail.setText(status.stream_detail(stats))
+
+    def retranslate(self) -> None:
+        """Re-applies every visible text in the current language (connected to i18n.language_changed)."""
+        lang = i18n.current_language()
+        for button, key in self._tool_buttons:
+            button.setToolTip(tr(key, lang))
+        for label, key in self._field_labels:
+            label.setText(tr(key, lang))
+        self._outputs.retranslate()
+        self._show_state()
+
+    def _show_state(self) -> None:
+        lang = i18n.current_language()
+        self._title.setText(status.title(self._state, lang))
+        if self._stats is not None:
+            self._detail.setText(status.stream_detail(self._stats))
+        else:
+            self._detail.setText(status.detail_for(self._state, self._detail_msg, lang))
+        self._primary.setText(status.primary_label(self._state, lang))
 
     def set_outputs(self, outputs: Outputs, selected: str) -> None:
         self._outputs.set_outputs(outputs, selected)
@@ -263,6 +303,12 @@ class MainWindow(QWidget):
 
     def primary_text(self) -> str:
         return self._primary.text()
+
+    def field_labels(self) -> list[str]:
+        return [label.text() for label, _key in self._field_labels]
+
+    def tooltips(self) -> list[str]:
+        return [button.toolTip() for button, _key in self._tool_buttons]
 
     def output_items(self) -> list[tuple[str, str]]:
         return [(self._outputs.itemText(i), self._outputs.itemData(i)) for i in range(self._outputs.count())]

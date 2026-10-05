@@ -5,6 +5,7 @@ from unittest import mock
 
 import engine
 import relay
+from messages import msg
 
 
 class ParseArgsTest(unittest.TestCase):
@@ -22,7 +23,7 @@ class ParseArgsTest(unittest.TestCase):
 
 
 class PrintListenerTest(unittest.TestCase):
-    def test_prints_details_logs_and_stats(self):
+    def test_prints_details_logs_and_stats_in_english(self):
         out = io.StringIO()
         listener = relay.PrintListener()
         with contextlib.redirect_stdout(out):
@@ -30,27 +31,30 @@ class PrintListenerTest(unittest.TestCase):
             listener.on_log("[ffmpeg] warning")
             listener.on_stats(engine.StreamStats(2880, 1800, 60, 18.25, 40.0, 2, 0.5))
         self.assertEqual(out.getvalue().splitlines(), [
-            engine.WAITING_APP_DETAIL,
+            "Tablet plugged in. Open Orizon X on it.",
             "[ffmpeg] warning",
-            " 60 fps | latence moy  18.2 ms, max  40.0 ms | perdues 2 | RTT 0.50 ms",
+            " 60 fps | latency avg  18.2 ms, max  40.0 ms | dropped 2 | RTT 0.50 ms",
         ])
 
     def test_prints_only_the_states_that_say_what_to_do(self):
         out = io.StringIO()
         listener = relay.PrintListener()
         with contextlib.redirect_stdout(out):
-            listener.on_state(engine.State.WAITING_DEVICE, "Aucune tablette détectée.")
-            listener.on_state(engine.State.STREAMING, "Flux 2880×1800")  # doublon des lignes de journal
-            listener.on_state(engine.State.ERROR, "Protocole incompatible")
-            listener.on_state(engine.State.STOPPED, "Arrêté.")  # doublon de « Arrêt. »
-        self.assertEqual(out.getvalue().splitlines(), ["Aucune tablette détectée.", "Protocole incompatible"])
+            listener.on_state(engine.State.WAITING_DEVICE, msg("adb.no_device"))
+            listener.on_state(engine.State.STREAMING, msg("state.streaming", width=2880, height=1800))  # doublon du journal
+            listener.on_state(engine.State.ERROR, msg("error.protocol_mismatch", tablet=9, pc=1))
+            listener.on_state(engine.State.STOPPED, msg("state.stopped"))  # doublon de « Stopping. »
+        self.assertEqual(out.getvalue().splitlines(), [
+            "No tablet found. Plug in the USB cable and turn on USB debugging.",
+            "Incompatible protocol: tablet v9, PC v1. Update the app or the relay.",
+        ])
 
 
 class FakeEngine:
     def __init__(self, config, listener, *, ffmpeg, adb):
         self.config = config
         self.state = engine.State.ERROR
-        listener.on_state(engine.State.ERROR, "Protocole incompatible")
+        listener.on_state(engine.State.ERROR, msg("error.protocol_mismatch", tablet=9, pc=1))
 
     def start(self):
         pass
@@ -74,16 +78,23 @@ class MainTest(unittest.TestCase):
     def test_error_state_exits_with_1(self):
         code, out = self.run_main(["--encoder", "amf"])
         self.assertEqual(code, 1)
-        self.assertIn("Protocole incompatible", out)
+        self.assertIn("Incompatible protocol", out)
 
     def test_missing_tool_exits_with_1(self):
         def missing(name):
-            raise relay.tools.ToolMissing("ffmpeg introuvable.")
+            raise relay.tools.ToolMissing(msg("tools.ffmpeg_missing"))
         with mock.patch.object(relay.tools, "find_tool", side_effect=missing), \
                 mock.patch.object(relay.injector, "enable_dpi_awareness"), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(relay.main([]), 1)
-        self.assertIn("ffmpeg introuvable", err.getvalue())
+        self.assertIn("ffmpeg not found", err.getvalue())
+
+    def test_list_outputs_prints_english(self):
+        outputs = [(0, (2880, 1800))]
+        with mock.patch.object(relay.engine, "probe_outputs", return_value=outputs):
+            code, out = self.run_main(["--list-outputs"])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("--output 0: 2880x1800\nOnly screens on the default GPU are listed"), out)
 
 
 if __name__ == "__main__":

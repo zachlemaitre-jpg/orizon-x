@@ -3,6 +3,7 @@ import unittest
 
 import engine
 import tools
+from messages import msg
 
 OUTPUTS = [(0, (2560, 1600)), (1, (2880, 1800)), (2, None)]
 
@@ -45,10 +46,29 @@ class PickOutputTest(unittest.TestCase):
     def test_auto_without_match_is_fatal_with_the_list(self):
         with self.assertRaises(engine.FatalError) as raised:
             engine.pick_output("auto", OUTPUTS, 1920, 1200)
-        self.assertIn("Aucun écran en 1920x1200", str(raised.exception))
-        self.assertIn("--output 1 : 2880x1800", str(raised.exception))
+        error = raised.exception.msg
+        self.assertEqual(error, msg("error.no_matching_screen", width=1920, height=1200,
+                                    outputs=engine.describe_outputs(OUTPUTS)))
+        self.assertIn("Aucun écran en 1920x1200", error.text("fr"))
+        self.assertIn("--output 1 : 2880x1800", error.text("fr"))
         self.assertIn("ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de commande) :\n",
+                      error.text("fr"))
+        self.assertIn("No screen at 1920x1200", str(raised.exception))
+        self.assertIn("--output 1: 2880x1800", str(raised.exception))
+        self.assertIn("or pick another screen (Screen setting in the app, --output N on the command line):\n",
                       str(raised.exception))
+
+
+class DescribeOutputsTest(unittest.TestCase):
+    def test_one_line_per_screen_then_the_gpu_note(self):
+        self.assertEqual(engine.describe_outputs(OUTPUTS), msg("outputs.list", lines=[
+            msg("outputs.line", index=0, width=2560, height=1600),
+            msg("outputs.line", index=1, width=2880, height=1800),
+            msg("outputs.line_unknown", index=2),
+        ]))
+
+    def test_no_screen(self):
+        self.assertEqual(engine.describe_outputs([]), msg("outputs.none"))
 
 
 class ProbeOutputsTest(unittest.TestCase):
@@ -90,21 +110,21 @@ class FfmpegCommandTest(unittest.TestCase):
 class ResolveEncoderTest(unittest.TestCase):
     def test_auto_prefers_nvenc(self):
         run = FakeRun(ok_encoders=("nvenc", "amf"))
-        self.assertEqual(engine.resolve_encoder("ffmpeg", "auto", run), ("nvenc", "Encodeur : NVENC"))
+        self.assertEqual(engine.resolve_encoder("ffmpeg", "auto", run), ("nvenc", "Encoder: NVENC"))
 
     def test_auto_falls_back_to_amf(self):
         run = FakeRun(ok_encoders=("amf",))
         self.assertEqual(engine.resolve_encoder("ffmpeg", "auto", run),
-                         ("amf", "Encodeur : AMF (NVENC indisponible)"))
+                         ("amf", "Encoder: AMF (NVENC unavailable)"))
 
     def test_auto_without_any_encoder_is_fatal(self):
         with self.assertRaises(engine.FatalError) as raised:
             engine.resolve_encoder("ffmpeg", "auto", FakeRun())
-        self.assertIn("Aucun encodeur matériel H.264", str(raised.exception))
+        self.assertEqual(raised.exception.msg, msg("error.no_encoder"))
 
     def test_forced_encoder_is_not_probed(self):
         run = FakeRun()
-        self.assertEqual(engine.resolve_encoder("ffmpeg", "amf", run), ("amf", "Encodeur : AMF (forcé)"))
+        self.assertEqual(engine.resolve_encoder("ffmpeg", "amf", run), ("amf", "Encoder: AMF (forced)"))
         self.assertEqual(run.calls, [])
 
     def test_stop_between_probes_skips_the_next_one(self):
@@ -136,17 +156,18 @@ class AdbProblemTest(unittest.TestCase):
         self.assertIsNone(self.problem("List of devices attached\nR52\tdevice\n"))
 
     def test_no_device(self):
-        self.assertIn("Aucune tablette détectée", self.problem("List of devices attached\n\n"))
+        self.assertEqual(self.problem("List of devices attached\n\n"), msg("adb.no_device"))
 
     def test_unauthorized(self):
-        self.assertIn("non autorisée", self.problem("List of devices attached\nR52\tunauthorized\n"))
+        self.assertEqual(self.problem("List of devices attached\nR52\tunauthorized\n"), msg("adb.unauthorized"))
 
     def test_two_devices(self):
-        self.assertIn("exactement une tablette",
-                      self.problem("List of devices attached\nA\tdevice\nB\tdevice\n"))
+        self.assertEqual(self.problem("List of devices attached\nA\tdevice\nB\tdevice\n"),
+                         msg("adb.not_exactly_one", states="device, device"))
 
     def test_adb_failure_is_a_message_not_a_crash(self):
-        self.assertIn("adb ne répond pas", self.problem("", code=1, stderr="daemon not running"))
+        self.assertEqual(self.problem("", code=1, stderr="daemon not running"),
+                         msg("adb.failed", error="daemon not running"))
 
     def test_adb_calls_have_a_timeout(self):
         run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_code=0)
@@ -156,18 +177,22 @@ class AdbProblemTest(unittest.TestCase):
     def test_adb_devices_hanging_is_a_message(self):
         def hung(cmd, **kwargs):
             raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
-        self.assertEqual(engine.adb_problem("adb", hung), "adb ne répond pas (délai dépassé).")
+        self.assertEqual(engine.adb_problem("adb", hung), msg("adb.timeout"))
 
     def test_adb_forward_hanging_is_a_message(self):
         run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_hangs=True)
-        self.assertEqual(engine.ensure_forward("adb", run), "adb ne répond pas (délai dépassé).")
+        self.assertEqual(engine.ensure_forward("adb", run), msg("adb.timeout"))
+
+    def test_adb_forward_failure_is_a_message(self):
+        run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_code=1)
+        self.assertEqual(engine.ensure_forward("adb", run), msg("adb.forward_failed", error=""))
 
 
 class FormatStatsTest(unittest.TestCase):
-    def test_same_line_as_the_old_relay(self):
+    def test_one_english_line(self):
         stats = engine.StreamStats(2880, 1800, 60, 18.25, 40.0, 2, 0.5)
         self.assertEqual(engine.format_stats(stats),
-                         " 60 fps | latence moy  18.2 ms, max  40.0 ms | perdues 2 | RTT 0.50 ms")
+                         " 60 fps | latency avg  18.2 ms, max  40.0 ms | dropped 2 | RTT 0.50 ms")
 
 
 if __name__ == "__main__":

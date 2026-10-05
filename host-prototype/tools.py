@@ -12,19 +12,18 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from messages import MessageError, msg
+
 # Sans ce drapeau, chaque appel à adb ou ffmpeg depuis l'exe graphique ouvre une console qui clignote.
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 _EXE = ".exe" if os.name == "nt" else ""
 
-_MISSING = {
-    "ffmpeg": "ffmpeg introuvable. Recompile l'appli (build-pc.ps1) ou installe ffmpeg (winget install Gyan.FFmpeg).",
-    "adb": "adb introuvable. Recompile l'appli (build-pc.ps1) ou installe Android platform-tools.",
-}
+_MISSING = {"ffmpeg": "tools.ffmpeg_missing", "adb": "tools.adb_missing"}
 
 
-class ToolMissing(Exception):
-    """A required tool is nowhere to be found; the message tells the user what to do."""
+class ToolMissing(MessageError):
+    """A required tool is nowhere to be found; its Msg tells the user what to do."""
 
 
 def app_dir() -> Path:
@@ -47,7 +46,7 @@ def find_tool(name: str, *, bundled_dir: Path | None = None, sdk_dir: Path | Non
     on one PC keep killing each other's server; the bundled copy is the last resort.
     """
     if name not in _MISSING:
-        raise ValueError(f"outil inconnu : {name}")
+        raise ValueError(f"unknown tool: {name}")
     bundled = (bundled_dir if bundled_dir is not None else app_dir() / "tools") / f"{name}{_EXE}"
     if name == "ffmpeg":
         candidates = [bundled, which(name)]
@@ -57,4 +56,4 @@ def find_tool(name: str, *, bundled_dir: Path | None = None, sdk_dir: Path | Non
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return str(candidate)
-    raise ToolMissing(_MISSING[name])
+    raise ToolMissing(msg(_MISSING[name]))

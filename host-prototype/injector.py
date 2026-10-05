@@ -162,8 +162,8 @@ def find_target(width: int, height: int, available: list[Monitor] | None = None)
     if len(matches) == 1:
         return matches[0], ""
     if not matches:
-        return None, f"aucun écran Windows en {width}x{height}"
-    return None, f"{len(matches)} écrans en {width}x{height} : impossible de savoir lequel est la tablette"
+        return None, f"no Windows screen at {width}x{height}"
+    return None, f"{len(matches)} screens at {width}x{height}: cannot tell which one is the tablet"
 
 
 def _to_native(device: int, action: inputstate.PointerAction, origin: tuple[int, int]) -> POINTER_TYPE_INFO:
@@ -206,7 +206,7 @@ class Injector:
         self._last_inject = time.monotonic()
         self._stop = threading.Event()
         if not AVAILABLE:
-            self._disable("Windows 10 1809 ou plus récent requis (API Synthetic Pointer absente)")
+            self._disable("Windows 10 1809 or later required (Synthetic Pointer API missing)")
         threading.Thread(target=self._keepalive, name="input-keepalive", daemon=True).start()
 
     @property
@@ -254,11 +254,11 @@ class Injector:
         error = ctypes.get_last_error()
         if error == ERROR_ACCESS_DENIED:
             if not self._denied_reported:
-                self._log("Tactile refusé par Windows sur cette fenêtre (programme administrateur ?) : "
-                          "lance le relais en administrateur pour la piloter.")
+                self._log("Windows refused touch on this window (administrator program?): "
+                          "run the relay as administrator to control it.")
                 self._denied_reported = True
         else:
-            self._disable(f"InjectSyntheticPointerInput a échoué (erreur Windows {error})")
+            self._disable(f"InjectSyntheticPointerInput failed (Windows error {error})")
 
     def _device_handle(self, device: int) -> int | None:
         handle = self._handles.get(device)
@@ -269,23 +269,23 @@ class Injector:
         else:
             handle = _create_device(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT)
         if not handle:
-            self._disable(f"CreateSyntheticPointerDevice a échoué (erreur Windows {ctypes.get_last_error()})")
+            self._disable(f"CreateSyntheticPointerDevice failed (Windows error {ctypes.get_last_error()})")
             return None
         self._handles[device] = handle
         return handle
 
     def _disable(self, reason: str) -> None:
         self._disabled = True
-        self._log(f"Tactile désactivé : {reason}. La vidéo continue.")
+        self._log(f"Touch disabled: {reason}. Video continues.")
 
 
 def create_for_stream(width: int, height: int, log: Log = print) -> Injector | None:
     """Injector targeting the screen that has the stream's size, or None (with a message) if there isn't exactly one."""
     rect, problem = find_target(width, height)
     if rect is None:
-        log(f"Tactile désactivé : {problem}. La vidéo continue.")
+        log(f"Touch disabled: {problem}. Video continues.")
         return None
-    log(f"Tactile actif sur l'écran Windows {rect.width}x{rect.height} en ({rect.left}, {rect.top})")
+    log(f"Touch active on the Windows screen {rect.width}x{rect.height} at ({rect.left}, {rect.top})")
     return Injector(rect, log)
 
 

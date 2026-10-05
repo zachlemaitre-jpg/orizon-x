@@ -117,34 +117,34 @@ def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
         if msg_type == HELLO:
             magic, version, width, height, dpi = _HELLO.unpack(payload)
             if magic != MAGIC:
-                raise ProtocolError(f"magic invalide : {magic!r}")
+                raise ProtocolError(f"invalid magic: {magic!r}")
             return Hello(version, width, height, dpi)
         if msg_type == PING:
             return Ping(*_U64.unpack(payload))
         if msg_type == KEYFRAME_REQ:
             if payload:
-                raise ProtocolError(f"KEYFRAME_REQ avec un payload de {len(payload)} octets (attendu : vide)")
+                raise ProtocolError(f"KEYFRAME_REQ with a {len(payload)}-byte payload (expected: empty)")
             return KeyframeRequest()
         if msg_type == STATS:
             return Stats(*_STATS.unpack(payload))
         if msg_type == INPUT:
             return _decode_input(payload)
     except struct.error as e:
-        raise ProtocolError(f"payload invalide pour le type 0x{msg_type:02x} : {e}") from e
+        raise ProtocolError(f"invalid payload for type 0x{msg_type:02x}: {e}") from e
     return None
 
 
 def _decode_input(payload: bytes) -> Input:
     if len(payload) < _INPUT_HEAD.size:
-        raise ProtocolError(f"INPUT trop court : {len(payload)} octets")
+        raise ProtocolError(f"INPUT too short: {len(payload)} bytes")
     device, count = _INPUT_HEAD.unpack_from(payload)
     max_count = {DEVICE_TOUCH: MAX_TOUCH_CONTACTS, DEVICE_PEN: 1}.get(device)
     if max_count is None:
-        raise ProtocolError(f"INPUT : périphérique inconnu {device}")
+        raise ProtocolError(f"INPUT: unknown device {device}")
     if count > max_count:
-        raise ProtocolError(f"INPUT : {count} contacts pour le périphérique {device} (max {max_count})")
+        raise ProtocolError(f"INPUT: {count} contacts for device {device} (max {max_count})")
     if len(payload) != _INPUT_HEAD.size + _CONTACT.size * count:
-        raise ProtocolError(f"INPUT : {len(payload)} octets pour {count} contact(s)")
+        raise ProtocolError(f"INPUT: {len(payload)} bytes for {count} contact(s)")
     contacts = tuple(
         Contact(*_CONTACT.unpack_from(payload, _INPUT_HEAD.size + i * _CONTACT.size)) for i in range(count)
     )
@@ -156,7 +156,7 @@ def _read_exact(stream: BinaryIO, size: int) -> bytes:
     while len(data) < size:
         chunk = stream.read(size - len(data))
         if not chunk:
-            raise EOFError("connexion fermée")
+            raise EOFError("connection closed")
         data += chunk
     return bytes(data)
 
@@ -166,7 +166,7 @@ def read_message(stream: BinaryIO) -> TabletMessage:
     while True:
         msg_type, _flags, _reserved, length = HEADER.unpack(_read_exact(stream, HEADER.size))
         if length > MAX_PAYLOAD:
-            raise ProtocolError(f"payload trop gros : {length} octets")
+            raise ProtocolError(f"payload too large: {length} bytes")
         message = decode_payload(msg_type, _read_exact(stream, length))
         if message is not None:
             return message
