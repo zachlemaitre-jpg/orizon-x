@@ -159,6 +159,7 @@ class RelayEngine:
 - `start()`, `stop()`, `restart(config)` :
   - `restart` arrête puis relance ;
   - l'arrêt bloquant (≤ 3 s) tourne dans un thread de travail pour ne pas figer la fenêtre.
+- **Intention pendant un redémarrage** : le contrôleur retient si l'utilisateur veut le moteur en marche. `start()` et `restart()` la posent, `stop()` et `stop_blocking()` l'effacent. Le thread de `restart` ne relance le nouveau moteur que si elle est toujours posée une fois l'ancien arrêté : un Arrêter ou un Quitter pendant un redémarrage gagne. `stop_blocking()` attend aussi les redémarrages en cours (≤ `STOP_TIMEOUT_S` + 0,5 s), pour que Quitter ne parte jamais avant que l'ancienne session ait levé ses contacts.
 - Le moteur est injecté via une fabrique : les tests y mettent un faux moteur.
 
 ### 3.6 `app/glass.py`
@@ -197,7 +198,7 @@ class RelayEngine:
 
 ### 3.8 `app/tray.py`
 
-- `QSystemTrayIcon` avec le logo, superposé d'une pastille de couleur selon l'état (gris attente/arrêt, vert connecté, rouge erreur). L'infobulle reprend le titre et le détail.
+- `QSystemTrayIcon` avec le logo, superposé d'une pastille de couleur selon l'état, les mêmes que l'icône de la fenêtre (`status.COLORS`) : gris arrêté, ambre en attente (tablette ou app), vert connecté, rouge erreur. L'infobulle reprend le titre et le détail.
 - Clic gauche : affiche la fenêtre et la met au premier plan.
 - Menu du clic droit :
   1. statut (ligne non cliquable) ;
@@ -206,13 +207,15 @@ class RelayEngine:
   4. Ouvrir le journal ;
   5. Lancer avec Windows (case à cocher) ;
   6. Quitter.
-- **Quitter** : `controller.stop()` (bloquant, contacts levés), puis `app.quit()`.
+- **Quitter** : l'icône et la fenêtre disparaissent d'abord (sans bulle « tourne toujours »), puis `controller.stop_blocking()` (contacts levés, redémarrages en cours compris), puis `app.quit()`.
 
 ### 3.9 `app/main.py`
 
 - **Instance unique** : `QLocalServer` nommé `OrizonX-PC-<utilisateur>`.
-  - Un deuxième lancement se connecte, envoie `show`, puis quitte.
-  - La première instance affiche alors sa fenêtre.
+  - Un deuxième lancement se connecte, autorise le premier plan (`AllowSetForegroundWindow(ASFW_ANY)`), envoie `show`, puis quitte. Avec `--minimized`, il quitte sans rien envoyer.
+  - La première instance affiche alors sa fenêtre. Elle lit dès la connexion ce qui est déjà arrivé (le client se déconnecte aussitôt), puis à chaque `readyRead`.
+  - `setSocketOptions(UserAccessOption)` avant `listen` : une instance administrateur reste joignable par un lancement normal du même utilisateur.
+  - Si `listen()` échoue, l'erreur va au journal et l'appli quitte avec le code 1.
 - **Journal** : `logging` avec un `RotatingFileHandler` vers `%LOCALAPPDATA%\OrizonX\relay.log`, à 1 Mo × 3 fichiers. Toutes les lignes `on_log` et les traces d'exceptions y vont.
 - **Outils** : `find_tool` ; s'il en manque un, état `ERROR` avec le message, sans planter.
 - **Démarrage** : `--minimized` démarre caché, dans la zone de notification seulement. Dans tous les cas, le moteur démarre tout de suite.

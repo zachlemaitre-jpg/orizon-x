@@ -46,12 +46,28 @@ try {
     Pop-Location
 }
 
-if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+# Renommer d'abord : si le dossier est verrouillé, l'ancienne version reste intacte au lieu d'être à moitié effacée.
+$old = Join-Path $root "dist\OrizonX-PC.old"
+if (Test-Path $old) { Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue }  # reste d'une compilation précédente
+if (Test-Path $out) {
+    try {
+        Rename-Item $out "OrizonX-PC.old"
+    } catch {
+        throw "Impossible de remplacer $out (ou d'effacer $old) : ferme les fenêtres de l'Explorateur ouvertes dessus, et arrête adb s'il a été lancé depuis ce dossier (adb kill-server), puis relance la compilation."
+    }
+}
 Move-Item (Join-Path $staging "OrizonX") $out
+if (Test-Path $old) { Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue }
 
 $toolsDir = New-Item -ItemType Directory -Force (Join-Path $out "tools")
 $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
 Copy-Item $ffmpeg $toolsDir
+# winget installe ffmpeg via un lien symbolique : la licence est à côté de la cible, pas du lien.
+$item = Get-Item $ffmpeg
+if ($item.LinkType) {
+    $target = @($item.Target)[0]
+    $ffmpeg = if ([IO.Path]::IsPathRooted($target)) { $target } else { Join-Path (Split-Path $ffmpeg) $target }
+}
 $ffmpegRoot = Split-Path (Split-Path $ffmpeg)
 foreach ($name in "LICENSE", "README.txt") {
     $file = Join-Path $ffmpegRoot $name

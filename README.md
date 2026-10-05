@@ -15,7 +15,7 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
 ## Prérequis
 
 - Windows 11, Python ≥ 3.10 (lanceur `py`).
-- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan), dans le PATH (seulement pour compiler l'appli PC ; l'exe embarque ffmpeg et adb). Sur la machine de dev, il est installé dans `%LOCALAPPDATA%\Programs\ffmpeg\bin` (déjà ajouté au PATH utilisateur ; ouvrir un nouveau terminal après l'installation). Vérifier avec `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
+- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan), dans le PATH pour compiler l'appli PC et pour le mode debug `py relay.py` (l'exe compilé embarque ffmpeg et adb). Sur la machine de dev, il est installé dans `%LOCALAPPDATA%\Programs\ffmpeg\bin` (déjà ajouté au PATH utilisateur ; ouvrir un nouveau terminal après l'installation). Vérifier avec `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
 - Encodeur : **AMF** (iGPU AMD) fonctionne. **NVENC** exige un pilote NVIDIA ≥ 610 avec ce build de ffmpeg : mets à jour le pilote avant de choisir NVENC (ou `--encoder nvenc` en ligne de commande). En mode Auto, Orizon X retombe sur AMF si NVENC est indisponible.
 - Android Studio (SDK + JBR). `adb` est cherché dans le PATH puis dans `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
 - Tablette Android 11+ avec le débogage USB activé : Paramètres → À propos de la tablette → Informations sur le logiciel → taper 7 fois sur « Numéro de version », puis Options de développement → « Débogage USB ». Brancher le câble et accepter l'autorisation sur la tablette.
@@ -37,7 +37,7 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
 
    La croix range la fenêtre dans la zone de notification : le flux continue. Clic droit sur l'icône : Démarrer/Arrêter, journal (`%LOCALAPPDATA%\OrizonX\relay.log`), « Lancer avec Windows », Quitter. Réglages dans la fenêtre : écran capturé (Auto = celui à la taille de la tablette) et encodeur (Auto = NVENC si disponible, sinon AMF).
 
-   Mode debug en ligne de commande (même moteur) :
+   Mode debug en ligne de commande (même moteur ; **quitter d'abord l'appli PC** : icône de notification > Quitter, sinon les deux relais se disputent la tablette) :
    ```powershell
    cd host-prototype; py relay.py; cd ..
    ```
@@ -84,12 +84,15 @@ Pendant le flux, le doigt et le S Pen pilotent Windows à l'endroit touché de l
   Tant que le stylet est détecté, les doigts (la paume) sont ignorés.
 - **HUD** : appui long à 4 doigts (2 s, sans bouger).
 - **Écran ciblé** : le relais vise l'écran Windows qui a la taille du flux. S'il n'existe pas un écran unique de cette taille, le tactile se désactive mais la vidéo continue.
-- **Fenêtres administrateur** (Gestionnaire des tâches, installeurs) : elles ne répondent qu'à un relais **lancé en administrateur**.
+- **Fenêtres administrateur** (Gestionnaire des tâches, installeurs) : voir [Fenêtres administrateur](#fenêtres-administrateur).
 - **Autotest de l'injection**, sans tablette et sans clic (survol uniquement) : `cd host-prototype; py injector.py --selftest`. Il vérifie que le curseur arrive au pixel visé.
 
 ## Fenêtres administrateur
 
-Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (Gestionnaire des tâches, installeurs…) tant qu'Orizon X ne l'est pas aussi. Pour les piloter : clic droit sur le raccourci Orizon X > Exécuter en tant qu'administrateur.
+Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (Gestionnaire des tâches, installeurs…) tant qu'Orizon X ne l'est pas aussi. Pour les piloter :
+
+1. Quitter Orizon X d'abord (icône de notification > Quitter) : sinon le nouveau lancement ne fait que réafficher la fenêtre de l'instance déjà ouverte, qui n'est pas administrateur.
+2. Clic droit sur le raccourci Orizon X > Exécuter en tant qu'administrateur. En mode debug : `py relay.py` depuis un terminal administrateur.
 
 ## Appli PC : notes
 
@@ -99,6 +102,7 @@ Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (
 ## Appli PC : checklist
 
 - [ ] Double-clic sur le raccourci : fenêtre en verre, aucune console qui clignote, « En attente de la tablette ».
+- [ ] Le fond de la fenêtre est flouté (effet verre), pas transparent.
 - [ ] Tablette branchée, Orizon X ouverte : « Connecté », stats qui bougent, vidéo et tactile OK.
 - [ ] Croix : la fenêtre disparaît, le flux continue, une bulle s'affiche (la première fois seulement).
 - [ ] Clic sur l'icône de notification : la fenêtre revient. Deuxième double-clic sur le raccourci : la même fenêtre revient.
@@ -110,7 +114,7 @@ Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (
 
 ## Tests
 
-- Python : `cd host-prototype; py -m unittest discover -v`
+- Python : `cd host-prototype; .\.venv\Scripts\python.exe -m unittest discover -s tests -v`. Les tests Qt (fenêtre, zone de notification, contrôleur) ont besoin de PySide6, installé dans `host-prototype\.venv` par `build-pc.ps1` ; avec `py`, ils sont ignorés (skipped).
 - Android (JVM) : `cd android; .\gradlew.bat :app:testDebugUnitTest`
 
 ## Checklist d'intégration (phase 1)
