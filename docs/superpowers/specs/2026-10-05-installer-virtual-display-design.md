@@ -174,3 +174,27 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
   - le lancement de l'appli, en ERROR « no tablet », la sandbox n'ayant pas d'USB ;
   - la désinstallation avec retrait du pilote.
   - L'écran virtuel lui-même ne peut pas apparaître dans la sandbox (GPU virtuel) : c'est vérifié sur le vrai PC.
+
+## 8. Révision après exploration (prime sur §2, §3 et §6)
+
+Validée par l'utilisateur le 2026-10-05, après l'exploration `docs/notes/vdd-control.md` :
+
+- **L'écran virtuel n'est jamais retiré au niveau du pilote.**
+  - VDD garde `count` = 1 : avec 0, il crée quand même un écran.
+  - Les commandes de rechargement du pipe plantent l'hôte du pilote (bug upstream #351).
+  - L'appli **active ou désactive le chemin d'affichage** du moniteur VDD via `SetDisplayConfig`, comme « Déconnecter cet écran » dans Windows. Ça ne demande pas les droits admin et ne redémarre pas le pilote.
+  - Activation au HELLO, désactivation après la grâce de 5 s, désactivation au lancement de l'appli et par `--cleanup`.
+  - Le pipe ne sert qu'à `PING` (détection du pilote).
+- **Résolutions.**
+  - L'installateur écrit dans le XML une liste de résolutions de tablettes courantes, puis redémarre le périphérique une fois (`pnputil /restart-device`, il est déjà élevé).
+  - La liste : 2880×1800, 2560×1600, 1920×1200, 1280×800, 2000×1200, 2800×1752, 2960×1848, 2944×1840, 3000×1876, 3200×2000, 2304×1440, 2048×1536, 2732×2048, 2224×1668, 2360×1640, 2388×1668, 2160×1620, 2400×1080, 1920×1080, 2560×1440, 1600×2560, toutes à 60 Hz.
+  - **Au HELLO**, si la résolution exacte de la tablette n'est pas proposée par le moniteur VDD, l'appli choisit la plus proche **de même format** (même rapport largeur/hauteur à 1 % près, sinon la plus grande qui tient) et la tablette affiche des bandes noires.
+  - La fenêtre propose alors **« Add exact resolution »** : une seule demande UAC, qui lance `OrizonX.exe --add-resolution WxH` en admin pour ajouter la résolution au XML et redémarrer le périphérique.
+  - Le flux reprend tout seul quand la tablette se reconnecte.
+- **Installation du pilote sans devcon** (devcon est un outil Microsoft non redistribuable).
+  - `OrizonX.exe --install-driver <inf>` crée le périphérique racine `Root\MttVDD` avec SetupAPI (`SetupDiCreateDeviceInfo` + `SPDRP_HARDWAREID` + `DIF_REGISTERDEVICE`), puis installe le pilote par `UpdateDriverForPlugAndPlayDevicesW`.
+  - `--remove-driver` fait `SetupDiRemoveDevice`, puis `pnputil /delete-driver <oemNN.inf> /uninstall`.
+  - La détection d'un pilote déjà présent passe par l'ID matériel `Root\MttVDD` dans `HKLM\SYSTEM\CurrentControlSet\Enum\ROOT\DISPLAY`.
+- **Invite « SignPath Foundation »** : on la laisse apparaître (choix A de l'utilisateur). Une page de l'installateur l'annonce juste avant : « Windows will ask you to install the virtual display driver (publisher: SignPath Foundation). Click Install. »
+- **Langue** : écrite aussi dans `HKLM\Software\OrizonX\Language`. L'appli lit ses réglages, puis HKCU, puis HKLM, puis prend l'anglais.
+- **Licence VDD** : le texte MIT vient du dépôt GitHub VDD, le paquet winget n'en contenant pas.
