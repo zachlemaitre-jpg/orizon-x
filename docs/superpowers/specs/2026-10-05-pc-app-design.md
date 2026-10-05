@@ -44,6 +44,8 @@ Tout vit dans `host-prototype/`. Les modules existants (`protocol`, `annexb`, `i
 | `engine.py` (nouveau) | `RelayEngine` : la boucle du relais (attente, adb forward, ffmpeg, flux, tactile) dans un thread, avec états, journal, stats et arrêt propre. |
 | `relay.py` (réduit) | CLI : analyse les arguments et affiche les événements du moteur. Mêmes options et même comportement qu'aujourd'hui. |
 | `app/settings.py` | Réglages JSON dans `%APPDATA%\OrizonX\settings.json`. |
+| `app/status.py` | Titres, couleurs et libellés par état, partagés par la fenêtre et l'icône de notification (sans Qt). |
+| `app/make_icons.py` | Génère `app/assets/orizonx.png` et `orizonx.ico` depuis le logo. |
 | `app/autostart.py` | « Lancer avec Windows » via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, valeur `OrizonX`. |
 | `app/controller.py` | Pont thread moteur → thread Qt (signaux), démarrer, arrêter, relancer, repli d'encodeur. |
 | `app/glass.py` | Effet verre Windows 11 (DWM Acrylic) et repli peint. |
@@ -185,7 +187,7 @@ class RelayEngine:
   | `STOPPED` | Arrêté | « Clique sur Démarrer » |
 
 - Réglages :
-  - **Écran** : `Auto (taille de la tablette)` ou la liste des écrans connus. La liste est remplie par `probe_outputs` dans un thread au lancement, puis rafraîchie à l'ouverture de la liste.
+  - **Écran** : `Auto (taille de la tablette)` ou la liste des écrans connus. La liste est remplie par `probe_outputs` dans un thread à chaque affichage de la fenêtre. La rafraîchir pendant que la liste déroulante est ouverte la ferait sauter.
   - **Encodeur** : `Auto`, `AMF (AMD)` ou `NVENC (NVIDIA)`.
   - Changer un réglage l'enregistre et relance le moteur.
 - Bouton principal : **Arrêter** (moteur actif), **Démarrer** (`STOPPED`) ou **Réessayer** (`ERROR`).
