@@ -1,6 +1,7 @@
 ﻿<#
 .SYNOPSIS
-Compile l'appli PC Orizon X dans dist\OrizonX-PC (OrizonX.exe + ffmpeg + adb).
+Compile l'appli PC Orizon X dans dist\OrizonX-PC (OrizonX.exe + ffmpeg + adb), puis l'installateur
+dist\OrizonX-Setup.exe (installer\orizonx.iss) si Inno Setup 6 est installé.
 
 .PARAMETER Shortcuts
 Crée aussi les raccourcis « Orizon X » dans le menu Démarrer et sur le bureau.
@@ -96,3 +97,37 @@ if ($Shortcuts) {
 }
 
 Write-Host "OK : $out\OrizonX.exe"
+
+# --- Installateur (Inno Setup 6 ; pas la 7, autre gamme) ---
+function Find-Iscc {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe" })
+    )
+    foreach ($path in $candidates) {
+        if ($path -and (Test-Path $path)) { return $path }
+    }
+    $onPath = Get-Command ISCC -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    return $null
+}
+
+$versionFile = Join-Path $hostDir "version.py"
+$versionMatch = Select-String -Path $versionFile -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+if (-not $versionMatch) { throw "Version introuvable dans $versionFile" }
+$version = $versionMatch.Matches[0].Groups[1].Value
+
+$iscc = Find-Iscc
+if (-not $iscc) {
+    Write-Host "Inno Setup 6 introuvable : installateur non compilé (l'appli, elle, est prête)."
+    Write-Host "Pour l'installer : winget install --id JRSoftware.InnoSetup -e --scope user"
+    Write-Host "  (ISCC.exe attendu dans %LOCALAPPDATA%\Programs\Inno Setup 6, Program Files (x86)\Inno Setup 6, ou sur le PATH)"
+    return
+}
+$setup = Join-Path $root "dist\OrizonX-Setup.exe"
+# Sortie filtrée : on garde les avertissements et le résumé, pas la liste des fichiers compressés.
+& $iscc "/DAppVersion=$version" "/DSourceDir=$out" "/O$(Join-Path $root 'dist')" "/FOrizonX-Setup" `
+    (Join-Path $root "installer\orizonx.iss") |
+    Where-Object { $_ -notmatch '^\s*(Compressing|Parsing|Reading|Preprocessing|Compiling|Updating|Creating|Deleting|Copyright|Portions|https://|Inno Setup 6 Command-Line)' }
+if ($LASTEXITCODE) { throw "ISCC a échoué (code $LASTEXITCODE)" }
+Write-Host ("OK : $setup ({0:N1} Mo, version $version)" -f ((Get-Item $setup).Length / 1MB))

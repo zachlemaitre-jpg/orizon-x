@@ -1,0 +1,19 @@
+Virtual Display Driver (VDD) by VirtualDrivers / MikeTheTech, x64 build, signed by SignPath Foundation.
+
+Project:  https://github.com/VirtualDrivers/Virtual-Display-Driver
+Licence:  MIT (LICENSE in this folder, taken from the repository; the release package contains none)
+Package:  winget VirtualDrivers.Virtual-Display-Driver, version 25.7.23
+          (release https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/tag/25.7.23)
+Files:    SignedDrivers\x86\VDD\{MttVDD.inf, MttVDD.dll, mttvdd.cat} of that package.
+          The folder is named "x86" but holds the x64 driver: MttVDD.dll PE machine = 0x8664 (AMD64).
+Driver:   DriverVer = 12/24/2024,11.30.4.434 (the 25.7.23 release re-ships the 24.12.24 driver,
+          see docs/notes/vdd-control.md).
+Copied:   2026-10-06
+
+SHA-256:
+  MttVDD.inf  550d211fe481e74dfe3f9d724ed78be48b3a9113405965d683d9373e8d672f5d
+  MttVDD.dll  c9ca837f57a98fbd43bc416a7f535a95843626e7759eaf85cf0cd7ce334dbb05
+  mttvdd.cat  08a0093fc9b2e32b287a6f8a77ca4de0a31830d29fc33d2b13a918dc859468f6
+
+Do not edit these three files: mttvdd.cat signs the exact bytes of MttVDD.inf and MttVDD.dll
+(.gitattributes keeps them binary, no line-ending conversion).

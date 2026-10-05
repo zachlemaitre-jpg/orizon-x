@@ -1,0 +1,75 @@
+ORIZON X - LICENCES
+===================
+
+Please read the terms below. Orizon X bundles third-party components, each under
+its own licence.
+
+
+1. Orizon X
+-----------
+
+Orizon X (the PC application and its installer) is (c) its author. All rights
+reserved. It is distributed free of charge, as is, without any warranty.
+
+
+2. Virtual Display Driver (VDD) - MIT licence
+---------------------------------------------
+
+Orizon X installs the Virtual Display Driver (MttVDD, "Virtual Display Driver by
+MTT", signed by SignPath Foundation) to create the tablet's virtual screen.
+Project: https://github.com/VirtualDrivers/Virtual-Display-Driver
+The full text is also installed in the "vdd\LICENSE" file.
+
+MIT License
+
+Copyright (c) 2024 Virtual Display
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+3. FFmpeg - GNU General Public License version 3
+------------------------------------------------
+
+Orizon X runs FFmpeg (tools\ffmpeg.exe) as a separate program to encode the
+video sent to the tablet. FFmpeg is (c) the FFmpeg developers and is licensed
+under the GNU General Public License version 3 (GPLv3), because this build
+enables GPL components (for example libx264 and libx265).
+
+- Full licence text: tools\ffmpeg-LICENSE (installed with Orizon X), or
+  https://www.gnu.org/licenses/gpl-3.0.html
+- Build used: a static Windows build from www.gyan.dev; its exact version, its
+  configuration and the commit of its source code are listed in
+  tools\ffmpeg-README.txt (installed with Orizon X).
+- Source code: https://github.com/FFmpeg/FFmpeg (the commit named in
+  tools\ffmpeg-README.txt), and https://ffmpeg.org/download.html
+
+FFmpeg is distributed WITHOUT ANY WARRANTY; without even the implied warranty
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GPLv3 for more
+details.
+
+
+4. Android Debug Bridge (adb) - Apache License 2.0
+--------------------------------------------------
+
+Orizon X runs adb (tools\adb.exe, AdbWinApi.dll, AdbWinUsbApi.dll) from the
+Android SDK Platform-Tools to talk to the tablet over USB. These files are
+(c) The Android Open Source Project, licensed under the Apache License,
+Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+Notices: tools\adb-NOTICE.txt (installed with Orizon X).
+Source code: https://android.googlesource.com/platform/packages/modules/adb
