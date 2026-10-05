@@ -6,35 +6,37 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.orizonx.client.R
 import com.orizonx.client.ScreenInfo
 import com.orizonx.client.protocol.Protocol
 
@@ -49,41 +51,39 @@ fun WaitingScreen(reason: String?, screen: ScreenInfo) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         BlobBackground()
         GlassCard(Modifier.fillMaxWidth(0.55f).wrapContentWidth().widthIn(max = 620.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                GlassText("Orizon X", size = 26.sp, weight = FontWeight.Medium)
-                Spacer(Modifier.weight(1f))
-                GlassText("protocole v${Protocol.VERSION}", size = 12.sp, alpha = 0.7f)
-            }
-            Spacer(Modifier.height(18.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PulsingDot()
-                Spacer(Modifier.width(10.dp))
-                GlassText("En attente du PC…", size = 16.sp)
-            }
-            if (reason != null) {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Image(
+                    painterResource(R.drawable.ic_orizonx_logo),
+                    contentDescription = "Logo Orizon X",
+                    modifier = Modifier.size(120.dp),
+                )
                 Spacer(Modifier.height(8.dp))
-                GlassText(reason, size = 13.sp, color = Amber)
-            }
-            Spacer(Modifier.height(18.dp))
-            GlassText("Sur le PC :", size = 12.sp, alpha = 0.75f)
-            Spacer(Modifier.height(6.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.Black.copy(alpha = 0.25f))
-                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                GlassText("py relay.py --encoder amf", size = 13.sp, mono = true)
-            }
-            Spacer(Modifier.height(12.dp))
-            GlassText("Appui long à 4 doigts : infos de connexion", size = 12.sp, alpha = 0.75f)
-            Spacer(Modifier.height(16.dp))
-            Row {
-                GlassText("${screen.width}×${screen.height}", size = 12.sp, alpha = 0.7f)
-                Spacer(Modifier.width(20.dp))
-                GlassText("127.0.0.1:${Protocol.PORT}", size = 12.sp, alpha = 0.7f)
+                BasicText(
+                    "Orizon X",
+                    style = TextStyle(color = Color.White, fontSize = 44.sp, fontFamily = BrandFont),
+                )
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PulsingDot()
+                    Spacer(Modifier.width(10.dp))
+                    GlassText("En attente du PC…", size = 16.sp)
+                }
+                if (reason != null) {
+                    Spacer(Modifier.height(8.dp))
+                    GlassText(reason, size = 13.sp, color = Amber, align = TextAlign.Center)
+                }
+                Spacer(Modifier.height(14.dp))
+                GlassText("Lance Orizon X sur le PC.", size = 13.sp, alpha = 0.85f)
+                Spacer(Modifier.height(10.dp))
+                GlassText("Appui long à 4 doigts : infos de connexion", size = 12.sp, alpha = 0.75f)
+                Spacer(Modifier.height(18.dp))
+                Row {
+                    GlassText("${screen.width}×${screen.height}", size = 12.sp, alpha = 0.7f)
+                    Spacer(Modifier.width(20.dp))
+                    GlassText("127.0.0.1:${Protocol.PORT}", size = 12.sp, alpha = 0.7f)
+                    Spacer(Modifier.width(20.dp))
+                    GlassText("protocole v${Protocol.VERSION}", size = 12.sp, alpha = 0.7f)
+                }
             }
         }
     }

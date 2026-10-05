@@ -13,11 +13,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.orizonx.client.R
+
+/** Police du titre « Orizon X » (MAZAGLA), réservée à la marque. */
+val BrandFont = FontFamily(Font(R.font.mazagla))
 
 private val CardShape = RoundedCornerShape(20.dp)
 private val PanelShape = RoundedCornerShape(14.dp)
@@ -59,6 +65,7 @@ fun GlassText(
     mono: Boolean = false,
     weight: FontWeight = FontWeight.Normal,
     color: Color = Color.White,
+    align: TextAlign? = null,
 ) {
     BasicText(
         text = text,
@@ -67,6 +74,7 @@ fun GlassText(
             fontSize = size,
             fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
             fontWeight = weight,
+            textAlign = align ?: TextAlign.Unspecified,
         ),
     )
 }

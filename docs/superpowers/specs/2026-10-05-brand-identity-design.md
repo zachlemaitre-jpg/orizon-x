@@ -23,7 +23,7 @@ L'écran d'attente de la tablette et la fenêtre PC portent l'identité du logo 
 - **Logo** : `android/app/src/main/res/drawable/ic_orizonx_logo.xml`, un VectorDrawable avec `viewportWidth`/`Height` à 1024 et les trois tracés du SVG copiés tels quels (`pathData`), en `fillColor="#FFFFFFFF"`.
 - **Police** : `android/app/src/main/res/font/mazagla.otf` (nom de ressource en minuscules). Dans `ui/Glass.kt`, `val BrandFont = FontFamily(Font(R.font.mazagla))`.
 - **`WaitingScreen`** : la carte en verre est centrée et son contenu centré horizontalement. De haut en bas :
-  1. le logo à 96 dp (`Image(painterResource(R.drawable.ic_orizonx_logo))`) ;
+  1. le logo à 120 dp (`Image(painterResource(R.drawable.ic_orizonx_logo))`) ;
   2. « Orizon X » en `BrandFont`, 44 sp, blanc ;
   3. 20 dp d'espace ;
   4. le statut « En attente du PC… » avec le point qui pulse ; le motif d'erreur éventuel en ambre dessous ;
