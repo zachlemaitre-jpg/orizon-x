@@ -121,6 +121,30 @@ class _InjectorCase(unittest.TestCase):
 
 
 
+class CreateForStreamTest(_InjectorCase):
+    def test_given_rect_is_used_without_looking_for_the_screen(self):
+        def no_lookup():
+            raise AssertionError("monitors() ne doit pas être appelé")
+
+        with mock.patch.object(injector, "monitors", no_lookup):
+            target = injector.create_for_stream(2880, 1800, self.log.append, rect=self.RECT)
+        self.addCleanup(target.close)
+        self.assertEqual(target.rect, self.RECT)
+        self.assertIn("Touch active on the Windows screen 2880x1800 at (2560, -207)", self.log)
+
+    def test_without_rect_the_screen_of_the_stream_size_is_used(self):
+        with mock.patch.object(injector, "monitors", lambda: FindTargetTest.MONITORS):
+            target = injector.create_for_stream(2880, 1800, self.log.append)
+        self.addCleanup(target.close)
+        self.assertEqual(target.rect, Rect(2560, -207, 2880, 1800))
+
+    def test_without_rect_an_ambiguous_size_disables_touch(self):
+        twins = FindTargetTest.MONITORS + [(Rect(-2880, 0, 2880, 1800), False, "X")]
+        with mock.patch.object(injector, "monitors", lambda: twins):
+            self.assertIsNone(injector.create_for_stream(2880, 1800, self.log.append))
+        self.assertTrue(any(line.startswith("Touch disabled: 2 screens") for line in self.log))
+
+
 class InjectorTest(_InjectorCase):
     def test_devices_are_created_lazily_once_per_type(self):
         self.assertEqual(self.win32.calls, [])

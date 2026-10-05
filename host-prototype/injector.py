@@ -213,6 +213,11 @@ class Injector:
     def enabled(self) -> bool:
         return not self._disabled
 
+    @property
+    def rect(self) -> inputstate.Rect:
+        """The targeted screen, in physical desktop pixels."""
+        return self._rect
+
     def handle(self, message: protocol.Input) -> None:
         with self._lock:
             if self._disabled:
@@ -279,12 +284,15 @@ class Injector:
         self._log(f"Touch disabled: {reason}. Video continues.")
 
 
-def create_for_stream(width: int, height: int, log: Log = print) -> Injector | None:
-    """Injector targeting the screen that has the stream's size, or None (with a message) if there isn't exactly one."""
-    rect, problem = find_target(width, height)
+def create_for_stream(width: int, height: int, log: Log = print,
+                      rect: inputstate.Rect | None = None) -> Injector | None:
+    """Injector targeting `rect` when the caller knows the captured screen (the virtual screen, the main screen);
+    otherwise the screen that has the stream's size, or None (with a message) if there isn't exactly one."""
     if rect is None:
-        log(f"Touch disabled: {problem}. Video continues.")
-        return None
+        rect, problem = find_target(width, height)
+        if rect is None:
+            log(f"Touch disabled: {problem}. Video continues.")
+            return None
     log(f"Touch active on the Windows screen {rect.width}x{rect.height} at ({rect.left}, {rect.top})")
     return Injector(rect, log)
 

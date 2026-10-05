@@ -18,6 +18,15 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(status.title(State.STREAMING, "en"), "Connected")
         self.assertEqual(status.title(State.STREAMING, "fr"), "Connecté")
 
+    def test_preparing_display_is_an_active_waiting_state(self):
+        self.assertEqual(status.title(State.PREPARING_DISPLAY, "en"), "Preparing the screen")
+        self.assertEqual(status.title(State.PREPARING_DISPLAY, "fr"), "Préparation de l'écran")
+        self.assertEqual(status.COLORS[State.PREPARING_DISPLAY], status.COLORS[State.WAITING_DEVICE])
+        self.assertTrue(status.is_active(State.PREPARING_DISPLAY))
+        self.assertEqual(status.primary_label(State.PREPARING_DISPLAY, "en"), "Stop")
+        self.assertEqual(status.detail_for(State.PREPARING_DISPLAY, msg("state.preparing_display"), "fr"),
+                         "Préparation de l'écran…")
+
     def test_primary_label(self):
         self.assertEqual(status.primary_label(State.STREAMING, "fr"), "Arrêter")
         self.assertEqual(status.primary_label(State.WAITING_DEVICE, "fr"), "Arrêter")

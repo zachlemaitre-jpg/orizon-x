@@ -18,6 +18,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "state.preparing_capture": {"en": "Preparing the capture…", "fr": "Préparation de la capture…"},
     "state.waiting_app": {"en": "Tablet plugged in. Open Orizon X on it.",
                           "fr": "Tablette branchée : ouvre Orizon X dessus."},
+    "state.preparing_display": {"en": "Preparing the screen…", "fr": "Préparation de l'écran…"},
     "state.starting_stream": {"en": "Starting the stream…", "fr": "Démarrage du flux…"},
     "state.streaming": {"en": "Stream {width}×{height}", "fr": "Flux {width}×{height}"},
     "state.stopped": {"en": "Stopped.", "fr": "Arrêté."},
@@ -73,6 +74,12 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "The virtual screen has no resolution that fits the tablet ({width}×{height}). Reinstall Orizon X.",
         "fr": "L'écran virtuel n'a aucune résolution adaptée à la tablette ({width}×{height}). Réinstalle Orizon X.",
     },
+    "display.not_capturable": {
+        "en": "The virtual screen ({width}×{height}) is not among the screens that can be captured. "
+              "Switch to Duplicate mode, or reinstall Orizon X:\n{outputs}",
+        "fr": "L'écran virtuel ({width}×{height}) ne fait pas partie des écrans capturables. "
+              "Passe en mode Dupliquer, ou réinstalle Orizon X :\n{outputs}",
+    },
     "display.activate_failed": {
         "en": "Windows could not turn on the virtual screen: {error}",
         "fr": "Windows n'a pas pu allumer l'écran virtuel : {error}",
@@ -90,6 +97,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "status.stopped": {"en": "Stopped", "fr": "Arrêté"},
     "status.waiting_device": {"en": "Waiting for the tablet", "fr": "En attente de la tablette"},
     "status.waiting_app": {"en": "Open Orizon X on the tablet", "fr": "Ouvre Orizon X sur la tablette"},
+    "status.preparing_display": {"en": "Preparing the screen", "fr": "Préparation de l'écran"},
     "status.streaming": {"en": "Connected", "fr": "Connecté"},
     "status.error": {"en": "Error", "fr": "Erreur"},
     "status.click_start": {"en": "Click Start.", "fr": "Clique sur Démarrer."},

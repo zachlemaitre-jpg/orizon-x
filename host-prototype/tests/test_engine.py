@@ -10,7 +10,9 @@ from pathlib import Path
 import engine
 import protocol
 import tools
+from inputstate import Rect
 from messages import msg
+from virtual_display import PrepareResult
 
 SAMPLE = (Path(__file__).parent / "sample.h264").read_bytes()
 State = engine.State
@@ -254,11 +256,54 @@ class FakeInjectors:
     def __init__(self, error=None):
         self.error = error
         self.created = []
+        self.rects = []  # écran visé passé par le moteur (None : trouvé par la taille du flux)
 
-    def __call__(self, width, height, log):
+    def __call__(self, width, height, log, rect=None):
         injector = FakeInjector(width, height, self.error)
         self.created.append(injector)
+        self.rects.append(rect)
         return injector
+
+
+PRIMARY = Rect(0, 0, 2560, 1600)
+VDD_RECT = Rect(2560, 0, 2880, 1800)
+
+
+class FakeDisplay:
+    """virtual_display.VirtualDisplay stand-in. block=True: prepare() waits for `proceed` (or should_stop)."""
+
+    def __init__(self, result=None, error=None, block=False, on_prepare=None):
+        self.result = result or PrepareResult(VDD_RECT, True, (2880, 1800))
+        self.error = error
+        self.on_prepare = on_prepare
+        self.calls = []
+        self.entered = threading.Event()
+        self.proceed = threading.Event()
+        self.saw_stop = threading.Event()
+        if not block:
+            self.proceed.set()
+
+    def prepare(self, width, height, dpi, position, scale, first_time, should_stop):
+        self.calls.append(("prepare", width, height, dpi, position, scale, first_time))
+        self.entered.set()
+        while not self.proceed.wait(0.01):
+            if should_stop():
+                self.saw_stop.set()
+                return None
+        if self.error is not None:
+            raise self.error
+        if self.on_prepare is not None:
+            self.on_prepare()
+        return self.result
+
+    def release(self, immediate=False):
+        self.calls.append(("release", immediate))
+
+    def releases(self):
+        return [c for c in self.calls if c[0] == "release"]
+
+    def prepares(self):
+        return [c for c in self.calls if c[0] == "prepare"]
 
 
 class Recorder:
@@ -266,7 +311,13 @@ class Recorder:
         self.states = []
         self.logs = []
         self.stats = []
+        self.displays = []
         self._cond = threading.Condition()
+
+    def on_display(self, info):
+        with self._cond:
+            self.displays.append(info)
+            self._cond.notify_all()
 
     def on_state(self, state, detail):
         with self._cond:
@@ -308,19 +359,26 @@ def video_then_dead():
 
 
 def make_engine(test, run=None, popen=None, connect=None, injectors=None, config=engine.Config(encoder="amf"),
-                recorder=None):
+                recorder=None, monitors=None, **engine_args):
+    """engine_args: display, first_time, on_layout_applied (RelayEngine keywords)."""
     recorder = recorder or Recorder()
+    listed = [(PRIMARY, True, r"\\.\DISPLAY1"), (VDD_RECT, False, r"\\.\DISPLAY9")] if monitors is None else monitors
     deps = engine.Deps(
         run=run or FakeRun(),
         popen=popen or FakePopen(live),
         create_connection=connect or FakeConnect(),
         create_injector=injectors or FakeInjectors(),
+        monitors=lambda: list(listed),
         poll_s=0.01,
         retry_delay_s=0.0,
     )
-    relay = engine.RelayEngine(config, recorder, ffmpeg="ffmpeg.exe", adb="adb.exe", deps=deps)
+    relay = engine.RelayEngine(config, recorder, ffmpeg="ffmpeg.exe", adb="adb.exe", deps=deps, **engine_args)
     test.addCleanup(relay.stop)
     return relay, recorder
+
+
+def output_index(popen_call):
+    return int(re.search(r"ddagrab=output_idx=(\d+)", " ".join(popen_call[0])).group(1))
 
 
 def first_tablet(connect, timeout=5.0):
@@ -658,6 +716,285 @@ class FatalTest(unittest.TestCase):
         self.assert_fatal(rec, relay, "error.protocol_mismatch")
         relay.start()
         rec.wait_for(lambda: sum(1 for s, _ in rec.states if s is State.ERROR) == 2)
+
+
+class NoDisplayListener:
+    """A listener without the optional on_display callback (the CLI's PrintListener has none)."""
+
+    def __init__(self):
+        self.rec = Recorder()
+
+    def on_state(self, state, detail):
+        self.rec.on_state(state, detail)
+
+    def on_log(self, line):
+        self.rec.on_log(line)
+
+    def on_stats(self, stats):
+        self.rec.on_stats(stats)
+
+
+class DisplayTest(unittest.TestCase):
+    """Extend mode with a virtual display: reader first, then PREPARING_DISPLAY, prepare, probe, ffmpeg."""
+
+    EXTEND = engine.Config(encoder="amf", position="left", scale="150")
+
+    def vdd_run(self):
+        """ddagrab sees only the main screen until the virtual screen is prepared, then the VDD output as #1."""
+        run = FakeRun(outputs=((0, (2560, 1600)),))
+        return run, lambda: run.outputs.__setitem__(1, (2880, 1800))
+
+    def streaming_engine(self, display, config=None, **kwargs):
+        run, appear = self.vdd_run()
+        if display.on_prepare is None:
+            display.on_prepare = appear
+        connect = kwargs.pop("connect", FakeConnect())
+        relay, rec = make_engine(self, run=run, connect=connect, config=config or self.EXTEND, display=display,
+                                 **kwargs)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        return relay, rec, connect, tablet
+
+    def test_config_defaults(self):
+        config = engine.Config()
+        self.assertEqual((config.mode, config.position, config.scale), ("extend", "right", "auto"))
+
+    def test_ping_is_answered_while_the_screen_is_prepared(self):
+        run, appear = self.vdd_run()
+        display = FakeDisplay(block=True, on_prepare=appear)
+        connect, popen = FakeConnect(), FakePopen(live)
+        relay, rec = make_engine(self, run=run, connect=connect, popen=popen, config=self.EXTEND, display=display)
+        self.addCleanup(display.proceed.set)
+        relay.start()
+        tablet = first_tablet(connect)
+        self.assertTrue(display.entered.wait(5))
+        rec.wait_state(State.PREPARING_DISPLAY)
+        tablet.send(ping_frame(424242))
+        _type, _flags, payload = tablet.next_message(protocol.PONG)
+        self.assertEqual(protocol._PONG.unpack(payload)[0], 424242)
+        self.assertEqual(popen.calls, [])  # ffmpeg ne démarre qu'une fois l'écran prêt
+        display.proceed.set()
+        tablet.next_message(protocol.CONFIG)
+        self.assertEqual(len(popen.calls), 1)
+        self.assertEqual(output_index(popen.calls[0]), 1)
+
+    def test_states_prepare_arguments_and_capture_of_the_virtual_screen(self):
+        injectors = FakeInjectors()
+        display = FakeDisplay()
+        relay, rec, _connect, _tablet = self.streaming_engine(display, injectors=injectors)
+        wait_until(lambda: injectors.created)
+        states = [s for s, _ in rec.states]
+        preparing = states.index(State.PREPARING_DISPLAY)
+        self.assertLess(preparing, states.index(State.STREAMING))
+        self.assertEqual(rec.states[preparing][1], msg("state.preparing_display"))
+        self.assertEqual(rec.states[preparing][1].text("en"), "Preparing the screen…")
+        self.assertEqual(rec.states[preparing][1].text("fr"), "Préparation de l'écran…")
+        self.assertEqual(display.prepares(), [("prepare", 2880, 1800, 274, "left", "150", False)])
+        self.assertEqual(injectors.rects, [VDD_RECT])  # le tactile vise l'écran virtuel, pas un écran de même taille
+        self.assertIn("Captured screen: #1 (virtual screen 2880x1800)", rec.logs)
+        self.assertEqual(display.releases(), [])
+
+    def test_virtual_screen_output_when_the_main_screen_has_the_same_size(self):
+        main, vdd = Rect(0, 0, 2880, 1800), Rect(2880, 0, 2880, 1800)
+        for monitors, expected in (([(main, True, "D1"), (vdd, False, "D9")], 1),
+                                   ([(vdd, False, "D9"), (main, True, "D1")], 0)):
+            with self.subTest(monitors=monitors):
+                popen, injectors = FakePopen(live), FakeInjectors()
+                display = FakeDisplay(result=PrepareResult(vdd, True, (2880, 1800)))
+                connect = FakeConnect()
+                relay, rec = make_engine(self, run=FakeRun(outputs=((0, (2880, 1800)), (1, (2880, 1800)))),
+                                         connect=connect, popen=popen, injectors=injectors, monitors=monitors,
+                                         config=self.EXTEND, display=display)
+                relay.start()
+                first_tablet(connect).next_message(protocol.CONFIG)
+                wait_until(lambda: injectors.created)
+                self.assertEqual(output_index(popen.calls[0]), expected)
+                self.assertEqual(injectors.rects, [vdd])
+                relay.stop()
+
+    def test_no_ddagrab_output_at_the_prepared_size_is_fatal(self):
+        popen = FakePopen(live)
+        display = FakeDisplay(on_prepare=lambda: None)
+        relay, rec = make_engine(self, run=FakeRun(outputs=((0, (2560, 1600)),)), popen=popen, config=self.EXTEND,
+                                 display=display)
+        relay.start()
+        rec.wait_state(State.ERROR)
+        self.assertEqual(rec.states[-1][1], msg("display.not_capturable", width=2880, height=1800,
+                                                 outputs=engine.describe_outputs([(0, (2560, 1600))])))
+        self.assertTrue(relay.wait(2))
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(display.releases(), [("release", False)])
+
+    def test_prepare_error_stops_the_engine_with_its_message(self):
+        popen = FakePopen(live)
+        display = FakeDisplay(error=engine.FatalError(msg("display.timeout")))
+        relay, rec = make_engine(self, popen=popen, config=self.EXTEND, display=display)
+        relay.start()
+        rec.wait_state(State.ERROR)
+        self.assertEqual(rec.states[-1], (State.ERROR, msg("display.timeout")))
+        self.assertTrue(relay.wait(2))
+        self.assertIs(relay.state, State.ERROR)
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(display.releases(), [("release", False)])  # l'écran a pu s'allumer : il s'éteindra
+
+    def test_stop_during_prepare_ends_quietly(self):
+        layout_applied = []
+        popen, connect = FakePopen(live), FakeConnect()
+        display = FakeDisplay(block=True)
+        relay, rec = make_engine(self, popen=popen, connect=connect, config=self.EXTEND, display=display,
+                                 first_time=lambda: True, on_layout_applied=lambda: layout_applied.append(1))
+        relay.start()
+        self.assertTrue(display.entered.wait(5))
+        started = time.monotonic()
+        relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
+        self.assertFalse(relay.is_running())
+        self.assertTrue(display.saw_stop.is_set())
+        self.assertEqual(rec.states[-1], (State.STOPPED, msg("state.stopped")))
+        self.assertNotIn(State.ERROR, [s for s, _ in rec.states])
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(layout_applied, [])  # rien n'a été disposé
+        self.assertEqual(display.releases(), [("release", False)])
+        first_tablet(connect).wait_closed()
+
+    def test_tablet_leaving_during_prepare_ends_the_session(self):
+        popen, connect = FakePopen(live), FakeConnect()
+        display = FakeDisplay(block=True)
+        relay, rec = make_engine(self, popen=popen, connect=connect, config=self.EXTEND, display=display)
+        relay.start()
+        tablet = first_tablet(connect)
+        self.assertTrue(display.entered.wait(5))
+        connect.refuse = True
+        tablet.leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertTrue(display.saw_stop.is_set())
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(display.releases(), [("release", False)])
+        self.assertTrue(relay.is_running())
+
+    def test_release_with_grace_when_the_tablet_leaves(self):
+        display = FakeDisplay()
+        relay, rec, connect, tablet = self.streaming_engine(display)
+        connect.refuse = True
+        tablet.leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertEqual(display.releases(), [("release", False)])
+
+    def test_normal_stop_releases_with_grace(self):
+        display = FakeDisplay()
+        relay, rec, _connect, _tablet = self.streaming_engine(display)
+        relay.stop()
+        self.assertFalse(relay.is_running())
+        self.assertEqual(display.releases(), [("release", False)])
+
+    def test_quit_releases_immediately(self):
+        display = FakeDisplay()
+        relay, rec, _connect, _tablet = self.streaming_engine(display)
+        relay.stop(immediate_display_release=True)
+        self.assertFalse(relay.is_running())
+        self.assertEqual(display.releases(), [("release", True)])
+        self.assertEqual(rec.states[-1], (State.STOPPED, msg("state.stopped")))
+
+    def test_quit_during_the_grace_delay_releases_immediately(self):
+        display = FakeDisplay()
+        relay, rec, connect, tablet = self.streaming_engine(display)
+        connect.refuse = True
+        tablet.leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        relay.stop(immediate_display_release=True)
+        self.assertEqual(display.releases(), [("release", False), ("release", True)])
+
+    def test_restart_after_quit_uses_the_grace_again(self):
+        display = FakeDisplay()
+        relay, rec, connect, _tablet = self.streaming_engine(display)
+        relay.stop(immediate_display_release=True)
+        relay.start()
+        wait_until(lambda: len(connect.tablets) == 2)
+        connect.tablets[1].next_message(protocol.CONFIG)
+        relay.stop()
+        self.assertEqual(display.releases(), [("release", True), ("release", False)])
+
+    def test_display_info_reports_an_exact_mode(self):
+        display = FakeDisplay()
+        relay, rec, _connect, _tablet = self.streaming_engine(display)
+        rec.wait_for(lambda: rec.displays)
+        self.assertEqual(rec.displays, [engine.DisplayInfo((2880, 1800), (2880, 1800), True, VDD_RECT)])
+
+    def test_nearest_mode_is_logged_and_reported(self):
+        smaller = Rect(2560, 0, 2560, 1600)
+        display = FakeDisplay(result=PrepareResult(smaller, False, (2560, 1600)), on_prepare=lambda: None)
+        connect, injectors = FakeConnect(), FakeInjectors()
+        relay, rec = make_engine(self, run=FakeRun(outputs=((0, (2560, 1600)), (1, (2560, 1600)))),
+                                 connect=connect, injectors=injectors, config=self.EXTEND, display=display,
+                                 monitors=[(PRIMARY, True, "D1"), (smaller, False, "D9")])
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        rec.wait_for(lambda: rec.displays)
+        self.assertEqual(rec.displays, [engine.DisplayInfo((2880, 1800), (2560, 1600), False, smaller)])
+        self.assertIn("Virtual screen: no 2880x1800 mode, nearest is 2560x1600 (black bars on the tablet)", rec.logs)
+        wait_until(lambda: injectors.created)
+        self.assertEqual(injectors.rects, [smaller])
+
+    def test_listener_without_on_display_still_streams(self):
+        listener = NoDisplayListener()
+        display = FakeDisplay(result=PrepareResult(VDD_RECT, False, (2880, 1800)))
+        relay, _rec, _connect, _tablet = self.streaming_engine(display, recorder=listener)
+        listener.rec.wait_state(State.STREAMING)
+        self.assertTrue(relay.is_running())
+
+    def test_layout_is_applied_the_first_time_only(self):
+        applied, asked = [], []
+
+        def first_time():
+            asked.append(1)
+            return not applied
+
+        display = FakeDisplay()
+        relay, rec, connect, first = self.streaming_engine(display, first_time=first_time,
+                                                           on_layout_applied=lambda: applied.append(1))
+        first.leave()
+        wait_until(lambda: len(connect.tablets) == 2)
+        connect.tablets[1].next_message(protocol.CONFIG)
+        self.assertEqual([call[6] for call in display.prepares()], [True, False])
+        self.assertEqual(len(asked), 2)
+        self.assertEqual(applied, [1])
+
+    def test_duplicate_mode_captures_the_main_screen_without_the_virtual_display(self):
+        left = Rect(-1920, 0, 1920, 1080)
+        popen, injectors, display, connect = FakePopen(live), FakeInjectors(), FakeDisplay(), FakeConnect()
+        relay, rec = make_engine(self, run=FakeRun(outputs=((0, (1920, 1080)), (1, (2560, 1600)))), popen=popen,
+                                 injectors=injectors, connect=connect, monitors=[(left, False, "D2"), (PRIMARY, True, "D1")],
+                                 config=engine.Config(encoder="amf", mode="duplicate"), display=display)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertEqual(injectors.rects, [PRIMARY])
+        self.assertIn("Captured screen: #1 (main screen 2560x1600)", rec.logs)
+        self.assertNotIn(State.PREPARING_DISPLAY, [s for s, _ in rec.states])
+        connect.refuse = True
+        tablet.leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        relay.stop(immediate_display_release=True)
+        self.assertEqual(display.calls, [])
+
+    def test_duplicate_mode_falls_back_to_output_0(self):
+        popen, injectors = FakePopen(live), FakeInjectors()
+        relay, rec = make_engine(self, run=FakeRun(outputs=((0, (1920, 1080)),)), popen=popen, injectors=injectors,
+                                 monitors=[(PRIMARY, True, "D1")], config=engine.Config(encoder="amf", mode="duplicate"))
+        relay.start()
+        wait_until(lambda: injectors.created)
+        self.assertEqual(output_index(popen.calls[0]), 0)
+        self.assertEqual(injectors.rects, [None])  # écran principal non reconnu : le tactile cherche par la taille
+
+    def test_duplicate_mode_keeps_an_explicit_output(self):
+        popen = FakePopen(live)
+        relay, rec = make_engine(self, popen=popen, config=engine.Config(encoder="amf", mode="duplicate", output="3"))
+        relay.start()
+        rec.wait_state(State.STREAMING)
+        self.assertEqual(output_index(popen.calls[0]), 3)
 
 
 if __name__ == "__main__":
