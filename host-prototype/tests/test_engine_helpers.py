@@ -63,6 +63,18 @@ class ProbeOutputsTest(unittest.TestCase):
         self.assertEqual(outputs, [(0, (2880, 1800)), (1, (2880, 1800))])
         self.assertEqual(len(calls), 2)
 
+    def test_a_hung_probe_ends_the_list(self):
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(kwargs.get("timeout"))
+            if len(calls) == 2:
+                raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+            return subprocess.CompletedProcess(cmd, 0, "", "Stream #0:0: Video: bgra, 2880x1800")
+
+        self.assertEqual(engine.probe_outputs("ffmpeg", run=run), [(0, (2880, 1800))])
+        self.assertEqual(calls, [engine.ENCODER_PROBE_TIMEOUT_S] * 2)
+
 
 class FfmpegCommandTest(unittest.TestCase):
     def test_uses_given_path_encoder_output_and_rate(self):

@@ -115,18 +115,22 @@ def probe_outputs(ffmpeg: str, max_outputs: int = 8, run: Run = subprocess.run,
                   should_stop: Callable[[], bool] = lambda: False) -> Outputs:
     """Captures one frame per ddagrab output (default D3D11 adapter) and returns (index, (width, height)).
 
-    If should_stop() turns true, returns the outputs found so far without running the next probe.
+    If should_stop() turns true, or a probe times out, returns the outputs found so far.
     """
     outputs: Outputs = []
     for index in range(max_outputs):
         if should_stop():
             break
-        result = run(
-            [ffmpeg, "-nostdin", "-hide_banner", "-f", "lavfi",
-             "-i", f"ddagrab=output_idx={index}:framerate=1,hwdownload,format=bgra",
-             "-frames:v", "1", "-f", "null", "-"],
-            capture_output=True, text=True, errors="replace", creationflags=tools.NO_WINDOW,
-        )
+        try:
+            result = run(
+                [ffmpeg, "-nostdin", "-hide_banner", "-f", "lavfi",
+                 "-i", f"ddagrab=output_idx={index}:framerate=1,hwdownload,format=bgra",
+                 "-frames:v", "1", "-f", "null", "-"],
+                capture_output=True, text=True, errors="replace", creationflags=tools.NO_WINDOW,
+                timeout=ENCODER_PROBE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            break  # ffmpeg bloqué (GPU endormi…) : on garde les écrans déjà trouvés
         if result.returncode != 0:
             break  # les index sont contigus : le premier échec marque la fin
         size = re.search(r"\b(\d{3,5})x(\d{3,5})\b", result.stderr)
