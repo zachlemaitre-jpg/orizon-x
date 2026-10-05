@@ -9,14 +9,14 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
 | Dossier | Contenu |
 |---|---|
 | `protocol/` | Référence du protocole TABX v1 et vecteurs de test partagés |
-| `host-prototype/` | Relais Python (phase 1) : ffmpeg → protocole TABX → tablette |
+| `host-prototype/` | Relais Python (phase 1) : ffmpeg → protocole TABX → tablette ; `app/` : appli PC (fenêtre + zone de notification) |
 | `android/` | App Android (Kotlin, Compose) : réception, décodage MediaCodec, interface |
 
 ## Prérequis
 
 - Windows 11, Python ≥ 3.10 (lanceur `py`).
-- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan), dans le PATH. Sur la machine de dev, il est installé dans `%LOCALAPPDATA%\Programs\ffmpeg\bin` (déjà ajouté au PATH utilisateur ; ouvrir un nouveau terminal après l'installation). Vérifier avec `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
-- Encodeur : **AMF** (iGPU AMD) fonctionne. **NVENC** exige un pilote NVIDIA ≥ 610 avec ce build de ffmpeg : mets à jour le pilote avant d'utiliser `--encoder nvenc`.
+- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan), dans le PATH (seulement pour compiler l'appli PC ; l'exe embarque ffmpeg et adb). Sur la machine de dev, il est installé dans `%LOCALAPPDATA%\Programs\ffmpeg\bin` (déjà ajouté au PATH utilisateur ; ouvrir un nouveau terminal après l'installation). Vérifier avec `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
+- Encodeur : **AMF** (iGPU AMD) fonctionne. **NVENC** exige un pilote NVIDIA ≥ 610 avec ce build de ffmpeg : mets à jour le pilote avant de choisir NVENC (ou `--encoder nvenc` en ligne de commande). En mode Auto, Orizon X retombe sur AMF si NVENC est indisponible.
 - Android Studio (SDK + JBR). `adb` est cherché dans le PATH puis dans `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
 - Tablette Android 11+ avec le débogage USB activé : Paramètres → À propos de la tablette → Informations sur le logiciel → taper 7 fois sur « Numéro de version », puis Options de développement → « Débogage USB ». Brancher le câble et accepter l'autorisation sur la tablette.
 
@@ -28,20 +28,29 @@ Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-
    cd android; .\gradlew.bat :app:installDebug; cd ..
    ```
 2. Ouvrir **Orizon X** sur la tablette : écran d'attente en verre dépoli.
-3. Lancer le relais :
-   ```powershell
-   cd host-prototype; py relay.py --encoder amf; cd ..
-   ```
-   Options : `--output auto|N` (par défaut `auto` : l'écran à la taille de la tablette ; pour dupliquer l'écran principal, `--output 0`), `--list-outputs`, `--fps 60`, `--bitrate 30M`, `--encoder nvenc` (pilote ≥ 610).
+3. Lancer **Orizon X** sur le PC :
+   - la première fois, compiler l'appli (environ 2 min, crée aussi les raccourcis) :
+     ```powershell
+     .\build-pc.ps1 -Shortcuts
+     ```
+   - ensuite : raccourci **Orizon X** (menu Démarrer ou bureau). La fenêtre attend la tablette toute seule ; l'ordre de lancement n'a pas d'importance.
 
-   Le relais attend la tablette et l'app tout seul (il refait `adb forward` à chaque essai) : l'ordre de lancement n'a pas d'importance. Les demandes de keyframe après une erreur de décodage sont journalisées.
+   La croix range la fenêtre dans la zone de notification : le flux continue. Clic droit sur l'icône : Démarrer/Arrêter, journal (`%LOCALAPPDATA%\OrizonX\relay.log`), « Lancer avec Windows », Quitter. Réglages dans la fenêtre : écran capturé (Auto = celui à la taille de la tablette) et encodeur (Auto = NVENC si disponible, sinon AMF).
+
+   Mode debug en ligne de commande (même moteur) :
+   ```powershell
+   cd host-prototype; py relay.py; cd ..
+   ```
+   Options : `--encoder auto|nvenc|amf` (par défaut `auto`), `--output auto|N` (par défaut `auto` : l'écran à la taille de la tablette ; pour dupliquer l'écran principal, `--output 0`), `--list-outputs`, `--fps 60`, `--bitrate 30M`.
+
+   Le relais refait `adb forward` à chaque essai, donc il attend la tablette et l'app tout seul. Les demandes de keyframe après une erreur de décodage sont journalisées.
 4. Appui long à 4 doigts (2 s, sans bouger) sur la tablette pendant le flux : affiche/masque le HUD (fps, latence envoi→affichage, p50/p99 de session, offset d'horloge, décodeur).
 
 La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : elle exclut la capture et l'encodage côté PC. La latence de bout en bout se mesure en filmant les deux écrans.
 
 ## Second écran étendu
 
-Sans configuration, le relais **duplique** un écran existant. Pour un vrai écran étendu, il faut un moniteur virtuel. En attendant le driver maison (phase 3), on utilise [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver), un driver signé : pas besoin du mode test.
+Sans configuration, Orizon X **duplique** un écran existant. Pour un vrai écran étendu, il faut un moniteur virtuel. En attendant le driver maison (phase 3), on utilise [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver), un driver signé : pas besoin du mode test.
 
 1. Installer : `winget install --id=VirtualDrivers.Virtual-Display-Driver -e`. Lancer ensuite **VDD Control** (dans `%LOCALAPPDATA%\Microsoft\WinGet\Packages\VirtualDrivers.Virtual-Display-Driver_*`) et cliquer **une seule fois** sur « Install Driver » : chaque clic crée un adaptateur de plus.
 2. Configurer `C:\VirtualDisplayDriver\vdd_settings.xml` :
@@ -50,11 +59,9 @@ Sans configuration, le relais **duplique** un écran existant. Pour un vrai écr
 
    Cliquer ensuite sur « Restart Driver » dans VDD Control.
 3. Dans Paramètres → Écran : « Étendre ces affichages », écran virtuel en 2880×1800 à 200 %, placé du côté où se trouve la tablette.
-4. Lancer le relais : par défaut (`--output auto`), il capture l'écran qui a la taille de la tablette (2880×1800), ce qui vise donc l'écran virtuel. Les numéros d'écran changent quand on branche ou débranche un moniteur, d'où ce mode automatique.
-   ```powershell
-   py relay.py --encoder amf
-   ```
-   Pour voir les écrans ou en forcer un : `py relay.py --list-outputs`, puis `--output N`.
+4. Lancer Orizon X : en mode Auto, elle capture l'écran qui a la taille de la tablette (2880×1800), ce qui vise donc l'écran virtuel. Les numéros d'écran changent quand on branche ou débranche un moniteur, d'où ce mode automatique.
+
+   Pour voir les écrans ou en forcer un, en ligne de commande : `py relay.py --list-outputs`, puis `--output N`.
 
 **À savoir :**
 - **Désinstaller le driver (VDD Control ou Gestionnaire de périphériques) avant toute mise à jour de pilote GPU**, sinon risque d'écran noir au démarrage.
@@ -79,6 +86,27 @@ Pendant le flux, le doigt et le S Pen pilotent Windows à l'endroit touché de l
 - **Écran ciblé** : le relais vise l'écran Windows qui a la taille du flux. S'il n'existe pas un écran unique de cette taille, le tactile se désactive mais la vidéo continue.
 - **Fenêtres administrateur** (Gestionnaire des tâches, installeurs) : elles ne répondent qu'à un relais **lancé en administrateur**.
 - **Autotest de l'injection**, sans tablette et sans clic (survol uniquement) : `cd host-prototype; py injector.py --selftest`. Il vérifie que le curseur arrive au pixel visé.
+
+## Fenêtres administrateur
+
+Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (Gestionnaire des tâches, installeurs…) tant qu'Orizon X ne l'est pas aussi. Pour les piloter : clic droit sur le raccourci Orizon X > Exécuter en tant qu'administrateur.
+
+## Appli PC : notes
+
+- Le premier lancement de l'exe peut être ralenti par l'analyse de l'antivirus. Les suivants sont rapides.
+- « Lancer avec Windows » (menu de l'icône) n'existe que dans l'appli compilée, pas en lançant les sources avec `py`.
+
+## Appli PC : checklist
+
+- [ ] Double-clic sur le raccourci : fenêtre en verre, aucune console qui clignote, « En attente de la tablette ».
+- [ ] Tablette branchée, Orizon X ouverte : « Connecté », stats qui bougent, vidéo et tactile OK.
+- [ ] Croix : la fenêtre disparaît, le flux continue, une bulle s'affiche (la première fois seulement).
+- [ ] Clic sur l'icône de notification : la fenêtre revient. Deuxième double-clic sur le raccourci : la même fenêtre revient.
+- [ ] Câble débranché puis rebranché : retour en attente, puis reconnexion seule.
+- [ ] Changement d'encodeur et d'écran : relance, réglages gardés après redémarrage de l'appli.
+- [ ] Quitter en plein flux : la tablette affiche « PC déconnecté », aucun contact ne reste posé.
+- [ ] Lancer avec Windows coché, puis session rouverte : l'appli démarre dans la zone de notification.
+- [ ] Auto sur secteur et sur batterie : l'encodeur choisi est dans le journal.
 
 ## Tests
 
