@@ -34,6 +34,16 @@ class TextsTest(unittest.TestCase):
         for key, texts in messages.TEXTS.items():
             self.assertEqual(placeholders(texts["en"]), placeholders(texts["fr"]), key)
 
+    def test_keys_used_in_the_code_exist_and_every_key_is_used(self):
+        namespaces = {key.split(".")[0] for key in messages.TEXTS}
+        pattern = re.compile(r'"((?:%s)\.[a-z0-9_.]+)"' % "|".join(sorted(namespaces)))
+        used = set()
+        for path in source_files():
+            used.update(pattern.findall(path.read_text(encoding="utf-8")))
+        self.assertGreater(len(used), 20)  # le motif trouve bien les clés
+        self.assertEqual(sorted(used - set(messages.TEXTS)), [])  # une faute de frappe planterait l'appli (tr strict)
+        self.assertEqual(sorted(set(messages.TEXTS) - used), [])
+
 
 class TrTest(unittest.TestCase):
     def test_translates_with_arguments(self):

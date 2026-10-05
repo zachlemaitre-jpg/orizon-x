@@ -143,6 +143,12 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
         save_settings()
         controller.restart(engine.Config(output=current.output, encoder=current.encoder))
 
+    def on_language(lang: str) -> None:
+        if current.language != lang:
+            current.language = lang  # choix explicite : il prime désormais sur celui de l'installateur
+            save_settings()
+        i18n.set_language(lang)  # textes réappliqués tout de suite ; le flux continue
+
     def on_toggle() -> None:
         if controller.state in (engine.State.STOPPED, engine.State.ERROR):
             controller.start()
@@ -179,6 +185,7 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
     controller.stats.connect(window.set_stats)
     window.output_changed.connect(lambda value: on_setting("output", value))
     window.encoder_changed.connect(lambda value: on_setting("encoder", value))
+    window.language_chosen.connect(on_language)
     window.primary_clicked.connect(on_toggle)
     window.closed_to_tray.connect(on_closed_to_tray)
     window.shown.connect(prober.probe)

@@ -31,6 +31,7 @@ class WindowTest(unittest.TestCase):
         self.events = []
         self.window.output_changed.connect(lambda v: self.events.append(("output", v)))
         self.window.encoder_changed.connect(lambda v: self.events.append(("encoder", v)))
+        self.window.language_chosen.connect(lambda v: self.events.append(("language", v)))
         self.window.closed_to_tray.connect(lambda: self.events.append(("closed",)))
 
     def tearDown(self):
@@ -110,12 +111,13 @@ class WindowTest(unittest.TestCase):
         self.window.set_state(State.STOPPED, msg("state.stopped"))
         self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
                          ("Arrêté", "Clique sur Démarrer.", "Démarrer"))
-        self.assertEqual(self.window.field_labels(), ["Écran", "Encodeur"])
+        self.assertEqual(self.window.field_labels(), ["Écran", "Encodeur", "Langue"])
         self.assertEqual(self.window.tooltips(), ["Réduire", "Fermer (Orizon X continue dans la zone de notification)"])
         i18n.set_language("en")
         self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
                          ("Stopped", "Click Start.", "Start"))
-        self.assertEqual(self.window.field_labels(), ["Screen", "Encoder"])
+        self.assertEqual(self.window.field_labels(), ["Screen", "Encoder", "Language"])
+        self.assertEqual(self.window.selected_language(), "en")  # la liste suit une bascule faite ailleurs
         self.assertEqual(self.window.tooltips(), ["Minimize", "Close (Orizon X keeps running in the notification area)"])
         self.assertEqual(self.window.output_items(), [("Auto (tablet size)", "auto"), ("Screen 0 — 2560×1600", "0")])
         self.assertEqual(self.window.selected_output(), "0")
@@ -128,6 +130,18 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.detail_text(), "Tablette branchée : ouvre Orizon X dessus.")
         self.assertEqual(self.window.output_items(), [("Auto (taille de la tablette)", "auto"), ("Écran 0 — 2560×1600", "0")])
         self.assertEqual(self.events, [])  # changer de langue ne touche pas aux réglages
+
+    def test_language_list_shows_each_language_in_its_own_name(self):
+        self.assertEqual(self.window.language_items(), [("English", "en"), ("Français", "fr")])
+        self.assertEqual(self.window.selected_language(), "fr")
+
+    def test_choosing_a_language_only_emits(self):
+        self.window.choose_language("en")
+        self.assertEqual(self.events, [("language", "en")])
+        self.assertEqual(self.window.primary_text(), "Démarrer")  # la bascule passe par i18n.set_language (main.wire)
+
+    def test_everything_fits_in_the_window(self):
+        self.assertLessEqual(self.window.layout().minimumSize().height(), self.window.height())
 
     def test_language_switch_keeps_the_stream_stats(self):
         self.window.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))

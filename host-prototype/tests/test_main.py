@@ -93,6 +93,19 @@ class WireTest(unittest.TestCase):
                                      "The stream continues. Click the Orizon X icon to open the window again.")
         self.assertTrue(self.current.first_close_hint_shown)
 
+    def test_language_choice_switches_live_saves_and_keeps_the_stream(self):
+        self.assertEqual(self.window.primary_text(), "Démarrer")
+        with mock.patch.object(self.controller, "restart") as restart:
+            self.window.choose_language("en")
+            self.assertEqual((self.window.primary_text(), self.tray.toggle_text()), ("Start", "Start"))
+            self.assertEqual(i18n.current_language(), "en")
+            self.assertEqual(self.current.language, "en")
+            self.assertEqual(main.settings_store.load(self.settings_path).language, "en")
+            self.window.choose_language("fr")
+            self.assertEqual((self.window.primary_text(), self.tray.toggle_text()), ("Démarrer", "Démarrer"))
+            self.assertEqual(main.settings_store.load(self.settings_path).language, "fr")
+            restart.assert_not_called()
+
     def test_quit_hides_first_then_stops_without_the_close_hint(self):
         self.window.show()
         self.assertTrue(self.window.isVisible() and self.tray.is_visible())

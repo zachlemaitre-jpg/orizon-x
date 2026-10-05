@@ -11,6 +11,7 @@ from engine import Outputs, State, StreamStats
 from messages import Msg
 
 ENCODER_ITEMS = (("Auto", "auto"), ("AMF (AMD)", "amf"), ("NVENC (NVIDIA)", "nvenc"))
+LANGUAGE_ITEMS = (("English", "en"), ("Français", "fr"))  # chaque langue dans sa propre langue : jamais traduits
 RADIUS = 14.0
 
 STYLE_BASE = """
@@ -123,6 +124,7 @@ class TitleBar(QWidget):
 class MainWindow(QWidget):
     output_changed = Signal(str)
     encoder_changed = Signal(str)
+    language_chosen = Signal(str)
     primary_clicked = Signal()
     closed_to_tray = Signal()
     shown = Signal()
@@ -134,7 +136,7 @@ class MainWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle("Orizon X")
         self.setWindowIcon(QIcon(logo))
-        self.setFixedSize(360, 400)
+        self.setFixedSize(360, 440)
         brand_family = brand.load_brand_font()
         self.setStyleSheet(build_style(brand_family))
         self._acrylic = False
@@ -185,12 +187,18 @@ class MainWindow(QWidget):
         for label, value in ENCODER_ITEMS:
             self._encoders.addItem(label, value)
         self._encoders.activated.connect(lambda _i: self.encoder_changed.emit(self._encoders.currentData()))
+        self._languages = QComboBox(self)
+        for label, value in LANGUAGE_ITEMS:
+            self._languages.addItem(label, value)
+        self._languages.activated.connect(lambda _i: self.language_chosen.emit(self._languages.currentData()))
 
         form = QGridLayout()
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(8)
         self._field_labels: list[tuple[QLabel, str]] = []
-        for row, (key, combo) in enumerate((("window.screen", self._outputs), ("window.encoder", self._encoders))):
+        fields = (("window.screen", self._outputs), ("window.encoder", self._encoders),
+                  ("window.language", self._languages))
+        for row, (key, combo) in enumerate(fields):
             label = QLabel(self)
             label.setObjectName("field")
             self._field_labels.append((label, key))
@@ -256,6 +264,7 @@ class MainWindow(QWidget):
             button.setToolTip(tr(key, lang))
         for label, key in self._field_labels:
             label.setText(tr(key, lang))
+        self._languages.setCurrentIndex(max(0, self._languages.findData(lang)))  # sans signal : activated = clic
         self._outputs.retranslate()
         self._show_state()
 
@@ -325,6 +334,17 @@ class MainWindow(QWidget):
         index = self._encoders.findData(value)
         self._encoders.setCurrentIndex(index)
         self._encoders.activated.emit(index)
+
+    def language_items(self) -> list[tuple[str, str]]:
+        return [(self._languages.itemText(i), self._languages.itemData(i)) for i in range(self._languages.count())]
+
+    def selected_language(self) -> str:
+        return self._languages.currentData()
+
+    def choose_language(self, value: str) -> None:
+        index = self._languages.findData(value)
+        self._languages.setCurrentIndex(index)
+        self._languages.activated.emit(index)
 
     # --- événements Qt ---
 
