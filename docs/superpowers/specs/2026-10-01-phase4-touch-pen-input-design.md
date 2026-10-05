@@ -1,7 +1,7 @@
 # TabX — Phase 4 : tactile et stylet vers le PC (design)
 
 Date : 2026-10-01
-Statut : validé, implémenté sur la branche `phase4-touch-pen` (essai sur la tablette en cours)
+Statut : implémenté et validé sur la tablette le 2026-10-05 (tap, défilement, stylet avec pression, paume, HUD)
 Prérequis : phase 1 (`2026-10-01-phase1-video-pipeline-design.md`), fusionnée dans `master`. Écran étendu fourni par Virtual Display Driver (écran virtuel 2880×1800 à 200 %).
 
 ## 1. Objectif et périmètre

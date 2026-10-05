@@ -151,3 +151,15 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 - Critère p50 ≤ 20 ms : **atteint**. Critère p99 ≤ 40 ms : **non atteint**. Les pics (~1 image sur 60) coïncident avec les IDR envoyées chaque seconde, plus lourdes à transférer et à décoder.
 - Pistes, si le besoin se fait sentir : espacer les IDR, ou les remplacer par un rafraîchissement intra progressif. Cette dernière piste dépend de la phase 2 (IDR à la demande).
 - Latence filmée de bout en bout : non mesurée.
+
+## Essai phase 4 (tactile et stylet)
+
+| Date | Vérification | Résultat |
+|---|---|---|
+| 2026-10-05 | Tap au doigt (précision) | OK |
+| 2026-10-05 | Défilement à 2 doigts | OK |
+| 2026-10-05 | S Pen avec pression | OK |
+| 2026-10-05 | Paume posée en dessinant | OK (aucun clic parasite) |
+| 2026-10-05 | Appui long à 4 doigts (HUD) | OK |
+
+Non vérifiés à ce jour : bouton latéral du S Pen, survol seul, contacts coincés après arrêt du relais, fenêtres administrateur, utilité du garde-fou de 100 ms (voir la checklist ci-dessus).
