@@ -43,6 +43,45 @@ class PlaceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             dl.place(self.PRIMARY, (100, 100), "middle")
 
+    def test_primary_alone_in_the_monitor_list_is_the_old_behaviour(self):
+        size = (2880, 1800)
+        for side in dl.SIDES:
+            with self.subTest(side=side):
+                self.assertEqual(dl.place(self.PRIMARY, size, side, [self.PRIMARY]),
+                                 dl.place(self.PRIMARY, size, side))
+
+    def test_second_monitor_on_the_chosen_side_is_never_overlapped(self):
+        # 24" à droite du principal, plus haut que lui : l'écran virtuel va après lui, centré sur le principal.
+        side = Rect(2560, -200, 1920, 1080)
+        size = (2880, 1800)
+        others = [self.PRIMARY, side]
+        self.assertEqual(dl.place(self.PRIMARY, size, "right", others), (4480, -100))
+        self.assertEqual(dl.place(self.PRIMARY, size, "left", others), (-2880, -100))   # rien à gauche
+        self.assertEqual(dl.place(self.PRIMARY, size, "above", others), (-160, -2000))  # bord haut du 24"
+        self.assertEqual(dl.place(self.PRIMARY, size, "below", others), (-160, 1600))
+
+    def test_monitors_left_of_and_below_the_primary(self):
+        left = Rect(-1920, 400, 1920, 1080)       # bas à 1480
+        below = Rect(0, 1600, 1920, 1200)         # bas à 2800
+        others = [left, self.PRIMARY, below]
+        size = (1280, 800)
+        self.assertEqual(dl.place(self.PRIMARY, size, "left", others), (-3200, 400))
+        self.assertEqual(dl.place(self.PRIMARY, size, "below", others), (640, 2800))
+        self.assertEqual(dl.place(self.PRIMARY, size, "right", others), (2560, 400))
+        self.assertEqual(dl.place(self.PRIMARY, size, "above", others), (640, -800))
+
+    def test_rects_never_overlap_for_any_side(self):
+        side = Rect(2560, 0, 1920, 1080)
+        others = [self.PRIMARY, side, Rect(-1920, -1080, 1920, 1080)]
+        for name in dl.SIDES:
+            with self.subTest(side=name):
+                x, y = dl.place(self.PRIMARY, (2880, 1800), name, others)
+                placed = Rect(x, y, 2880, 1800)
+                for other in others:
+                    overlap = (placed.left < other.left + other.width and other.left < placed.left + placed.width
+                               and placed.top < other.top + other.height and other.top < placed.top + placed.height)
+                    self.assertFalse(overlap, (placed, other))
+
 
 class ScaleMathsTest(unittest.TestCase):
     def test_auto_scale_table(self):
@@ -399,6 +438,33 @@ class SetPathActiveTest(unittest.TestCase):
         self.assertEqual(paths[2].targetInfo.modeInfoIdx, INVALID)
         mode = modes[paths[2].sourceInfo.modeInfoIdx].sourceMode
         self.assertEqual((mode.width, mode.height, mode.position.x, mode.position.y), (2560, 1600, 2560, -207))
+
+    def _vdd_source_0_taken(self, candidates):
+        """Inactive VDD whose source 0 is already driven by another output of the same adapter."""
+        api = FakeApi(vdd_active=False)
+        other = (VDD[0], 257)
+        n = len(api.modes)
+        api.active_paths.append(_path(other, 0, True, n, n + 1))
+        api.modes += [_source_mode(VDD[0], 0, 1920, 1080, 2560, 0), _target_mode(VDD[0], 257, 1920, 1080)]
+        api.all_paths = api.active_paths + [_path(VDD, source, False) for source in candidates]
+        return api
+
+    def test_activation_takes_the_first_candidate_whose_source_is_free(self):
+        api = self._vdd_source_0_taken(candidates=(0, 1, 2))
+        self.assertTrue(dl.set_path_active(VDD_KEY, True, mode=(2880, 1800), api=api))
+        paths, modes, _flags = api.set_calls[0]
+        vdd = [p for p in paths if (p.targetInfo.adapterId.LowPart, p.targetInfo.id) == VDD]
+        self.assertEqual(len(vdd), 1)
+        self.assertEqual(vdd[0].sourceInfo.id, 1)
+        self.assertTrue(vdd[0].flags & dl.DISPLAYCONFIG_PATH_ACTIVE)
+        self.assertEqual(modes[vdd[0].sourceInfo.modeInfoIdx].id, 1)
+
+    def test_activation_fails_only_when_every_candidate_source_is_taken(self):
+        api = self._vdd_source_0_taken(candidates=(0,))
+        with self.assertRaises(dl.DisplayLayoutError) as caught:
+            dl.set_path_active(VDD_KEY, True, api=api)
+        self.assertIn("already used", str(caught.exception))
+        self.assertEqual(api.set_calls, [])
 
     def test_unavailable_monitor_is_an_error(self):
         api = FakeApi(vdd_active=False, vdd_available=False)

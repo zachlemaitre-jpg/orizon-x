@@ -30,17 +30,28 @@ DPI_VALS = (100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500)
 SAME_ASPECT_TOLERANCE = 0.01
 
 
-def place(primary: Rect, size: tuple[int, int], side: str) -> tuple[int, int]:
-    """Top-left corner of a ``size`` screen glued to ``side`` of ``primary``, centred on that edge."""
+def place(primary: Rect, size: tuple[int, int], side: str,
+          monitors: Iterable[Rect] | None = None) -> tuple[int, int]:
+    """Top-left corner of a ``size`` screen on ``side`` of the desktop, centred on ``primary``'s edge.
+
+    ``monitors``: every other active monitor (the primary included; default: the primary alone). The screen goes
+    past the outermost edge of all of them on that side (right: x = their largest right edge), so it never
+    overlaps a second physical monitor; across that axis it stays centred on the primary.
+    """
     width, height = size
+    others = list(monitors) if monitors is not None else [primary]
+    if primary not in others:
+        others.append(primary)
+    centre_x = primary.left + (primary.width - width) // 2
+    centre_y = primary.top + (primary.height - height) // 2
     if side == "right":
-        return primary.left + primary.width, primary.top + (primary.height - height) // 2
+        return max(r.left + r.width for r in others), centre_y
     if side == "left":
-        return primary.left - width, primary.top + (primary.height - height) // 2
+        return min(r.left for r in others) - width, centre_y
     if side == "above":
-        return primary.left + (primary.width - width) // 2, primary.top - height
+        return centre_x, min(r.top for r in others) - height
     if side == "below":
-        return primary.left + (primary.width - width) // 2, primary.top + primary.height
+        return centre_x, max(r.top + r.height for r in others)
     raise ValueError(f"Unknown side {side!r}, expected one of: {', '.join(SIDES)}")
 
 
@@ -425,6 +436,27 @@ def _compact(paths: list[PATH_INFO], modes: list[MODE_INFO]) -> tuple[list[PATH_
     return paths, kept
 
 
+def _source_ref(path: PATH_INFO) -> tuple[int, int, int]:
+    return path.sourceInfo.adapterId.LowPart, path.sourceInfo.adapterId.HighPart, path.sourceInfo.id
+
+
+def _free_candidate(all_paths: list[PATH_INFO], active: list[PATH_INFO], key: MonitorKey) -> PATH_INFO:
+    """The first QDC_ALL_PATHS path of ``key`` (one per source that can drive it) whose source no active path
+    uses. Raises when there is none: unknown monitor, target unavailable, or every source taken."""
+    candidates = [p for p in all_paths if _key_of(p) == key]
+    if not candidates:
+        raise MonitorNotFoundError(f"Monitor {key} not found")
+    available = [p for p in candidates if p.targetInfo.targetAvailable]
+    if not available:
+        raise DisplayLayoutError(f"Monitor {key} is not available")
+    used = {_source_ref(p) for p in active}
+    for path in available:
+        if _source_ref(path) not in used:
+            return path
+    raise DisplayLayoutError(f"Every source of monitor {key} is already used by another display "
+                             f"({len(available)} candidate path(s))")
+
+
 def _desktop_right_edge(paths: list[PATH_INFO], modes: list[MODE_INFO]) -> int:
     edges = [m.sourceMode.position.x + m.sourceMode.width
              for m in (_source_mode_of(p, modes) for p in paths) if m is not None]
@@ -534,7 +566,8 @@ def set_path_active(key: MonitorKey, active: bool, mode: tuple[int, int] | None 
                     position: tuple[int, int] | None = None, api: DisplayApi | None = None) -> bool:
     """Connect or disconnect a monitor's display path, like Settings > Display > "Disconnect this display".
 
-    Activating keeps every other active path. With ``mode`` (w, h) the source gets that size, at
+    Activating keeps every other active path and uses the first of the monitor's candidate paths (one per
+    source of its adapter) whose source is free. With ``mode`` (w, h) the source gets that size, at
     ``position`` (default: right of the desktop, top 0); without it Windows picks the mode and the
     position it remembers. On an already active path, ``mode``/``position`` change it in place.
     Returns False when there was nothing to do. Windows saves the result (SDC_SAVE_TO_DATABASE).
@@ -567,17 +600,7 @@ def set_path_active(key: MonitorKey, active: bool, mode: tuple[int, int] | None 
         _apply(api, *_compact(paths, modes))
         return True
 
-    all_paths, _all_modes = _query(api, QDC_ALL_PATHS)
-    candidate = _find(all_paths, key)
-    if candidate is None:
-        raise MonitorNotFoundError(f"Monitor {key} not found")
-    path = all_paths[candidate]
-    if not path.targetInfo.targetAvailable:
-        raise DisplayLayoutError(f"Monitor {key} is not available")
-    source_ref = (path.sourceInfo.adapterId.LowPart, path.sourceInfo.adapterId.HighPart, path.sourceInfo.id)
-    if any((p.sourceInfo.adapterId.LowPart, p.sourceInfo.adapterId.HighPart, p.sourceInfo.id) == source_ref
-           for p in paths):
-        raise DisplayLayoutError(f"The source of monitor {key} is already used by another display")
+    path = _free_candidate(_query(api, QDC_ALL_PATHS)[0], paths, key)
     path.flags |= DISPLAYCONFIG_PATH_ACTIVE
     path.sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID
     path.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID
