@@ -1,22 +1,25 @@
 """Bridges the relay engine (its own threads) to Qt (GUI thread) and owns start, stop and restart."""
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from typing import Callable, Protocol
 
 from PySide6.QtCore import QObject, Signal
 
-from engine import STOP_TIMEOUT_S, STOPPED_DETAIL, Config, Listener, State, StreamStats
+from engine import STOP_TIMEOUT_S, STOPPED_DETAIL, Config, DisplayInfo, Listener, State, StreamStats
 from messages import MessageError, Msg, msg
 
 
 class Engine(Protocol):
     def start(self) -> None: ...
 
-    def stop(self) -> None: ...
+    def stop(self, immediate_display_release: bool = False) -> None: ...
 
     def is_running(self) -> bool: ...
+
+    def relayout(self, position: str, scale: str) -> bool: ...
 
 
 EngineFactory = Callable[[Config, Listener], Engine]
@@ -42,6 +45,9 @@ class _EngineListener:
     def on_stats(self, stats: StreamStats) -> None:
         self._controller._forward(self._generation, self._controller.on_stats, stats)
 
+    def on_display(self, info: DisplayInfo) -> None:
+        self._controller._forward(self._generation, self._controller.on_display, info)
+
 
 class Controller(QObject):
     """Re-emits the current engine's Listener callbacks (received through _EngineListener) as Qt signals.
@@ -52,6 +58,7 @@ class Controller(QObject):
     state_changed = Signal(object, object)  # (State, Msg)
     log = Signal(str)
     stats = Signal(object)
+    display_changed = Signal(object)  # DisplayInfo : écran virtuel de la session, une fois allumé
 
     def __init__(self, factory: EngineFactory, config: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -87,6 +94,9 @@ class Controller(QObject):
     def on_stats(self, stats: StreamStats) -> None:
         self.stats.emit(stats)
 
+    def on_display(self, info: DisplayInfo) -> None:
+        self.display_changed.emit(info)
+
     def _forward(self, generation: int, emit: Callable[..., None], *args: object) -> None:
         # Vérification et émission sous le verrou : aucun nouveau moteur ne peut naître entre les deux.
         # Depuis un thread du moteur, emit() ne fait que mettre le signal en file : le verrou n'est tenu qu'un instant.
@@ -101,38 +111,46 @@ class Controller(QObject):
             self._want_running = True
             self._start_locked()
 
-    def stop(self) -> threading.Thread | None:
+    def stop(self, immediate_display_release: bool = False) -> threading.Thread | None:
         """Non-blocking: the engine's stop (up to 3 s) runs in a worker thread, returned for tests."""
         with self._lock:
             self._want_running = False
             engine, self._engine = self._engine, None
         if engine is None:
             return None
-        worker = threading.Thread(target=engine.stop, name="engine-stop", daemon=True)
+        worker = threading.Thread(target=engine.stop, name="engine-stop", daemon=True,
+                                  kwargs={"immediate_display_release": immediate_display_release})
         worker.start()
         return worker
 
-    def stop_blocking(self) -> None:
-        """For Quit: returns once every touch contact is lifted and ffmpeg is gone, pending restarts included."""
+    def stop_blocking(self, immediate_display_release: bool = False) -> None:
+        """For Quit: returns once every touch contact is lifted and ffmpeg is gone, pending restarts included.
+
+        immediate_display_release (Quit): the virtual screen goes off now instead of after the grace delay. An old
+        engine still stopping in a pending restart keeps its grace: the app turns the screen off itself after this.
+        """
         with self._lock:
             self._want_running = False
             engine, self._engine = self._engine, None
             restarts, self._restarts = self._restarts, []
         if engine is not None:
-            engine.stop()
+            engine.stop(immediate_display_release=immediate_display_release)
         deadline = time.monotonic() + STOP_TIMEOUT_S + 0.5
         for worker in restarts:  # l'ancien moteur d'un redémarrage s'arrête dans ce thread-là
             worker.join(max(0.0, deadline - time.monotonic()))
 
-    def restart(self, config: Config) -> threading.Thread:
-        """Stops then starts with the new config, unless stop() or stop_blocking() is called in between."""
+    def restart(self, config: Config, immediate_display_release: bool = False) -> threading.Thread:
+        """Stops then starts with the new config, unless stop() or stop_blocking() is called in between.
+
+        immediate_display_release: the old engine turns the virtual screen off at once (switch to Duplicate).
+        """
         def work() -> None:
             with self._lock:
                 old, self._engine = self._engine, None
                 self._config = config
             # Hors du verrou : l'arrêt prend jusqu'à 3 s, un clic pendant ce temps ne doit pas figer le thread Qt.
             if old is not None:
-                old.stop()
+                old.stop(immediate_display_release=immediate_display_release)
             with self._lock:
                 if self._want_running:
                     self._start_locked()  # sans effet si un start() a déjà relancé un moteur entre-temps
@@ -141,6 +159,19 @@ class Controller(QObject):
         with self._lock:
             self._want_running = True
             self._restarts = [t for t in self._restarts if t.is_alive()] + [worker]
+        worker.start()
+        return worker
+
+    def relayout(self, position: str, scale: str) -> threading.Thread | None:
+        """Position/Scale changed: kept for the next engines, and applied by the running one in a worker thread
+        (Windows takes about a second to move a screen). Returns that thread (for tests), or None without engine."""
+        with self._lock:
+            self._config = dataclasses.replace(self._config, position=position, scale=scale)
+            engine = self._engine
+        if engine is None:
+            return None
+        worker = threading.Thread(target=engine.relayout, args=(position, scale), name="engine-relayout",
+                                  daemon=True)
         worker.start()
         return worker
 

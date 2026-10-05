@@ -13,7 +13,8 @@ if HAVE_QT:
     from app.controller import Controller
 
 import tools
-from engine import Config, State
+from engine import Config, DisplayInfo, State
+from inputstate import Rect
 from messages import msg
 
 
@@ -27,6 +28,8 @@ class FakeEngine:
         self.stopping = threading.Event()
         self.stopped = threading.Event()
         self.announced = threading.Event()  # premier état transmis au listener
+        self.stop_calls = []  # valeur de immediate_display_release à chaque stop()
+        self.relayouts = []
         FakeEngine.instances.append(self)
 
     def start(self):
@@ -39,7 +42,8 @@ class FakeEngine:
         # comme le vrai moteur : les rappels arrivent depuis un autre thread
         threading.Thread(target=announce, daemon=True).start()
 
-    def stop(self):
+    def stop(self, immediate_display_release=False):
+        self.stop_calls.append(immediate_display_release)
         self.stopping.set()
         time.sleep(0.2)  # le vrai stop() bloque jusqu'à 3 s
         self.running = False
@@ -48,6 +52,10 @@ class FakeEngine:
 
     def is_running(self):
         return self.running
+
+    def relayout(self, position, scale):
+        self.relayouts.append((position, scale))
+        return True
 
 
 def pump_until(predicate, timeout=3.0):
@@ -119,7 +127,7 @@ class ControllerTest(unittest.TestCase):
         late_sent = threading.Event()
 
         class LateStopEngine(FakeEngine):
-            def stop(self):
+            def stop(self, immediate_display_release=False):
                 self.running = False
                 self.stopped.set()
 
@@ -187,6 +195,54 @@ class ControllerTest(unittest.TestCase):
         self.controller.stop_blocking()
         self.assertTrue(FakeEngine.instances[0].stopped.is_set())
 
+    def test_immediate_display_release_reaches_the_engine(self):
+        self.controller.start()
+        self.controller.stop(immediate_display_release=True).join(2)
+        self.controller.start()
+        self.controller.stop_blocking(immediate_display_release=True)
+        self.controller.start()
+        self.controller.restart(Config(mode="duplicate"), immediate_display_release=True).join(2)
+        self.controller.stop_blocking()
+        self.assertEqual([engine.stop_calls for engine in FakeEngine.instances], [[True], [True], [True], [False]])
+
+    def test_display_info_is_forwarded_on_the_qt_thread(self):
+        infos = []
+        self.controller.display_changed.connect(lambda info: infos.append((info, threading.current_thread())))
+        self.controller.start()
+        info = DisplayInfo((2880, 1800), (2560, 1600), False, Rect(2560, 0, 2560, 1600))
+        threading.Thread(target=FakeEngine.instances[0].listener.on_display, args=(info,)).start()
+        pump_until(lambda: infos)
+        self.assertEqual(infos, [(info, threading.main_thread())])
+
+    def test_display_info_from_a_replaced_engine_is_ignored(self):
+        infos = []
+        self.controller.display_changed.connect(infos.append)
+        self.controller.start()
+        old_listener = FakeEngine.instances[0].listener
+        self.controller.restart(Config(encoder="amf")).join(2)
+        old_listener.on_display(DisplayInfo((2880, 1800), (2880, 1800), True, Rect(0, 0, 2880, 1800)))
+        new = DisplayInfo((1920, 1200), (1920, 1200), True, Rect(0, 0, 1920, 1200))
+        FakeEngine.instances[1].listener.on_display(new)
+        pump_until(lambda: infos)
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        self.assertEqual(infos, [new])
+
+    def test_relayout_reaches_the_running_engine_and_the_next_config(self):
+        self.controller.start()
+        self.controller.relayout("left", "150").join(2)
+        self.assertEqual(FakeEngine.instances[0].relayouts, [("left", "150")])
+        self.assertEqual((self.controller.config.position, self.controller.config.scale), ("left", "150"))
+        self.controller.restart(Config(encoder="amf", position="left", scale="150")).join(2)
+        self.assertEqual(FakeEngine.instances[1].relayouts, [])  # aucun appel en double sur le nouveau moteur
+
+    def test_relayout_without_an_engine_only_updates_the_config(self):
+        self.assertIsNone(self.controller.relayout("below", "auto"))
+        self.assertEqual(self.controller.config, Config(position="below", scale="auto"))
+        self.controller.start()
+        self.assertEqual(FakeEngine.instances[0].config.position, "below")
 
     def test_stop_during_a_restart_cancels_the_new_engine(self):
         self.controller.start()
