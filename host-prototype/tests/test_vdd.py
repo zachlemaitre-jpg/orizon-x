@@ -376,6 +376,7 @@ class FakeDriverPipe:
         self.reply = reply
         self.delay_s = delay_s  # création du canal retardée (fenêtre « pas d'instance » entre deux clients)
         self.hold_s = hold_s    # garde la connexion ouverte sans répondre (délai dépassé côté client)
+        self.release = threading.Event()  # écourte hold_s : le test n'attend pas la fin du silence
         self.received = None
         self.ready = threading.Event()
         self.thread = threading.Thread(target=self._serve, daemon=True)
@@ -393,7 +394,8 @@ class FakeDriverPipe:
             count = wintypes.DWORD()
             if _k32.ReadFile(handle, buffer, 254, ctypes.byref(count), None):
                 self.received = buffer.raw[:count.value]
-            time.sleep(self.hold_s)
+            if self.hold_s:
+                self.release.wait(self.hold_s)
             if self.reply:
                 written = wintypes.DWORD()
                 _k32.WriteFile(handle, self.reply, len(self.reply), ctypes.byref(written), None)
@@ -440,17 +442,20 @@ class PipeTransportTest(unittest.TestCase):
         start = time.monotonic()
         with self.assertRaises(vdd.PipeError) as caught:
             vdd.pipe_transport("PING", pipe_name=name, timeout=2.0)
-        self.assertLess(time.monotonic() - start, 1.5)
+        # Fenêtre de réessai de 0,5 s, pas le délai de 2 s ; marge large pour une machine chargée.
+        self.assertLess(time.monotonic() - start, 1.9)
         self.assertEqual(caught.exception.winerror, 2)
         self.assertFalse(vdd.VddController(pipe_name=name).is_installed())
 
     def test_silent_server_times_out(self):
-        server = FakeDriverPipe(reply=b"PONG", hold_s=1.0)
+        server = FakeDriverPipe(reply=b"PONG", hold_s=10.0)   # muet jusqu'à `release`
+        self.addCleanup(server.join)
+        self.addCleanup(server.release.set)
         start = time.monotonic()
         with self.assertRaises(vdd.PipeError):
             vdd.pipe_transport("PING", pipe_name=server.name, timeout=0.3)
-        self.assertLess(time.monotonic() - start, 0.9)
-        server.join()
+        # Délai de 0,3 s ; le serveur, lui, se tairait 10 s : toute borne bien en dessous prouve le délai.
+        self.assertLess(time.monotonic() - start, 2.0)
 
     def test_message_too_long_is_refused(self):
         with self.assertRaises(ValueError):

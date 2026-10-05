@@ -360,7 +360,7 @@ def selftest() -> None:
     enable_dpi_awareness()
     primary = next((rect for rect, is_primary, _name in monitors() if is_primary), None)
     if primary is None:
-        sys.exit("Autotest : aucun écran principal trouvé")
+        sys.exit("Selftest: no primary screen found")
     expected = (primary.left + primary.width // 2, primary.top + primary.height // 2)
     probe = _ProbeWindow(expected)
     _user32.SetCursorPos(primary.left + 20, primary.top + 20)  # loin de la cible : seule l'injection peut l'y amener
@@ -384,17 +384,17 @@ def selftest() -> None:
         pen.close()
         probe.close()
     if not ok:
-        sys.exit("Autotest en échec : voir le message ci-dessus.")
+        sys.exit("Selftest failed: see the message above.")
     if not got_cursor or abs(cursor.x - expected[0]) > 3 or abs(cursor.y - expected[1]) > 3:
-        sys.exit(f"Autotest en échec : le curseur devait être en {expected}, il est en "
-                 f"{(cursor.x, cursor.y) if got_cursor else 'position inconnue'} "
-                 f"({probe.pointer_updates} mises à jour reçues par la fenêtre de test).")
-    print("Autotest terminé : le stylet a décrit un cercle au centre de l'écran principal, sans cliquer, "
-          f"et le curseur est arrivé en {(cursor.x, cursor.y)} (attendu {expected}).")
+        sys.exit(f"Selftest failed: the cursor should be at {expected}, it is at "
+                 f"{(cursor.x, cursor.y) if got_cursor else 'an unknown position'} "
+                 f"({probe.pointer_updates} updates received by the test window).")
+    print("Selftest passed: the pen hovered in a circle at the centre of the primary screen, without clicking, "
+          f"and the cursor ended at {(cursor.x, cursor.y)} (expected {expected}).")
 
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--selftest"]:
         selftest()
     else:
-        sys.exit("Usage : py injector.py --selftest")
+        sys.exit("Usage: py injector.py --selftest")
