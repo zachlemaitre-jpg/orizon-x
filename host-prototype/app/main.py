@@ -125,13 +125,17 @@ class SettingsKeeper:
             return engine.Config(encoder=c.encoder, mode=c.mode, position=c.position, scale=c.scale)
 
     def first_time(self) -> bool:
-        """Engine thread: the virtual screen's position and scale have not been applied yet."""
+        """Engine thread: the chosen position and scale are not the ones last applied to the virtual screen."""
         with self._lock:
-            return not self.current.layout_applied
+            c = self.current
+            return (c.applied_position, c.applied_scale) != (c.position, c.scale)
 
-    def mark_layout_applied(self) -> None:
-        """Engine thread (or relayout worker): Windows now remembers the position and scale."""
-        self.update(layout_applied=True)
+    def mark_layout_applied(self, position: str, scale: str) -> None:
+        """Engine thread (or relayout worker): Windows now has (and remembers) this position and scale.
+
+        The pair is kept rather than a flag: if the user picked something else meanwhile, first_time() stays True.
+        """
+        self.update(applied_position=position, applied_scale=scale)
 
     def _save_locked(self) -> None:
         try:
@@ -187,9 +191,9 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: Sett
     def on_layout(name: str, value: str) -> None:
         if keeper.get(name) == value:
             return  # même valeur choisie à nouveau : rien à déplacer
-        # Pas encore appliquée : le moteur la remet à True s'il déplace l'écran tout de suite (flux en cours),
-        # sinon la prochaine apparition de l'écran l'applique. Pas de redémarrage : le flux continue.
-        keeper.update(**{name: value}, layout_applied=False)
+        # Différente de la paire appliquée : le moteur la note appliquée s'il déplace l'écran tout de suite (flux en
+        # cours), sinon la prochaine apparition de l'écran l'applique. Pas de redémarrage : le flux continue.
+        keeper.update(**{name: value})
         controller.relayout(keeper.get("position"), keeper.get("scale"))
 
     def on_language(lang: str) -> None:

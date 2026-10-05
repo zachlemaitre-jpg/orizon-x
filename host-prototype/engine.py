@@ -75,7 +75,9 @@ class Display(Protocol):
 
     def release(self, immediate: bool = False) -> None: ...
 
-    def apply_layout(self, position: str, scale: str, dpi: int) -> Rect | None: ...  # où est l'écran ensuite
+    # move=False : seule l'échelle change (jamais déplacé) ; rescale=False : seule la position. Renvoie où est l'écran.
+    def apply_layout(self, position: str, scale: str, dpi: int, *, move: bool = True,
+                     rescale: bool = True) -> Rect | None: ...
 
 
 @dataclass(frozen=True)
@@ -350,6 +352,14 @@ class Deps:
     retry_delay_s: float = RETRY_DELAY_S
 
 
+@dataclass
+class _DisplaySession:
+    """The session whose virtual screen is on and captured (changed under RelayEngine._relayout_lock)."""
+    dpi: int
+    retarget: Callable[[Rect], None]  # le tactile suit l'écran à son nouvel emplacement
+    layout: tuple[str, str]  # (position, échelle) que l'écran a maintenant
+
+
 @dataclass(frozen=True)
 class SessionResult:
     ffmpeg_died: bool  # ffmpeg s'est arrêté seul (ni la tablette ni stop())
@@ -363,15 +373,16 @@ class RelayEngine:
     display: the virtual screen manager (virtual_display.VirtualDisplay), used only when config.mode is "extend";
         None (CLI, tests) keeps the config.output choice. The engine never calls its cleanup_on_start (the app does).
     first_time: asked before each prepare; True makes prepare apply config.position and config.scale (the app
-        returns "layout never applied" from its settings).
-    on_layout_applied: called after a prepare that was asked to apply the layout (the app then saves the flag).
+        returns "the current position/scale were never applied" from its settings).
+    on_layout_applied(position, scale): called once Windows has that layout: after a prepare asked to apply it,
+        or after a relayout that moved/scaled the screen (the app saves the pair).
     Both callbacks run on the engine thread (on_layout_applied also on the thread calling relayout).
     """
 
     def __init__(self, config: Config, listener: Listener, *, ffmpeg: str, adb: str,
                  deps: Deps | None = None, display: Display | None = None,
                  first_time: Callable[[], bool] = lambda: False,
-                 on_layout_applied: Callable[[], None] = lambda: None) -> None:
+                 on_layout_applied: Callable[[str, str], None] = lambda position, scale: None) -> None:
         self._config = config
         self._listener = listener
         self._ffmpeg = ffmpeg
@@ -382,8 +393,12 @@ class RelayEngine:
         self._on_layout_applied = on_layout_applied
         self._display_used = False  # prepare() a été appelé au moins une fois : il y a peut-être un écran à éteindre
         self._immediate_release = False  # posé par stop(immediate_display_release=True) : pas de grâce
-        # Session dont l'écran virtuel est allumé et capturé : (dpi de la tablette, fonction qui déplace le tactile).
-        self._display_session: tuple[int, Callable[[Rect], None]] | None = None
+        self._immediate_release_done = False  # la session l'a déjà éteint sans grâce : stop() n'a plus à le faire
+        self._display_session: _DisplaySession | None = None
+        self._prepared_layout: tuple[str, str] | None = None  # (position, échelle) passées au dernier prepare
+        self._layout_lock = threading.Lock()  # position/échelle de self._config : lues et changées dessous
+        # Un seul relayout à la fois ; chacun applique les valeurs les plus récentes, pas celles de son appel.
+        self._relayout_lock = threading.Lock()
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -408,6 +423,7 @@ class RelayEngine:
                 return
             self._stop_event = threading.Event()
             self._immediate_release = False
+            self._immediate_release_done = False
             # Une instance relancée réannonce ses états et son encodeur, même identiques à ceux d'avant.
             self._state = State.STOPPED
             self._detail = None
@@ -435,31 +451,56 @@ class RelayEngine:
                     self._active_ffmpeg.kill()
         if thread is not None and thread is not threading.current_thread():
             thread.join(STOP_TIMEOUT_S)
-        if immediate_display_release and self._display is not None and self._display_used:
+        # La session l'a déjà éteint en se terminant ; sinon (grâce d'une session finie, ou session encore bloquée
+        # dans un appel Windows : elle l'éteindra de nouveau en se terminant), on l'éteint ici.
+        if (immediate_display_release and self._display is not None and self._display_used
+                and not self._immediate_release_done):
             self._release_display(immediate=True)
 
     def relayout(self, position: str, scale: str) -> bool:
         """The user changed Position or Scale. Thread-safe; blocks while Windows applies it (about a second).
 
-        While a session shows the virtual screen, it is moved and scaled now and touch follows it to its new place
-        (ffmpeg keeps capturing the same output: no restart). Returns False when there is no such session: the new
-        values are then kept for the next prepare that applies the layout (first_time).
+        While a session shows the virtual screen, it is moved and/or scaled now and touch follows it to its new
+        place (ffmpeg keeps capturing the same output: no restart). Calls are coalesced: one applies at a time,
+        with the latest values (a call that finds the screen already there does nothing), so quick changes never
+        end on an older one. Returns False when there is no such session or the layout could not be applied:
+        the values are then kept for the next prepare (applied if first_time, or right after it otherwise).
         """
-        with self._lock:
+        with self._layout_lock:
             self._config = dataclasses.replace(self._config, position=position, scale=scale)
-            session = self._display_session
-        if session is None or self._display is None:
-            return False
-        dpi, retarget = session
+        return self._apply_latest_layout()
+
+    def _apply_latest_layout(self) -> bool:
+        """Brings the session's screen to the latest position/scale; True if it is there now."""
+        with self._relayout_lock:
+            with self._layout_lock:
+                position, scale = self._config.position, self._config.scale
+            with self._lock:
+                session = self._display_session
+            if session is None or self._display is None:
+                return False
+            if session.layout == (position, scale):
+                return True
+            old_position, old_scale = session.layout
+            try:
+                rect = self._display.apply_layout(position, scale, session.dpi, move=position != old_position,
+                                                  rescale=scale != old_scale)
+            except Exception as e:  # noqa: BLE001 — la disposition n'est jamais fatale
+                self._log(f"Virtual screen: layout failed: {e}")
+                return False
+            if rect is None:
+                self._log("Virtual screen: layout not applied (screen off or not found)")
+                return False
+            session.layout = (position, scale)
+            self._layout_applied(position, scale)
+            session.retarget(rect)
+            return True
+
+    def _layout_applied(self, position: str, scale: str) -> None:
         try:
-            rect = self._display.apply_layout(position, scale, dpi)
-        except Exception as e:  # noqa: BLE001 — la disposition n'est jamais fatale
-            self._log(f"Virtual screen: layout failed: {e}")
-            return False
-        self._on_layout_applied()
-        if rect is not None:
-            retarget(rect)
-        return True
+            self._on_layout_applied(position, scale)
+        except Exception as e:  # noqa: BLE001 — ne pas pouvoir le noter n'arrête ni le flux ni le moteur
+            self._log(f"Virtual screen: cannot record the applied layout: {e}")
 
     def wait(self, timeout: float | None = None) -> bool:
         """True once the engine thread has ended."""
@@ -608,14 +649,19 @@ class RelayEngine:
                          should_stop: Callable[[], bool]) -> tuple[int, Rect] | None:
         assert self._display is not None
         self._set_state(State.PREPARING_DISPLAY, PREPARING_DISPLAY_DETAIL)
+        self._prepared_layout = None
+        with self._layout_lock:
+            position, scale = self._config.position, self._config.scale
         first_time = self._first_time()
         self._display_used = True
-        prepared = self._display.prepare(hello.width, hello.height, hello.dpi, self._config.position,
-                                         self._config.scale, first_time, should_stop)
+        prepared = self._display.prepare(hello.width, hello.height, hello.dpi, position, scale, first_time,
+                                         should_stop)
         if prepared is None:
             return None
+        # Un changement fait pendant la préparation est appliqué dès que la session est en place (_session).
+        self._prepared_layout = (position, scale)
         if first_time:
-            self._on_layout_applied()
+            self._layout_applied(position, scale)
         mode = prepared.mode
         if not prepared.exact:
             self._log(f"Virtual screen: no {hello.width}x{hello.height} mode, nearest is {mode[0]}x{mode[1]} "
@@ -695,8 +741,8 @@ class RelayEngine:
             """The virtual screen moved (relayout): touch follows it; the video is untouched."""
             nonlocal pointer_injector, target_rect
             with injector_lock:
-                if session_over:
-                    return
+                if session_over or rect == target_rect:
+                    return  # même emplacement (échelle seule, ou déjà là) : les contacts posés restent
                 target_rect = rect
                 if pointer_injector is None or stream_size is None:
                     return  # on_stream_size visera directement le nouvel emplacement
@@ -783,9 +829,11 @@ class RelayEngine:
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
             with injector_lock:
                 output, target_rect = capture
-            if self._uses_display():
-                with self._lock:
-                    self._display_session = (hello.dpi, retarget)
+            if self._uses_display() and self._prepared_layout is not None:
+                with self._relayout_lock, self._lock:
+                    self._display_session = _DisplaySession(hello.dpi, retarget, self._prepared_layout)
+                # Position/échelle changées pendant la préparation (relayout a renvoyé False) : appliquées maintenant.
+                self._apply_latest_layout()
             command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
             ffmpeg = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
@@ -822,9 +870,14 @@ class RelayEngine:
             with self._lock:
                 self._active_ffmpeg = None
             # Écran virtuel (prepare a été appelé, même s'il a échoué) : éteint après la grâce, annulée si la tablette
-            # revient ; Quit l'éteint lui-même, sans grâce (stop(immediate_display_release=True)).
-            if self._uses_display() and not self._immediate_release:
-                self._release_display(immediate=False)
+            # revient ; Quit (stop(immediate_display_release=True)) : éteint tout de suite, ici aussi, car stop() a
+            # pu l'éteindre pendant qu'un appel Windows de prepare le rallumait (sans effet s'il est déjà éteint).
+            if self._uses_display():
+                if self._immediate_release:
+                    self._release_display(immediate=True)
+                    self._immediate_release_done = True
+                else:
+                    self._release_display(immediate=False)
         died = not tablet_gone and not self._stop_event.is_set()
         if died and stderr_thread is not None:
             stderr_thread.join(timeout=0.5)  # laisse le pump finir de lire avant de rendre la fin du stderr

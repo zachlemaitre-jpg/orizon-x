@@ -20,9 +20,10 @@ class Settings:
     mode: str = "extend"
     position: str = "right"
     scale: str = "auto"
-    # Position et échelle déjà appliquées à l'écran virtuel : Windows s'en souvient ensuite (remis à False quand
-    # l'utilisateur les change hors flux, pour les appliquer à la prochaine apparition).
-    layout_applied: bool = False
+    # Position et échelle que Windows a reçues pour l'écran virtuel (il s'en souvient ensuite) ; None : jamais.
+    # Différentes de position/scale : changées hors flux, appliquées à la prochaine apparition de l'écran.
+    applied_position: str | None = None
+    applied_scale: str | None = None
     first_close_hint_shown: bool = False  # bulle « Orizon X tourne toujours » déjà montrée
     language: str | None = None  # None : la langue choisie à l'installation (registre), sinon l'anglais
 
@@ -35,7 +36,9 @@ def default_path() -> Path:
 def load(path: Path) -> Settings:
     """Never fails: a missing or broken file gives the defaults, a bad field only resets that field.
 
-    Unknown fields are ignored, e.g. "output" (screen choice) from versions before the virtual display.
+    Unknown fields are ignored, e.g. "output" (screen choice) from versions before the virtual display. The older
+    boolean "layout_applied" (true: the saved position and scale were applied) is read when there is no valid
+    applied_position/applied_scale pair.
     """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -48,10 +51,14 @@ def load(path: Path) -> Settings:
         value = raw.get(name)
         if isinstance(value, str) and value in allowed:
             setattr(result, name, value)
-    for name in ("layout_applied", "first_close_hint_shown"):
-        value = raw.get(name)
-        if isinstance(value, bool):
-            setattr(result, name, value)
+    applied = (raw.get("applied_position"), raw.get("applied_scale"))
+    if applied[0] in POSITIONS and applied[1] in SCALES:
+        result.applied_position, result.applied_scale = applied
+    elif raw.get("layout_applied") is True:
+        result.applied_position, result.applied_scale = result.position, result.scale
+    value = raw.get("first_close_hint_shown")
+    if isinstance(value, bool):
+        result.first_close_hint_shown = value
     language = raw.get("language")
     if language in LANGUAGES:
         result.language = language

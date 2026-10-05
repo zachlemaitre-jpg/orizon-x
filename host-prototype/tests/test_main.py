@@ -117,9 +117,11 @@ class WireTest(unittest.TestCase):
 
     def test_position_change_while_streaming_moves_the_screen_without_restart(self):
         first = self.start_engine()
-        self.keeper.mark_layout_applied()
+        self.keeper.mark_layout_applied("right", "auto")
+        self.assertFalse(self.keeper.first_time())
         with mock.patch.object(self.controller, "restart") as restart:
             self.window.choose("position", "left")
+            pump_until(lambda: len(first.relayouts) == 1)
             self.window.choose("scale", "175")
             pump_until(lambda: len(first.relayouts) == 2)
             restart.assert_not_called()
@@ -127,7 +129,9 @@ class WireTest(unittest.TestCase):
         self.assertEqual(first.stop_calls, [])  # le flux continue
         self.assertEqual(len(FakeEngine.instances), 1)
         self.assertEqual((self.saved().position, self.saved().scale), ("left", "175"))
-        self.assertFalse(self.saved().layout_applied)  # le moteur le remet à True quand il a déplacé l'écran
+        # Pas encore appliquées tant que le moteur ne dit pas les avoir appliquées (on_layout_applied).
+        self.assertEqual((self.saved().applied_position, self.saved().applied_scale), ("right", "auto"))
+        self.assertTrue(self.keeper.first_time())
         self.assertEqual((self.controller.config.position, self.controller.config.scale), ("left", "175"))
 
     def test_same_position_again_does_nothing(self):
@@ -137,14 +141,24 @@ class WireTest(unittest.TestCase):
         self.assertEqual(first.relayouts, [])
 
     def test_engine_marks_the_layout_applied_from_its_thread(self):
-        self.keeper.update(position="above", layout_applied=False)
+        self.keeper.update(position="above")
         self.assertTrue(self.keeper.first_time())
-        worker = threading.Thread(target=self.keeper.mark_layout_applied)
+        worker = threading.Thread(target=self.keeper.mark_layout_applied, args=("above", "auto"))
         worker.start()
         worker.join(2)
         self.assertFalse(self.keeper.first_time())
-        self.assertTrue(self.saved().layout_applied)
+        self.assertEqual((self.saved().applied_position, self.saved().applied_scale), ("above", "auto"))
         self.assertEqual(self.saved().position, "above")
+
+    def test_older_layout_applied_while_the_user_changed_it_again_stays_pending(self):
+        # Le moteur finit d'appliquer l'ancienne valeur après que l'utilisateur en a choisi une autre.
+        self.keeper.update(position="below")
+        self.keeper.mark_layout_applied("left", "auto")
+        self.assertTrue(self.keeper.first_time())
+        self.keeper.mark_layout_applied("below", "auto")
+        self.assertFalse(self.keeper.first_time())
+        self.keeper.update(scale="150")
+        self.assertTrue(self.keeper.first_time())
 
     def test_display_info_shows_add_exact_resolution(self):
         self.window.show()
@@ -293,9 +307,10 @@ class FactoryTest(unittest.TestCase):
         self.assertIs(relay._display, self.display)
         self.assertEqual((relay._ffmpeg, relay._adb), ("ffmpeg.exe", "adb.exe"))
         self.assertTrue(relay._first_time())
-        relay._on_layout_applied()
+        relay._on_layout_applied("right", "auto")
         self.assertFalse(relay._first_time())
-        self.assertTrue(main.settings_store.load(self.keeper.path).layout_applied)
+        saved = main.settings_store.load(self.keeper.path)
+        self.assertEqual((saved.applied_position, saved.applied_scale), ("right", "auto"))
 
     def test_duplicate_engines_have_no_virtual_display(self):
         relay = self.factory(engine.Config(mode="duplicate"), mock.Mock())

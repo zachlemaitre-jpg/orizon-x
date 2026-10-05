@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import engine
 import protocol
@@ -274,7 +275,8 @@ class FakeDisplay:
 
     def __init__(self, result=None, error=None, block=False, on_prepare=None):
         self.result = result or PrepareResult(VDD_RECT, True, (2880, 1800))
-        self.layout_result = VDD_RECT  # où apply_layout dit que l'écran se trouve ensuite
+        self.layout_result = VDD_RECT  # où apply_layout dit que l'écran se trouve ensuite (exception : levée)
+        self.layout_flags = []  # move / rescale de chaque apply_layout
         self.error = error
         self.on_prepare = on_prepare
         self.calls = []
@@ -300,8 +302,11 @@ class FakeDisplay:
     def release(self, immediate=False):
         self.calls.append(("release", immediate))
 
-    def apply_layout(self, position, scale, dpi):
+    def apply_layout(self, position, scale, dpi, move=True, rescale=True):
         self.calls.append(("apply_layout", position, scale, dpi))
+        self.layout_flags.append({"move": move, "rescale": rescale})
+        if isinstance(self.layout_result, Exception):
+            raise self.layout_result
         return self.layout_result
 
     def layouts(self):
@@ -312,6 +317,63 @@ class FakeDisplay:
 
     def prepares(self):
         return [c for c in self.calls if c[0] == "prepare"]
+
+
+class GatedLayoutDisplay(FakeDisplay):
+    """The first apply_layout blocks (Windows moving the screen) until the test opens `gate`."""
+
+    def __init__(self):
+        super().__init__()
+        self.applying = threading.Event()
+        self.gate = threading.Event()
+
+    def apply_layout(self, position, scale, dpi, move=True, rescale=True):
+        result = super().apply_layout(position, scale, dpi, move=move, rescale=rescale)
+        if len(self.layouts()) == 1:
+            self.applying.set()
+            self.gate.wait(5)
+        return result
+
+
+class StuckPrepareDisplay(FakeDisplay):
+    """prepare() is inside a Windows call: it ignores should_stop until the test sets `proceed`."""
+
+    def prepare(self, width, height, dpi, position, scale, first_time, should_stop):
+        self.calls.append(("prepare", width, height, dpi, position, scale, first_time))
+        self.entered.set()
+        self.proceed.wait(5)
+        self.calls.append(("screen on",))
+        return self.result
+
+
+class WaitCountingLock:
+    """threading.Lock that counts the threads that had to wait for it (tests see them queued)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._cond = threading.Condition()
+        self.waiting = 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self._lock.acquire(blocking=False):
+            return True
+        with self._cond:
+            self.waiting += 1
+            self._cond.notify_all()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        self._lock.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+    def wait_for_waiters(self, count, timeout=5.0):
+        with self._cond:
+            return self._cond.wait_for(lambda: self.waiting >= count, timeout)
 
 
 class Recorder:
@@ -851,7 +913,8 @@ class DisplayTest(unittest.TestCase):
         popen, connect = FakePopen(live), FakeConnect()
         display = FakeDisplay(block=True)
         relay, rec = make_engine(self, popen=popen, connect=connect, config=self.EXTEND, display=display,
-                                 first_time=lambda: True, on_layout_applied=lambda: layout_applied.append(1))
+                                 first_time=lambda: True,
+                                 on_layout_applied=lambda *layout: layout_applied.append(layout))
         relay.start()
         self.assertTrue(display.entered.wait(5))
         started = time.monotonic()
@@ -960,28 +1023,30 @@ class DisplayTest(unittest.TestCase):
 
         display = FakeDisplay()
         relay, rec, connect, first = self.streaming_engine(display, first_time=first_time,
-                                                           on_layout_applied=lambda: applied.append(1))
+                                                           on_layout_applied=lambda *layout: applied.append(layout))
         first.leave()
         wait_until(lambda: len(connect.tablets) == 2)
         connect.tablets[1].next_message(protocol.CONFIG)
         self.assertEqual([call[6] for call in display.prepares()], [True, False])
         self.assertEqual(len(asked), 2)
-        self.assertEqual(applied, [1])
+        self.assertEqual(applied, [("left", "150")])  # la paire appliquée, gardée par l'appli
+        self.assertEqual(display.layouts(), [])
 
     def test_relayout_while_streaming_moves_the_screen_and_touch_follows_without_restarting_ffmpeg(self):
-        moved = Rect(-2880, 0, 2880, 1800)
+        moved = Rect(-160, 1600, 2880, 1800)
         applied = []
         display = FakeDisplay()
         display.layout_result = moved
         popen, injectors = FakePopen(live), FakeInjectors()
         relay, rec, connect, tablet = self.streaming_engine(display, popen=popen, injectors=injectors,
-                                                            on_layout_applied=lambda: applied.append(1))
+                                                            on_layout_applied=lambda *layout: applied.append(layout))
         wait_until(lambda: injectors.created)
-        self.assertTrue(relay.relayout("left", "200"))
-        self.assertEqual(display.layouts(), [("apply_layout", "left", "200", 274)])
+        self.assertTrue(relay.relayout("below", "200"))
+        self.assertEqual(display.layouts(), [("apply_layout", "below", "200", 274)])
+        self.assertEqual(display.layout_flags, [{"move": True, "rescale": True}])
         self.assertEqual(injectors.rects, [VDD_RECT, moved])
         self.assertTrue(injectors.created[0].closed)  # contacts levés à l'ancien emplacement
-        self.assertEqual(applied, [1])
+        self.assertEqual(applied, [("below", "200")])
         tablet.send(touch_frame((0, 1, 100, 100, 0, 0, 0)))
         wait_until(lambda: injectors.created[1].handled)
         self.assertEqual(injectors.created[0].handled, [])
@@ -1040,6 +1105,96 @@ class DisplayTest(unittest.TestCase):
         wait_until(lambda: injectors.created)
         self.assertFalse(relay.relayout("left", "auto"))
         self.assertEqual(display.calls, [])
+
+    def test_quick_relayouts_are_coalesced_and_end_on_the_latest_values(self):
+        display, injectors = GatedLayoutDisplay(), FakeInjectors()
+        applied = []
+        relay, rec, _connect, _tablet = self.streaming_engine(
+            display, injectors=injectors, on_layout_applied=lambda *layout: applied.append(layout))
+        wait_until(lambda: injectors.created)
+        queue_lock = WaitCountingLock()
+        relay._relayout_lock = queue_lock
+        threads = [threading.Thread(target=relay.relayout, args=("below", "200"))]
+        threads[0].start()
+        self.assertTrue(display.applying.wait(5))  # Windows déplace l'écran pour le 1er changement
+        for count, args in enumerate((("above", "125"), ("right", "175")), start=1):
+            thread = threading.Thread(target=relay.relayout, args=args)
+            thread.start()
+            threads.append(thread)
+            self.assertTrue(queue_lock.wait_for_waiters(count))  # en file derrière le 1er
+        display.gate.set()
+        for thread in threads:
+            thread.join(5)
+        # Le changement intermédiaire n'est jamais appliqué ; le dernier l'est une seule fois.
+        self.assertEqual(display.layouts(), [("apply_layout", "below", "200", 274),
+                                             ("apply_layout", "right", "175", 274)])
+        self.assertEqual(applied, [("below", "200"), ("right", "175")])
+        self.assertTrue(relay.relayout("right", "175"))  # déjà là : rien de plus
+        self.assertEqual(len(display.layouts()), 2)
+
+    def test_layout_changed_while_preparing_is_applied_once_the_screen_is_on(self):
+        for first_time in (True, False):
+            with self.subTest(first_time=first_time):
+                moved = Rect(0, -1800, 2880, 1800)
+                display = FakeDisplay(block=True)
+                display.layout_result = moved
+                run, appear = self.vdd_run()
+                display.on_prepare = appear
+                injectors, connect, applied = FakeInjectors(), FakeConnect(), []
+                relay, rec = make_engine(self, run=run, injectors=injectors, connect=connect, config=self.EXTEND,
+                                         display=display, first_time=lambda: first_time,
+                                         on_layout_applied=lambda *layout: applied.append(layout))
+                relay.start()
+                self.assertTrue(display.entered.wait(5))
+                self.assertFalse(relay.relayout("above", "150"))  # pas encore d'écran à déplacer
+                display.proceed.set()
+                first_tablet(connect).next_message(protocol.CONFIG)
+                wait_until(lambda: injectors.created)
+                self.assertEqual(display.prepares(), [("prepare", 2880, 1800, 274, "left", "150", first_time)])
+                self.assertEqual(display.layouts(), [("apply_layout", "above", "150", 274)])
+                self.assertEqual(display.layout_flags, [{"move": True, "rescale": False}])
+                self.assertEqual(applied, ([("left", "150")] if first_time else []) + [("above", "150")])
+                self.assertEqual(injectors.rects, [moved])  # le tactile vise directement le nouvel emplacement
+                relay.stop()
+
+    def test_scale_only_relayout_keeps_the_position_and_the_touch_contacts(self):
+        display, injectors = FakeDisplay(), FakeInjectors()
+        relay, rec, _connect, _tablet = self.streaming_engine(display, injectors=injectors)
+        wait_until(lambda: injectors.created)
+        self.assertTrue(relay.relayout("left", "200"))  # même côté : seule l'échelle change
+        self.assertEqual(display.layout_flags, [{"move": False, "rescale": True}])
+        self.assertEqual(len(injectors.created), 1)  # même rectangle : pas de nouvel injecteur
+        self.assertFalse(injectors.created[0].closed)  # aucun contact levé
+
+    def test_layout_not_applied_is_not_saved(self):
+        for result in (None, OSError("SetDisplayConfig failed")):
+            with self.subTest(result=result):
+                display, injectors, applied = FakeDisplay(), FakeInjectors(), []
+                display.layout_result = result
+                relay, rec, _connect, _tablet = self.streaming_engine(
+                    display, injectors=injectors, on_layout_applied=lambda *layout: applied.append(layout))
+                wait_until(lambda: injectors.created)
+                self.assertFalse(relay.relayout("below", "200"))
+                self.assertEqual(applied, [])
+                self.assertEqual(len(injectors.created), 1)
+                display.layout_result = VDD_RECT  # nouvel essai des mêmes valeurs : réappliquées
+                self.assertTrue(relay.relayout("below", "200"))
+                self.assertEqual(applied, [("below", "200")])
+                relay.stop()
+
+    def test_quit_while_prepare_is_stuck_turns_the_screen_off_when_it_ends(self):
+        display = StuckPrepareDisplay(block=True)
+        relay, rec = make_engine(self, config=self.EXTEND, display=display)
+        self.addCleanup(display.proceed.set)
+        relay.start()
+        self.assertTrue(display.entered.wait(5))
+        with mock.patch.object(engine, "STOP_TIMEOUT_S", 0.05):
+            relay.stop(immediate_display_release=True)  # n'attend pas la fin de l'appel Windows
+        self.assertTrue(relay.is_running())
+        self.assertEqual(display.releases(), [("release", True)])
+        display.proceed.set()  # l'appel finit et l'écran s'allume après l'extinction de Quit
+        self.assertTrue(relay.wait(5))
+        self.assertEqual(display.calls[-2:], [("screen on",), ("release", True)])
 
     def test_duplicate_mode_captures_the_main_screen_without_the_virtual_display(self):
         left = Rect(-1920, 0, 1920, 1080)
