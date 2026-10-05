@@ -23,6 +23,24 @@ def stats_frame(fps=60, avg_us=18000, max_us=40000, dropped=0, rtt_us=500):
     return protocol._frame(protocol.STATS, 0, protocol._STATS.pack(fps, avg_us, max_us, dropped, rtt_us))
 
 
+def ping_frame(t_tab_us):
+    return protocol._frame(protocol.PING, 0, protocol._U64.pack(t_tab_us))
+
+
+def touch_frame(*contacts):
+    payload = protocol._INPUT_HEAD.pack(protocol.DEVICE_TOUCH, len(contacts))
+    payload += b"".join(protocol._CONTACT.pack(*c) for c in contacts)
+    return protocol._frame(protocol.INPUT, 0, payload)
+
+
+def wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("délai dépassé")
+        time.sleep(0.01)
+
+
 class FakeRun:
     """Answers the adb and ffmpeg probe commands the engine runs."""
 
@@ -58,6 +76,21 @@ class FakeRun:
         raise AssertionError(f"commande inattendue : {cmd}")
 
 
+class BlockingProbeRun(FakeRun):
+    """The NVENC probe blocks until the test releases it, like a GPU slow to wake up."""
+
+    def __init__(self):
+        super().__init__(encoders_ok=("amf",))
+        self.probing = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, cmd, **kwargs):
+        if "h264_nvenc" in cmd:
+            self.probing.set()
+            self.release.wait(5)
+        return super().__call__(cmd, **kwargs)
+
+
 class FakeStdout:
     def __init__(self, data, hold_open):
         self._data = data
@@ -76,6 +109,22 @@ class FakeStdout:
         self._closed.set()
 
 
+class FedStdout:
+    """A live capture whose output the test feeds chunk by chunk; ends when killed."""
+
+    def __init__(self):
+        self._chunks = queue.Queue()
+
+    def feed(self, data):
+        self._chunks.put(data)
+
+    def read1(self, size):
+        return self._chunks.get()
+
+    def close(self):
+        self._chunks.put(b"")
+
+
 class FakeFfmpeg:
     """hold_open=True: a live capture that only ends when killed. False: ffmpeg exits on its own after `data`."""
 
@@ -83,12 +132,14 @@ class FakeFfmpeg:
         self.stdout = FakeStdout(data, hold_open)
         self.stderr = [line.encode() + b"\n" for line in stderr_lines]
         self.killed = threading.Event()
+        self.waits = []
 
     def kill(self):
         self.killed.set()
         self.stdout.close()
 
     def wait(self, timeout=None):
+        self.waits.append(timeout)
         return 0
 
 
@@ -156,40 +207,55 @@ class FakeTablet:
 
 
 class FakeConnect:
-    """socket.create_connection stand-in: each call hands the engine a new FakeTablet, or refuses."""
+    """socket.create_connection stand-in: each call hands the engine a new FakeTablet, or refuses.
+
+    silent=True mimics adb with no app listening on the tablet: the connection is accepted, then closed without HELLO.
+    """
 
     def __init__(self, version=protocol.VERSION):
         self.version = version
         self.refuse = False
+        self.silent = False
+        self.silent_calls = 0
         self.tablets = []
 
     def __call__(self, address, timeout=None):
         if self.refuse:
             raise ConnectionRefusedError("refusé")
+        if self.silent:
+            self.silent_calls += 1
+            pc, tab = socket.socketpair()
+            tab.close()
+            return pc
         tablet = FakeTablet(self.version)
         self.tablets.append(tablet)
         return tablet.pc
 
 
 class FakeInjector:
-    def __init__(self, width, height):
+    def __init__(self, width, height, error=None):
         self.width = width
         self.height = height
+        self.error = error
+        self.handled = []
         self.closed = False
 
     def handle(self, message):
-        pass
+        self.handled.append(message)
+        if self.error is not None:
+            raise self.error
 
     def close(self):
         self.closed = True
 
 
 class FakeInjectors:
-    def __init__(self):
+    def __init__(self, error=None):
+        self.error = error
         self.created = []
 
     def __call__(self, width, height, log):
-        injector = FakeInjector(width, height)
+        injector = FakeInjector(width, height, self.error)
         self.created.append(injector)
         return injector
 
@@ -283,14 +349,101 @@ class StreamingTest(unittest.TestCase):
         self.assertEqual([(i.width, i.height) for i in injectors.created], [(width, height)])
         self.assertIs(rec.last_state(), State.STREAMING)
         self.assertIn("Tablette connectée : écran 2880x1800, 274 dpi", rec.logs)
-        self.assertIn("Écran capturé : --output 0 (2880x1800, choisi automatiquement)", rec.logs)
+        self.assertIn("Écran capturé : n° 0 (2880x1800, choisi automatiquement)", rec.logs)
+
+    def test_first_state_is_shown_before_the_probes(self):
+        run = BlockingProbeRun()
+        relay, rec = make_engine(self, run=run, config=engine.Config(encoder="auto"))
+        self.addCleanup(run.release.set)  # avant le stop() du nettoyage (ordre inverse)
+        relay.start()
+        self.assertTrue(run.probing.wait(5))
+        self.assertEqual(rec.states, [(State.WAITING_DEVICE, "Préparation de la capture…")])
+
+    def test_ping_gets_a_pong_with_the_same_tablet_time(self):
+        connect = FakeConnect()
+        relay, rec = make_engine(self, connect=connect)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.send(ping_frame(123456789))
+        _type, _flags, payload = tablet.next_message(protocol.PONG)
+        t_tab_us, _t_pc_us = protocol._PONG.unpack(payload)
+        self.assertEqual(t_tab_us, 123456789)
+
+    def test_input_goes_to_the_injector(self):
+        connect, injectors = FakeConnect(), FakeInjectors()
+        relay, rec = make_engine(self, connect=connect, injectors=injectors)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)  # l'injecteur est créé avant l'envoi du CONFIG
+        down = protocol.CONTACT_CONTACT | protocol.CONTACT_IN_RANGE
+        tablet.send(touch_frame((3, down, 100, 200, 512, 0, 0)))
+        wait_until(lambda: injectors.created[0].handled)
+        self.assertEqual(injectors.created[0].handled, [
+            protocol.Input(protocol.DEVICE_TOUCH, (protocol.Contact(3, down, 100, 200, 512, 0, 0),))])
+
+    def test_failing_injector_is_logged_once_and_video_keeps_flowing(self):
+        stdout = FedStdout()
+
+        def fed():
+            ffmpeg = FakeFfmpeg()
+            ffmpeg.stdout = stdout
+            return ffmpeg
+
+        connect, injectors = FakeConnect(), FakeInjectors(error=RuntimeError("pilote absent"))
+        relay, rec = make_engine(self, connect=connect, injectors=injectors, popen=FakePopen(fed))
+        relay.start()
+        stdout.feed(SAMPLE)
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        down = protocol.CONTACT_CONTACT | protocol.CONTACT_IN_RANGE
+        tablet.send(touch_frame((0, down, 10, 10, 0, 0, 0)))
+        tablet.send(touch_frame((0, down, 20, 20, 0, 0, 0)))
+        wait_until(lambda: len(injectors.created[0].handled) == 2)
+        failures = [line for line in rec.logs if line.startswith("Tactile en échec")]
+        self.assertEqual(failures, ["Tactile en échec, entrées ignorées : pilote absent"])
+        after_failure = engine.now_us()
+        stdout.feed(SAMPLE)
+        while True:  # une image horodatée après l'échec prouve que la vidéo continue
+            _type, _flags, payload = tablet.next_message(protocol.VIDEO)
+            if protocol._U64.unpack_from(payload)[0] >= after_failure:
+                break
+        self.assertIs(rec.last_state(), State.STREAMING)
+
+    def test_adb_accepting_then_closing_without_hello_means_app_not_open(self):
+        connect, popen = FakeConnect(), FakePopen(live)
+        connect.silent = True
+        relay, rec = make_engine(self, connect=connect, popen=popen)
+        relay.start()
+        rec.wait_state(State.WAITING_APP)
+        self.assertEqual(rec.states[-1], (State.WAITING_APP, engine.WAITING_APP_DETAIL))
+        self.assertGreaterEqual(connect.silent_calls, 1)
+        self.assertEqual(popen.calls, [])
+
+    def test_listener_exceptions_never_stop_the_engine(self):
+        class FailingRecorder(Recorder):
+            def on_state(self, state, detail):
+                super().on_state(state, detail)
+                raise RuntimeError("listener en panne")
+
+            def on_log(self, line):
+                super().on_log(line)
+                raise RuntimeError("listener en panne")
+
+        connect = FakeConnect()
+        relay, rec = make_engine(self, connect=connect, recorder=FailingRecorder())
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        tablet.next_message(protocol.VIDEO)
+        self.assertTrue(relay.is_running())
+        self.assertIs(rec.last_state(), State.STREAMING)
 
     def test_waits_for_device_then_streams(self):
         run = FakeRun(devices="")
         relay, rec = make_engine(self, run=run)
         relay.start()
-        rec.wait_state(State.WAITING_DEVICE)
-        self.assertIn("Aucune tablette détectée", rec.states[0][1])
+        rec.wait_for(lambda: any("Aucune tablette détectée" in detail for _, detail in rec.states))
+        self.assertEqual(rec.states[0], (State.WAITING_DEVICE, "Préparation de la capture…"))
         run.devices = "R52\tdevice"
         rec.wait_state(State.STREAMING)
 
@@ -350,13 +503,50 @@ class StopTest(unittest.TestCase):
         relay.start()
         tablet = first_tablet(connect)
         tablet.next_message(protocol.CONFIG)
+        started = time.monotonic()
         relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
         self.assertFalse(relay.is_running())
         self.assertTrue(popen.procs[0].killed.is_set())
         self.assertTrue(injectors.created[0].closed)
         self.assertIs(rec.last_state(), State.STOPPED)
         tablet.wait_closed()
         self.assertFalse(any(line.startswith("Tablette déconnectée") for line in rec.logs))
+
+    def test_stop_during_encoder_probe_skips_the_remaining_probes(self):
+        run = BlockingProbeRun()
+        relay, rec = make_engine(self, run=run, config=engine.Config(encoder="auto"))
+        self.addCleanup(run.release.set)
+        relay.start()
+        self.assertTrue(run.probing.wait(5))
+        releaser = threading.Timer(0.2, run.release.set)  # la sonde finit pendant que stop() attend
+        releaser.start()
+        self.addCleanup(releaser.join)
+        started = time.monotonic()
+        relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
+        self.assertFalse(relay.is_running())
+        self.assertEqual(len(run.calls), 1, run.calls)  # ni sonde AMF, ni sondage des écrans, ni adb
+        self.assertIn("h264_nvenc", run.calls[0][0])
+        self.assertIs(rec.last_state(), State.STOPPED)
+
+    def test_stop_before_ffmpeg_starts_does_not_start_it(self):
+        class StopOnConnect(Recorder):
+            relay = None
+
+            def on_log(self, line):
+                super().on_log(line)
+                if line.startswith("Tablette connectée"):
+                    self.relay.stop()  # depuis le thread du moteur : pose le drapeau sans attendre
+
+        popen = FakePopen(live)
+        relay, rec = make_engine(self, popen=popen, recorder=StopOnConnect())
+        rec.relay = relay
+        relay.start()
+        self.assertTrue(relay.wait(5))
+        self.assertEqual(popen.calls, [])
+        self.assertNotIn(State.STREAMING, [s for s, _ in rec.states])
+        self.assertIs(rec.last_state(), State.STOPPED)
 
     def test_can_start_again_after_stop(self):
         relay, rec = make_engine(self)
@@ -365,6 +555,7 @@ class StopTest(unittest.TestCase):
         relay.stop()
         relay.start()
         rec.wait_for(lambda: sum(1 for s, _ in rec.states if s is State.STREAMING) >= 2)
+        self.assertEqual(rec.logs.count("Encodeur : AMF (forcé)"), 2)  # l'instance relancée repart de zéro
 
     def test_start_twice_is_harmless(self):
         popen = FakePopen(live)
@@ -392,6 +583,8 @@ class FatalTest(unittest.TestCase):
         relay, rec = make_engine(self, run=FakeRun(outputs=((0, (1920, 1080)),)))
         relay.start()
         self.assert_fatal(rec, relay, "--output 0 : 1920x1080")
+        self.assertIn("ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de commande) :",
+                      rec.states[-1][1])
 
     def test_no_encoder(self):
         relay, rec = make_engine(self, run=FakeRun(encoders_ok=()), config=engine.Config(encoder="auto"))
@@ -421,19 +614,40 @@ class FatalTest(unittest.TestCase):
         self.assert_fatal(rec, relay, "Erreur inattendue : panne")
         self.assertTrue(any("Traceback" in line for line in rec.logs))
 
-    def test_unexpected_exception_after_ffmpeg_started_kills_it(self):
-        class FailingRecorder(Recorder):
-            def on_state(self, state, detail):
-                super().on_state(state, detail)
-                if state is State.STREAMING:
-                    raise RuntimeError("listener en panne")
+    def test_unexpected_exception_in_a_session_cleans_up_before_the_error(self):
+        class WaitFails(FakeFfmpeg):
+            def wait(self, timeout=None):
+                super().wait(timeout)
+                if len(self.waits) == 1:
+                    raise RuntimeError("wait en panne")
+                return 0
 
-        connect, popen = FakeConnect(), FakePopen(live)
-        relay, rec = make_engine(self, connect=connect, popen=popen, recorder=FailingRecorder())
+        class CleanupRecorder(Recorder):
+            waits_at_error = None
+
+            def on_state(self, state, detail):
+                if state is State.ERROR:
+                    self.waits_at_error = list(popen.procs[0].waits)
+                super().on_state(state, detail)
+
+        connect, popen = FakeConnect(), FakePopen(lambda: WaitFails(SAMPLE))
+        relay, rec = make_engine(self, connect=connect, popen=popen, recorder=CleanupRecorder())
         relay.start()
-        self.assert_fatal(rec, relay, "Erreur inattendue : listener en panne")
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        tablet.leave()
+        self.assert_fatal(rec, relay, "Erreur inattendue : wait en panne")
         self.assertTrue(popen.procs[0].killed.is_set())
-        first_tablet(connect).wait_closed()
+        # le filet de _run a tué puis attendu ffmpeg (1 s max) avant d'annoncer ERROR
+        self.assertEqual(rec.waits_at_error[1:], [1])
+        tablet.wait_closed()
+
+    def test_same_error_is_reported_again_after_a_restart(self):
+        relay, rec = make_engine(self, connect=FakeConnect(version=99))
+        relay.start()
+        self.assert_fatal(rec, relay, "Protocole incompatible")
+        relay.start()
+        rec.wait_for(lambda: sum(1 for s, _ in rec.states if s is State.ERROR) == 2)
 
 
 if __name__ == "__main__":

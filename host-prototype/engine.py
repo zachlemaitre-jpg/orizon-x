@@ -64,6 +64,10 @@ class FatalError(Exception):
     """Stops the engine; the message is shown to the user as is."""
 
 
+class _Stopped(Exception):
+    """stop() was called while resolve_encoder was probing."""
+
+
 ENCODERS = {
     "nvenc": ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull", "-zerolatency", "1", "-delay", "0"],
     # AMF : -usage ultralowlatency/lowlatency ignorent -g (une seule IDR) ; sans -usage, -latency 1 donne la basse latence en gardant le GOP.
@@ -77,9 +81,13 @@ AUTO_ORDER = ("nvenc", "amf")  # NVENC d'abord (sur secteur), AMF sinon (sur bat
 MAX_FFMPEG_FAILURES = 3
 RETRY_DELAY_S = 2.0
 STOP_TIMEOUT_S = 3.0
-ENCODER_PROBE_TIMEOUT_S = 15
+ENCODER_PROBE_TIMEOUT_S = 10
+ADB_TIMEOUT_S = 10
+FFMPEG_WAIT_S = 2  # après kill()
 
+PREPARING_DETAIL = "Préparation de la capture…"
 WAITING_APP_DETAIL = "Tablette branchée : ouvre Orizon X dessus."
+_ADB_TIMEOUT_PROBLEM = "adb ne répond pas (délai dépassé)."
 
 Run = Callable[..., subprocess.CompletedProcess]
 Outputs = list[tuple[int, tuple[int, int] | None]]
@@ -103,10 +111,16 @@ class SocketReader:
         return self._sock.recv(size)
 
 
-def probe_outputs(ffmpeg: str, max_outputs: int = 8, run: Run = subprocess.run) -> Outputs:
-    """Captures one frame per ddagrab output (default D3D11 adapter) and returns (index, (width, height))."""
+def probe_outputs(ffmpeg: str, max_outputs: int = 8, run: Run = subprocess.run,
+                  should_stop: Callable[[], bool] = lambda: False) -> Outputs:
+    """Captures one frame per ddagrab output (default D3D11 adapter) and returns (index, (width, height)).
+
+    If should_stop() turns true, returns the outputs found so far without running the next probe.
+    """
     outputs: Outputs = []
     for index in range(max_outputs):
+        if should_stop():
+            break
         result = run(
             [ffmpeg, "-nostdin", "-hide_banner", "-f", "lavfi",
              "-i", f"ddagrab=output_idx={index}:framerate=1,hwdownload,format=bgra",
@@ -135,7 +149,8 @@ def pick_output(choice: str, outputs: Outputs, width: int, height: int) -> int:
         if size == (width, height):
             return index
     raise FatalError(f"Aucun écran en {width}x{height} (taille de la tablette). Règle l'écran virtuel à cette "
-                     f"résolution, ou choisis un écran dans les réglages :\n{describe_outputs(outputs)}")
+                     "résolution, ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de "
+                     f"commande) :\n{describe_outputs(outputs)}")
 
 
 def ffmpeg_command(ffmpeg: str, encoder: str, output: int, fps: int, bitrate: str) -> list[str]:
@@ -163,12 +178,18 @@ def probe_encoder(ffmpeg: str, encoder: str, run: Run = subprocess.run) -> bool:
     return result.returncode == 0
 
 
-def resolve_encoder(ffmpeg: str, choice: str, run: Run = subprocess.run) -> tuple[str, str]:
-    """(encoder, log line). 'auto' probes NVENC then AMF; a forced encoder is trusted as is."""
+def resolve_encoder(ffmpeg: str, choice: str, run: Run = subprocess.run,
+                    should_stop: Callable[[], bool] = lambda: False) -> tuple[str, str]:
+    """(encoder, log line). 'auto' probes NVENC then AMF; a forced encoder is trusted as is.
+
+    Raises _Stopped instead of running the next probe once should_stop() turns true.
+    """
     if choice != "auto":
         return choice, f"Encodeur : {ENCODER_NAMES[choice]} (forcé)"
     unavailable: list[str] = []
     for name in AUTO_ORDER:
+        if should_stop():
+            raise _Stopped
         if probe_encoder(ffmpeg, name, run):
             suffix = f" ({', '.join(unavailable)} indisponible)" if unavailable else ""
             return name, f"Encodeur : {ENCODER_NAMES[name]}{suffix}"
@@ -178,7 +199,11 @@ def resolve_encoder(ffmpeg: str, choice: str, run: Run = subprocess.run) -> tupl
 
 def adb_problem(adb: str, run: Run = subprocess.run) -> str | None:
     """None if exactly one authorized device is ready, else a message saying what to do."""
-    result = run([adb, "devices"], capture_output=True, text=True, creationflags=tools.NO_WINDOW)
+    try:
+        result = run([adb, "devices"], capture_output=True, text=True, creationflags=tools.NO_WINDOW,
+                     timeout=ADB_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return _ADB_TIMEOUT_PROBLEM
     if result.returncode != 0:
         return f"adb ne répond pas : {result.stderr.strip()}"
     states = [line.split("\t")[1] for line in result.stdout.splitlines()[1:] if "\t" in line]
@@ -196,8 +221,11 @@ def ensure_forward(adb: str, run: Run = subprocess.run) -> str | None:
     problem = adb_problem(adb, run)
     if problem is not None:
         return problem
-    result = run([adb, "forward", f"tcp:{protocol.PORT}", f"tcp:{protocol.PORT}"],
-                 capture_output=True, text=True, creationflags=tools.NO_WINDOW)
+    try:
+        result = run([adb, "forward", f"tcp:{protocol.PORT}", f"tcp:{protocol.PORT}"],
+                     capture_output=True, text=True, creationflags=tools.NO_WINDOW, timeout=ADB_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return _ADB_TIMEOUT_PROBLEM
     if result.returncode != 0:
         return f"adb forward a échoué : {result.stderr.strip()}"
     return None
@@ -297,6 +325,10 @@ class RelayEngine:
             if self.is_running():
                 return
             self._stop_event = threading.Event()
+            # Une instance relancée réannonce ses états et son encodeur, même identiques à ceux d'avant.
+            self._state = State.STOPPED
+            self._detail = ""
+            self._last_encoder_line = None
             self._thread = threading.Thread(target=self._run, name="relay-engine", daemon=True)
             self._thread.start()
 
@@ -326,34 +358,50 @@ class RelayEngine:
     # --- thread du moteur ---
 
     def _run(self) -> None:
+        error: str | None = None
         try:
             self._loop()
         except FatalError as e:
-            self._set_state(State.ERROR, str(e))
-            return
+            error = str(e)
         except Exception as e:  # noqa: BLE001 — l'appli ne doit jamais planter : on montre l'erreur
             self._log(traceback.format_exc().rstrip())
-            self._set_state(State.ERROR, f"Erreur inattendue : {e}")
-            return
+            error = f"Erreur inattendue : {e}"
         finally:
-            with self._lock:
-                sock, self._active_sock = self._active_sock, None
-                ffmpeg, self._active_ffmpeg = self._active_ffmpeg, None
-            # Une exception inattendue entre le lancement de ffmpeg et le finally de la session ne doit rien laisser ouvert.
-            if sock is not None:
-                with contextlib.suppress(OSError):
-                    sock.close()
-            if ffmpeg is not None:
-                with contextlib.suppress(OSError):
-                    ffmpeg.kill()
-        self._set_state(State.STOPPED, "Arrêté.")
+            # Avant d'annoncer la fin : un listener qui relance sur ERROR ne doit jamais faire tourner deux ffmpeg.
+            self._release_active()
+        if error is not None:
+            self._set_state(State.ERROR, error)
+        else:
+            self._set_state(State.STOPPED, "Arrêté.")
+
+    def _release_active(self) -> None:
+        """Safety net: an unexpected exception between ffmpeg's launch and the session's finally leaves nothing open."""
+        with self._lock:
+            sock, self._active_sock = self._active_sock, None
+            ffmpeg, self._active_ffmpeg = self._active_ffmpeg, None
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.close()
+        if ffmpeg is not None:
+            with contextlib.suppress(OSError):
+                ffmpeg.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                ffmpeg.wait(timeout=1)
 
     def _loop(self) -> None:
+        self._set_state(State.WAITING_DEVICE, PREPARING_DETAIL)  # les sondages prennent jusqu'à plusieurs secondes
         failures = 0
         while not self._stop_event.is_set():
-            encoder = self._pick_encoder()
+            should_stop = self._stop_event.is_set
+            try:
+                encoder = self._pick_encoder(should_stop)
+            except _Stopped:
+                return
             # Sondage avant la connexion : une fois le HELLO reçu, la tablette attend des PONG (5 s de silence = coupure).
-            outputs = probe_outputs(self._ffmpeg, run=self._deps.run) if self._config.output == "auto" else []
+            outputs = (probe_outputs(self._ffmpeg, run=self._deps.run, should_stop=should_stop)
+                       if self._config.output == "auto" else [])
+            if self._stop_event.is_set():
+                return
             connection = self._connect()
             if connection is None:
                 return
@@ -365,7 +413,7 @@ class RelayEngine:
                 self._close_socket(sock)
                 raise
             if self._config.output == "auto":
-                self._log(f"Écran capturé : --output {output} ({hello.width}x{hello.height}, choisi automatiquement)")
+                self._log(f"Écran capturé : n° {output} ({hello.width}x{hello.height}, choisi automatiquement)")
             result = self._session(sock, rfile, hello, encoder, output)
             if self._stop_event.is_set():
                 return
@@ -380,8 +428,8 @@ class RelayEngine:
                 failures = 0
             self._log("Nouvelle tentative de connexion…")
 
-    def _pick_encoder(self) -> str:
-        encoder, line = resolve_encoder(self._ffmpeg, self._config.encoder, self._deps.run)
+    def _pick_encoder(self, should_stop: Callable[[], bool]) -> str:
+        encoder, line = resolve_encoder(self._ffmpeg, self._config.encoder, self._deps.run, should_stop)
         if line != self._last_encoder_line:
             self._log(line)
             self._last_encoder_line = line
@@ -447,6 +495,9 @@ class RelayEngine:
             with send_lock:  # l'horodatage est pris sous le verrou : pas d'attente entre la mesure et l'envoi
                 sock.sendall(protocol.encode_pong(t_tab_us, now_us()))
 
+        if self._stop_event.is_set():  # stop() pendant la connexion : ne pas lancer ffmpeg pour rien
+            self._close_socket(sock)
+            return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
         command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
         ffmpeg = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
@@ -497,7 +548,7 @@ class RelayEngine:
                     elif isinstance(message, protocol.Stats):
                         size = stream_size
                         if size is not None:
-                            self._listener.on_stats(StreamStats(
+                            self._notify(self._listener.on_stats, StreamStats(
                                 size[0], size[1], message.fps, message.latency_avg_us / 1000,
                                 message.latency_max_us / 1000, message.dropped, message.rtt_us / 1000))
                     elif isinstance(message, protocol.KeyframeRequest):
@@ -540,7 +591,8 @@ class RelayEngine:
             tablet_gone = send_failed or disconnected.is_set()
             with contextlib.suppress(OSError):
                 ffmpeg.kill()
-            ffmpeg.wait()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                ffmpeg.wait(timeout=FFMPEG_WAIT_S)
             closing.set()
             self._close_socket(sock)
             with self._lock:
@@ -570,7 +622,15 @@ class RelayEngine:
             return
         self._state = state
         self._detail = detail
-        self._listener.on_state(state, detail)
+        self._notify(self._listener.on_state, state, detail)
 
     def _log(self, line: str) -> None:
-        self._listener.on_log(line)
+        self._notify(self._listener.on_log, line)
+
+    @staticmethod
+    def _notify(callback: Callable[..., None], *args: Any) -> None:
+        """A failing listener must never kill an engine thread (nowhere to report it: the listener is what failed)."""
+        try:
+            callback(*args)
+        except Exception:  # noqa: BLE001
+            pass

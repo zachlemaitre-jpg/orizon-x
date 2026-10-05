@@ -10,11 +10,14 @@ OUTPUTS = [(0, (2560, 1600)), (1, (2880, 1800)), (2, None)]
 class FakeRun:
     """Records commands; answers with the given return code per encoder / adb output."""
 
-    def __init__(self, ok_encoders=(), adb_stdout="", adb_code=0, adb_stderr=""):
+    def __init__(self, ok_encoders=(), adb_stdout="", adb_code=0, adb_stderr="", forward_code=None,
+                 forward_hangs=False):
         self.ok_encoders = ok_encoders
         self.adb_stdout = adb_stdout
         self.adb_code = adb_code
         self.adb_stderr = adb_stderr
+        self.forward_code = forward_code
+        self.forward_hangs = forward_hangs
         self.calls = []
 
     def __call__(self, cmd, **kwargs):
@@ -25,6 +28,10 @@ class FakeRun:
             return subprocess.CompletedProcess(cmd, 0 if name in self.ok_encoders else 1, b"", b"")
         if cmd[1:] == ["devices"]:
             return subprocess.CompletedProcess(cmd, self.adb_code, self.adb_stdout, self.adb_stderr)
+        if cmd[1] == "forward" and self.forward_hangs:
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+        if cmd[1] == "forward" and self.forward_code is not None:
+            return subprocess.CompletedProcess(cmd, self.forward_code, "", "")
         raise AssertionError(cmd)
 
 
@@ -40,6 +47,21 @@ class PickOutputTest(unittest.TestCase):
             engine.pick_output("auto", OUTPUTS, 1920, 1200)
         self.assertIn("Aucun écran en 1920x1200", str(raised.exception))
         self.assertIn("--output 1 : 2880x1800", str(raised.exception))
+        self.assertIn("ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de commande) :\n",
+                      str(raised.exception))
+
+
+class ProbeOutputsTest(unittest.TestCase):
+    def test_stop_returns_the_outputs_found_so_far(self):
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "Stream #0:0: Video: bgra, 2880x1800")
+
+        outputs = engine.probe_outputs("ffmpeg", run=run, should_stop=lambda: len(calls) >= 2)
+        self.assertEqual(outputs, [(0, (2880, 1800)), (1, (2880, 1800))])
+        self.assertEqual(len(calls), 2)
 
 
 class FfmpegCommandTest(unittest.TestCase):
@@ -73,11 +95,19 @@ class ResolveEncoderTest(unittest.TestCase):
         self.assertEqual(engine.resolve_encoder("ffmpeg", "amf", run), ("amf", "Encodeur : AMF (forcé)"))
         self.assertEqual(run.calls, [])
 
+    def test_stop_between_probes_skips_the_next_one(self):
+        run = FakeRun(ok_encoders=("amf",))
+        with self.assertRaises(engine._Stopped):
+            engine.resolve_encoder("ffmpeg", "auto", run, should_stop=lambda: len(run.calls) >= 1)
+        self.assertEqual(len(run.calls), 1)
+        self.assertIn("h264_nvenc", run.calls[0][0])
+
     def test_probe_runs_without_console(self):
         run = FakeRun(ok_encoders=("nvenc",))
         engine.probe_encoder("ffmpeg", "nvenc", run)
         cmd, kwargs = run.calls[0]
         self.assertEqual(kwargs["creationflags"], tools.NO_WINDOW)
+        self.assertEqual(kwargs["timeout"], 10)
         self.assertIn("h264_nvenc", cmd)
 
     def test_probe_timeout_counts_as_unavailable(self):
@@ -105,6 +135,20 @@ class AdbProblemTest(unittest.TestCase):
 
     def test_adb_failure_is_a_message_not_a_crash(self):
         self.assertIn("adb ne répond pas", self.problem("", code=1, stderr="daemon not running"))
+
+    def test_adb_calls_have_a_timeout(self):
+        run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_code=0)
+        self.assertIsNone(engine.ensure_forward("adb", run))
+        self.assertEqual([kwargs.get("timeout") for _cmd, kwargs in run.calls], [10, 10])
+
+    def test_adb_devices_hanging_is_a_message(self):
+        def hung(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+        self.assertEqual(engine.adb_problem("adb", hung), "adb ne répond pas (délai dépassé).")
+
+    def test_adb_forward_hanging_is_a_message(self):
+        run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_hangs=True)
+        self.assertEqual(engine.ensure_forward("adb", run), "adb ne répond pas (délai dépassé).")
 
 
 class FormatStatsTest(unittest.TestCase):
