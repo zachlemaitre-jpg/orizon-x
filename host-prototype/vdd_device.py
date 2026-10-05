@@ -5,7 +5,8 @@
   under the class enumerator.
 - install_driver / remove_driver / restart_device: need admin (the installer, or `--add-resolution` after UAC).
   Install = what `devcon install` does (SetupDiCreateDeviceInfoW + SPDRP_HARDWAREID + DIF_REGISTERDEVICE, then
-  UpdateDriverForPlugAndPlayDevicesW), without shipping Microsoft's devcon.exe. Remove = SetupDiRemoveDevice, then
+  UpdateDriverForPlugAndPlayDevicesW), without shipping Microsoft's devcon.exe. Remove = DIF_REMOVE through
+  SetupDiCallClassInstaller (SP_REMOVEDEVICE_PARAMS, global scope, as `devcon remove`), then
   `pnputil /delete-driver oemNN.inf /uninstall`. Restart = `pnputil /restart-device <instance id>` (Windows 10 2004+),
   the only way to make the driver read its XML again (docs/notes/vdd-control.md §2).
 
@@ -181,9 +182,16 @@ def find_device(registry: Registry | None = None) -> DeviceInfo | None:
 
 # --- opérations (admin) ---
 
+def is_admin(api: "DeviceApi | None" = None) -> bool:
+    """True when this process runs elevated (the device operations below need it)."""
+    return (api or Win32DeviceApi()).is_admin()
+
+
 def install_driver(inf_path: str | os.PathLike, *, api: "DeviceApi | None" = None,
-                   registry: Registry | None = None) -> None:
+                   registry: Registry | None = None) -> bool:
     """Creates the Root\\MttVDD root device and installs the driver from `inf_path` (admin).
+
+    Returns True when Windows says a reboot is needed to finish (UpdateDriverForPlugAndPlayDevicesW).
 
     Windows shows its "install this device software? (SignPath Foundation)" prompt on PCs that do not trust the
     signer yet; refusing it fails UpdateDriverForPlugAndPlayDevicesW, and the half-created node is removed again so
@@ -207,7 +215,7 @@ def install_driver(inf_path: str | os.PathLike, *, api: "DeviceApi | None" = Non
             api.set_hardware_id(hset, dev, HARDWARE_ID)
             api.register_device(hset, dev)
             try:
-                api.update_driver(HARDWARE_ID, str(inf))
+                reboot = bool(api.update_driver(HARDWARE_ID, str(inf)))
             except VddDeviceError:
                 try:
                     api.remove_device(hset, dev)
@@ -218,6 +226,7 @@ def install_driver(inf_path: str | os.PathLike, *, api: "DeviceApi | None" = Non
             api.destroy_info_list(hset)
     except VddDeviceError as error:
         raise _as(operation, error) from error
+    return reboot
 
 
 def remove_driver(*, api: "DeviceApi | None" = None, registry: Registry | None = None) -> None:
@@ -284,6 +293,19 @@ class SP_DEVINFO_DATA(ctypes.Structure):
                 ("Reserved", ctypes.c_size_t)]
 
 
+class SP_CLASSINSTALL_HEADER(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint32), ("InstallFunction", ctypes.c_uint32)]
+
+
+class SP_REMOVEDEVICE_PARAMS(ctypes.Structure):
+    _fields_ = [("ClassInstallHeader", SP_CLASSINSTALL_HEADER), ("Scope", ctypes.c_uint32),
+                ("HwProfile", ctypes.c_uint32)]
+
+
+DIF_REMOVE = 0x05
+DI_REMOVEDEVICE_GLOBAL = 0x1
+
+
 class DeviceApi(Protocol):
     def is_admin(self) -> bool: ...
     def inf_class(self, inf_path: str) -> tuple[Any, str]: ...
@@ -329,7 +351,8 @@ class Win32DeviceApi:
             (setupapi, "SetupDiCallClassInstaller"): ([wintypes.UINT, hdevinfo, lp_dev], wintypes.BOOL),
             (setupapi, "SetupDiOpenDeviceInfoW"): ([hdevinfo, wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD,
                                                     lp_dev], wintypes.BOOL),
-            (setupapi, "SetupDiRemoveDevice"): ([hdevinfo, lp_dev], wintypes.BOOL),
+            (setupapi, "SetupDiSetClassInstallParamsW"): ([hdevinfo, lp_dev, ctypes.POINTER(SP_CLASSINSTALL_HEADER),
+                                                           wintypes.DWORD], wintypes.BOOL),
             (setupapi, "SetupDiDestroyDeviceInfoList"): ([hdevinfo], wintypes.BOOL),
             (newdev, "UpdateDriverForPlugAndPlayDevicesW"): ([wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
                                                               wintypes.DWORD, ctypes.POINTER(wintypes.BOOL)],
@@ -398,7 +421,18 @@ class Win32DeviceApi:
         return dev
 
     def remove_device(self, hset: int, dev: SP_DEVINFO_DATA) -> None:
-        self._check("SetupDiRemoveDevice", self._f["SetupDiRemoveDevice"](hset, ctypes.byref(dev)))
+        """Like `devcon remove`: DIF_REMOVE (global scope) through the class installer, so the class and co-installers
+        run their removal steps (SetupDiRemoveDevice alone skips them)."""
+        params = SP_REMOVEDEVICE_PARAMS()
+        params.ClassInstallHeader.cbSize = ctypes.sizeof(SP_CLASSINSTALL_HEADER)
+        params.ClassInstallHeader.InstallFunction = DIF_REMOVE
+        params.Scope = DI_REMOVEDEVICE_GLOBAL
+        params.HwProfile = 0
+        header = ctypes.cast(ctypes.pointer(params), ctypes.POINTER(SP_CLASSINSTALL_HEADER))
+        self._check("SetupDiSetClassInstallParamsW", self._f["SetupDiSetClassInstallParamsW"](
+            hset, ctypes.byref(dev), header, ctypes.sizeof(params)))
+        self._check("SetupDiCallClassInstaller(DIF_REMOVE)", self._f["SetupDiCallClassInstaller"](
+            DIF_REMOVE, hset, ctypes.byref(dev)))
 
     def destroy_info_list(self, hset: int) -> None:
         self._f["SetupDiDestroyDeviceInfoList"](hset)

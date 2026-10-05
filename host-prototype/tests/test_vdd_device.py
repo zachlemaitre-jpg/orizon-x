@@ -52,8 +52,9 @@ VDD_0000 = DeviceInfo(instance_id=r"ROOT\DISPLAY\0000", hardware_ids=("Root\\Mtt
 class FakeApi:
     """Records every Win32 call; `fail` = {method name: Windows error code} makes that call raise."""
 
-    def __init__(self, admin=True, fail=None, pnputil_results=None):
+    def __init__(self, admin=True, fail=None, pnputil_results=None, reboot=False):
         self.admin = admin
+        self.reboot = reboot
         self.fail = fail or {}
         self.pnputil_results = list(pnputil_results or [])
         self.calls = []
@@ -87,7 +88,7 @@ class FakeApi:
 
     def update_driver(self, hardware_id, inf_path):
         self._call("update_driver", hardware_id, inf_path)
-        return False
+        return self.reboot
 
     def open_device(self, hset, instance_id):
         self._call("open_device", hset, instance_id)
@@ -149,6 +150,52 @@ class ParsingTest(unittest.TestCase):
     def test_struct_sizes(self):
         self.assertEqual(ctypes.sizeof(vdd_device.GUID), 16)
         self.assertEqual(ctypes.sizeof(vdd_device.SP_DEVINFO_DATA), 32 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)
+        self.assertEqual(ctypes.sizeof(vdd_device.SP_CLASSINSTALL_HEADER), 8)
+        self.assertEqual(ctypes.sizeof(vdd_device.SP_REMOVEDEVICE_PARAMS), 16)
+
+    def test_is_admin_asks_the_api(self):
+        self.assertFalse(vdd_device.is_admin(api=FakeApi(admin=False)))
+        self.assertTrue(vdd_device.is_admin(api=FakeApi(admin=True)))
+
+
+class Win32RemoveDeviceTest(unittest.TestCase):
+    """remove_device does what `devcon remove` does: DIF_REMOVE with global scope through the class installer.
+
+    The SetupAPI functions are replaced by recording fakes: nothing is removed."""
+
+    def make(self, set_ok=1, call_ok=1):
+        api = object.__new__(vdd_device.Win32DeviceApi)
+        self.calls = []
+
+        def set_params(hset, dev, header, size):
+            params = ctypes.cast(header, ctypes.POINTER(vdd_device.SP_REMOVEDEVICE_PARAMS)).contents
+            self.calls.append(("SetupDiSetClassInstallParamsW", hset, params.ClassInstallHeader.cbSize,
+                               params.ClassInstallHeader.InstallFunction, params.Scope, params.HwProfile, size))
+            return set_ok
+
+        def call_installer(function, hset, dev):
+            self.calls.append(("SetupDiCallClassInstaller", function, hset))
+            return call_ok
+
+        api._f = {"SetupDiSetClassInstallParamsW": set_params, "SetupDiCallClassInstaller": call_installer}
+        return api
+
+    def test_sets_global_remove_params_then_calls_the_class_installer(self):
+        self.make().remove_device(1234, vdd_device.SP_DEVINFO_DATA())
+        self.assertEqual(self.calls, [
+            ("SetupDiSetClassInstallParamsW", 1234, 8, vdd_device.DIF_REMOVE, vdd_device.DI_REMOVEDEVICE_GLOBAL, 0, 16),
+            ("SetupDiCallClassInstaller", vdd_device.DIF_REMOVE, 1234),
+        ])
+        self.assertEqual((vdd_device.DIF_REMOVE, vdd_device.DI_REMOVEDEVICE_GLOBAL), (0x05, 0x1))
+
+    def test_failures_raise_with_the_function_name(self):
+        with self.assertRaises(VddDeviceError) as caught:
+            self.make(set_ok=0).remove_device(1, vdd_device.SP_DEVINFO_DATA())
+        self.assertEqual(caught.exception.operation, "SetupDiSetClassInstallParamsW")
+        self.assertEqual([c[0] for c in self.calls], ["SetupDiSetClassInstallParamsW"])
+        with self.assertRaises(VddDeviceError) as caught:
+            self.make(call_ok=0).remove_device(1, vdd_device.SP_DEVINFO_DATA())
+        self.assertEqual(caught.exception.operation, "SetupDiCallClassInstaller(DIF_REMOVE)")
 
 
 class FindDeviceTest(unittest.TestCase):
@@ -183,6 +230,12 @@ class InstallDriverTest(unittest.TestCase):
         self.inf = Path(tempfile.mkdtemp()) / "MttVDD.inf"
         self.inf.write_text("[Version]\n", encoding="ascii")
         self.empty = FakeRegistry({})
+
+    def test_reboot_required_is_returned(self):
+        for reboot in (False, True):
+            with self.subTest(reboot=reboot):
+                self.assertIs(vdd_device.install_driver(self.inf, api=FakeApi(reboot=reboot), registry=self.empty),
+                              reboot)
 
     def test_creates_root_device_then_installs_driver(self):
         api = FakeApi()
