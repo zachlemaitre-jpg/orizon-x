@@ -26,8 +26,16 @@ def registered_command(key_path: str = RUN_KEY) -> str | None:
         return None
 
 
-def is_enabled(key_path: str = RUN_KEY) -> bool:
-    return registered_command(key_path) is not None
+def is_enabled(exe: str | None = None, *, key_path: str = RUN_KEY) -> bool:
+    """True only if the Run value launches this exe (default: the running one)."""
+    command = registered_command(key_path)
+    # casefold : les chemins Windows ne tiennent pas compte de la casse.
+    return command is not None and command.casefold() == command_for(exe or sys.executable).casefold()
+
+
+def is_stale(exe: str | None = None, *, key_path: str = RUN_KEY) -> bool:
+    """True if a Run value exists but launches another exe (the app folder was moved)."""
+    return registered_command(key_path) is not None and not is_enabled(exe, key_path=key_path)
 
 
 def enable(exe: str, key_path: str = RUN_KEY) -> None:
