@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication
 
 import engine
 import tools
-from app import autostart, i18n
+from app import admin, autostart, i18n
 from app import settings as settings_store
 from app.controller import Controller
 from app.glass import apply_glass
@@ -207,10 +207,19 @@ def refresh_autostart() -> None:
             logger.exception("Start with Windows: cannot update the path")
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="OrizonX")
     parser.add_argument("--minimized", action="store_true", help="start in the notification area")
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    admin.add_arguments(parser)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    if admin.requested(args):
+        # Installateur ou invite UAC : ni fenêtre, ni instance unique, ni Qt ; code de sortie 0/1, détails au journal.
+        setup_logging()
+        return admin.run(args, log=logger)
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Orizon X")

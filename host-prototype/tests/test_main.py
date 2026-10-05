@@ -119,6 +119,21 @@ class WireTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 absent")
+class AdminCommandLineTest(unittest.TestCase):
+    def test_admin_flags_run_before_qt_and_return_the_exit_code(self):
+        for argv, expected in ((["--cleanup"], "cleanup"), (["--configure-vdd", "--restart"], "configure_vdd"),
+                               (["--install-driver", r"C:\a b\MttVDD.inf"], "install_driver"),
+                               (["--remove-driver"], "remove_driver"), (["--add-resolution", "2800x1752"], "add_resolution")):
+            with self.subTest(argv=argv),                     mock.patch.object(main, "QApplication", side_effect=AssertionError("Qt started")),                     mock.patch.object(main, "setup_logging") as setup_logging,                     mock.patch.object(main.admin, "run", return_value=7) as run:
+                self.assertEqual(main.main(argv), 7)
+                setup_logging.assert_called_once_with()
+                args = run.call_args.args[0]
+                self.assertTrue(getattr(args, expected))
+                self.assertIs(run.call_args.kwargs["log"], main.logger)
+        self.assertEqual(args.add_resolution, (2800, 1752))
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 absent")
 class InstanceAndProberTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
