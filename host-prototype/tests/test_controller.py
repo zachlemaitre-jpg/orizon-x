@@ -8,6 +8,7 @@ HAVE_QT = importlib.util.find_spec("PySide6") is not None
 if HAVE_QT:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
 
     from app.controller import Controller
 
@@ -60,7 +61,7 @@ def pump_until(predicate, timeout=3.0):
 class ControllerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QCoreApplication.instance() or QCoreApplication([])
+        cls.app = QCoreApplication.instance() or QApplication([])  # QApplication : test_window/test_tray partagent le processus
 
     def setUp(self):
         FakeEngine.instances.clear()
