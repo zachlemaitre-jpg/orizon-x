@@ -100,6 +100,16 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.selected_output(), "0")  # le choix de l'utilisateur est gardé
         self.assertEqual(self.events, [("output", "0")])
 
+    def test_brand_title_uses_mazagla_and_title_bar_has_no_name(self):
+        self.assertEqual(self.window.brand_title_family(), "MAZAGLA")
+        self.assertEqual(self.window.brand_title_text(), "Orizon X")
+        self.assertNotIn("Orizon X", self.window.title_bar_texts())
+
+    def test_stylesheet_gives_the_brand_title_its_own_font_rule(self):
+        # Hors écran il n'y a pas de police système qui lui fasse concurrence : on vérifie donc la règle elle-même.
+        from app.window import build_style
+        self.assertIn('QLabel#brandTitle { font-family: "MAZAGLA";', build_style("MAZAGLA"))
+
 
 if __name__ == "__main__":
     unittest.main()

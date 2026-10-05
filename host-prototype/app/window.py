@@ -2,20 +2,19 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QCursor, QFont, QFontInfo, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
-from app import status
+from app import brand, status
 from engine import Outputs, State, StreamStats
 
 AUTO_OUTPUT_LABEL = "Auto (taille de la tablette)"
 ENCODER_ITEMS = (("Auto", "auto"), ("AMF (AMD)", "amf"), ("NVENC (NVIDIA)", "nvenc"))
 RADIUS = 14.0
 
-STYLE = """
+STYLE_BASE = """
 QWidget { color: rgba(255, 255, 255, 235); font-family: 'Segoe UI Variable Text', 'Segoe UI'; font-size: 13px; }
-QLabel#brand { font-weight: 600; }
-QLabel#title { font-size: 18px; font-weight: 600; }
+QLabel#title { font-size: 16px; font-weight: 600; }
 QLabel#detail { color: rgba(255, 255, 255, 160); font-size: 12px; }
 QLabel#field { color: rgba(255, 255, 255, 160); }
 QComboBox { background: rgba(255, 255, 255, 18); border: 1px solid rgba(255, 255, 255, 40); border-radius: 8px;
@@ -34,12 +33,17 @@ QToolButton#close:hover { background: rgba(232, 17, 35, 210); }
 """
 
 
+def build_style(brand_family: str) -> str:
+    # Le QWidget { font-family } global l'emporte sur setFont : le titre de marque a sa propre règle, plus spécifique.
+    return STYLE_BASE + f'QLabel#brandTitle {{ font-family: "{brand_family}"; font-size: 26px; font-weight: normal; }}'
+
+
 class StatusDot(QWidget):
-    """Coloured dot with a soft halo: the state at a glance."""
+    """Small coloured dot: the state at a glance."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(52, 52)
+        self.setFixedSize(10, 10)
         self._color = QColor(status.COLORS[State.STOPPED])
 
     def set_color(self, color: str) -> None:
@@ -50,12 +54,8 @@ class StatusDot(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        halo = QColor(self._color)
-        halo.setAlpha(45)
-        painter.setBrush(halo)
-        painter.drawEllipse(QRectF(self.rect()))
         painter.setBrush(self._color)
-        painter.drawEllipse(QRectF(self.rect()).adjusted(17, 17, -17, -17))
+        painter.drawEllipse(QRectF(self.rect()))
 
 
 class OutputCombo(QComboBox):
@@ -118,19 +118,17 @@ class MainWindow(QWidget):
                          | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowSystemMenuHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowTitle("Orizon X")
-        self.setFixedSize(360, 340)
-        self.setStyleSheet(STYLE)
+        self.setWindowIcon(QIcon(logo))
+        self.setFixedSize(360, 380)
+        brand_family = brand.load_brand_font()
+        self.setStyleSheet(build_style(brand_family))
         self._acrylic = False
         self._state = State.STOPPED
         self._quitting = False
 
         bar = TitleBar(self)
         bar.setFixedHeight(40)
-        icon = QLabel(bar)
-        icon.setPixmap(logo.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio,
-                                   Qt.TransformationMode.SmoothTransformation))
-        brand = QLabel("Orizon X", bar)
-        brand.setObjectName("brand")
+        self._title_bar = bar
         minimize = QToolButton(bar)
         minimize.setText("—")
         minimize.setToolTip("Réduire")
@@ -143,16 +141,21 @@ class MainWindow(QWidget):
         bar_layout = QHBoxLayout(bar)
         bar_layout.setContentsMargins(14, 0, 8, 0)
         bar_layout.setSpacing(8)
-        bar_layout.addWidget(icon)
-        bar_layout.addWidget(brand)
         bar_layout.addStretch(1)
         bar_layout.addWidget(minimize)
         bar_layout.addWidget(close)
 
+        self._logo = QLabel(self)
+        self._logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._refresh_logo()
+        self._brand_title = QLabel("Orizon X", self)
+        self._brand_title.setObjectName("brandTitle")
+        self._brand_title.setFont(QFont(brand_family, 26))
+        self._brand_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self._dot = StatusDot(self)
         self._title = QLabel(self)
         self._title.setObjectName("title")
-        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._detail = QLabel(self)
         self._detail.setObjectName("detail")
         self._detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -185,8 +188,16 @@ class MainWindow(QWidget):
         body = QVBoxLayout()
         body.setContentsMargins(22, 4, 22, 20)
         body.setSpacing(6)
-        body.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignHCenter)
-        body.addWidget(self._title)
+        body.addWidget(self._logo)
+        body.addWidget(self._brand_title)
+        body.addSpacing(10)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        status_row.addStretch(1)
+        status_row.addWidget(self._dot)
+        status_row.addWidget(self._title)
+        status_row.addStretch(1)
+        body.addLayout(status_row)
         body.addWidget(self._detail)
         body.addSpacing(8)
         body.addLayout(form)
@@ -234,6 +245,16 @@ class MainWindow(QWidget):
 
     # --- accès pour les tests (et choix simulés de l'utilisateur) ---
 
+    def brand_title_family(self) -> str:
+        self._brand_title.ensurePolished()
+        return QFontInfo(self._brand_title.font()).family()
+
+    def brand_title_text(self) -> str:
+        return self._brand_title.text()
+
+    def title_bar_texts(self) -> list[str]:
+        return [label.text() for label in self._title_bar.findChildren(QLabel)]
+
     def title_text(self) -> str:
         return self._title.text()
 
@@ -261,8 +282,12 @@ class MainWindow(QWidget):
 
     # --- événements Qt ---
 
+    def _refresh_logo(self) -> None:
+        self._logo.setPixmap(brand.logo_pixmap(44, self.devicePixelRatioF()))
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._refresh_logo()  # la fenêtre a pu s'ouvrir sur un écran d'une autre échelle
         self.shown.emit()
 
     def closeEvent(self, event) -> None:
