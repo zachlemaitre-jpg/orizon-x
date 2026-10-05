@@ -89,9 +89,8 @@ class VirtualDisplay:
         if monitor is None:
             return None
         mode = self._pick_mode(monitor, width, height)
-        if should_stop():
+        if not self._activate(mode, should_stop):
             return None
-        self._activate(mode)
 
         rect = self._wait_for(lambda: self._locate(mode), deadline, should_stop)
         if rect is None:
@@ -120,13 +119,15 @@ class VirtualDisplay:
         with self._lock:
             self._cancel_timer()
 
-    def apply_layout(self, position: str, scale: str | int, dpi: int) -> Rect | None:
+    def apply_layout(self, position: str, scale: str | int, dpi: int, *, move: bool = True,
+                     rescale: bool = True) -> Rect | None:
         """Move and scale the virtual screen now (settings changed while streaming). Never raises.
 
-        Returns where the screen now is (the touch target), or None if it is off or cannot be located.
+        move=False (only the scale changed) never moves the screen; rescale=False keeps its scale. Returns where
+        the screen now is (the touch target), or None if it is off or cannot be located.
         """
         with self._lock:
-            size = self._apply_layout(position, scale, dpi)
+            size = self._apply_layout(position, scale, dpi, move=move, rescale=rescale)
             return self._locate(size) if size is not None else None
 
     # ---------- steps ----------
@@ -174,26 +175,35 @@ class VirtualDisplay:
             raise engine.FatalError(msg("display.no_mode", width=width, height=height))
         return mode
 
-    def _activate(self, mode: tuple[int, int]) -> None:
-        """Turn the path on at ``mode``, or resize it in place; nothing if it already is at ``mode``."""
+    def _activate(self, mode: tuple[int, int], should_stop: Callable[[], bool]) -> bool:
+        """Turn the path on at ``mode``, or resize it in place; nothing if it already is at ``mode``.
+
+        False (nothing done) when ``should_stop()`` is true once the lock is held: Quit sets the stop flag, then
+        turns the screen off under this lock (release(immediate=True)); checking outside the lock could turn it on
+        again right after that.
+        """
         with self._lock:
+            if should_stop():
+                self._log("Virtual screen: preparation stopped")
+                return False
             monitor = self._find_monitor()
             if monitor is None:
                 raise engine.FatalError(msg("display.timeout"))
             if monitor.active and monitor.rect is not None and (monitor.rect.width, monitor.rect.height) == mode:
-                return
+                return True
             if monitor.active:
                 self._set_path(monitor.key, mode)
-                return
+                return True
             try:
                 self._layout.set_path_active(monitor.key, True, mode=mode)
-                return
+                return True
             except Exception as e:  # noqa: BLE001
                 # Windows peut refuser d'allumer et de changer de mode d'un coup : en deux temps.
                 self._log(f"Virtual screen: activation with mode {mode[0]}x{mode[1]} refused ({e}), "
                           "trying in two steps")
             self._set_path(monitor.key, None)
             self._set_path(monitor.key, mode)
+            return True
 
     def _set_path(self, key: MonitorKey, mode: tuple[int, int] | None) -> None:
         with self._lock:
@@ -219,28 +229,37 @@ class VirtualDisplay:
             return monitor.rect
         return None
 
-    def _apply_layout(self, position: str, scale: str | int, dpi: int) -> tuple[int, int] | None:
+    def _apply_layout(self, position: str, scale: str | int, dpi: int, move: bool = True,
+                      rescale: bool = True) -> tuple[int, int] | None:
         """Position then scale of the active virtual screen; every failure is logged. Lock held.
 
-        Returns the screen's size, or None if it is off."""
+        The position is computed against every other active monitor (never over a second screen) and not
+        applied again when the screen already is there. Returns the screen's size, or None if it is off."""
         monitor = self._find_monitor()
         if monitor is None or not monitor.active or monitor.rect is None:
             self._log("Virtual screen: off, layout not applied")
             return None
         size = (monitor.rect.width, monitor.rect.height)
-        try:
-            primary = next(rect for rect, is_primary, _name in self._monitors() if is_primary)
-            x, y = self._layout.place(primary, size, position)
-            self._layout.set_position(monitor.key, x, y)
-            self._log(f"Virtual screen placed {position} of the main screen, at ({x},{y})")
-        except Exception as e:  # noqa: BLE001 - la disposition n'est jamais fatale
-            self._log(f"Virtual screen: cannot place it {position}: {e!r}")
-        try:
-            percent = self._layout.auto_scale(dpi) if scale == "auto" else int(scale)
-            applied = self._layout.set_scale(monitor.key, percent)
-            self._log(f"Virtual screen scale: {applied} %")
-        except Exception as e:  # noqa: BLE001
-            self._log(f"Virtual screen: cannot set the scale {scale!r}: {e!r}")
+        if move:
+            try:
+                listed = self._monitors()
+                primary = next(rect for rect, is_primary, _name in listed if is_primary)
+                others = [rect for rect, _primary, _name in listed if rect != monitor.rect]
+                x, y = self._layout.place(primary, size, position, others)
+                if (monitor.rect.left, monitor.rect.top) == (x, y):
+                    self._log(f"Virtual screen already {position} of the main screen, at ({x},{y})")
+                else:
+                    self._layout.set_position(monitor.key, x, y)
+                    self._log(f"Virtual screen placed {position} of the main screen, at ({x},{y})")
+            except Exception as e:  # noqa: BLE001 - la disposition n'est jamais fatale
+                self._log(f"Virtual screen: cannot place it {position}: {e!r}")
+        if rescale:
+            try:
+                percent = self._layout.auto_scale(dpi) if scale == "auto" else int(scale)
+                applied = self._layout.set_scale(monitor.key, percent)
+                self._log(f"Virtual screen scale: {applied} %")
+            except Exception as e:  # noqa: BLE001
+                self._log(f"Virtual screen: cannot set the scale {scale!r}: {e!r}")
         return size
 
     # ---------- release ----------

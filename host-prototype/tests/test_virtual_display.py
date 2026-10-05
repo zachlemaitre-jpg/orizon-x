@@ -459,6 +459,91 @@ class ApplyLayoutTest(unittest.TestCase):
         self.assertIn(("scale", VDD_KEY, 150), h.layout.calls)
         self.assertTrue(any("error 5" in line for line in h.logs))
 
+    def test_scale_only_change_never_moves_the_screen(self):
+        h = Harness()
+        h.prepare()
+        h.layout.calls.clear()
+        self.assertEqual(h.display.apply_layout("left", "150", 274, move=False), Rect(2560, 0, 2880, 1800))
+        self.assertEqual(h.layout.layout_calls(), [("scale", VDD_KEY, 150)])
+
+    def test_position_only_change_keeps_the_scale(self):
+        h = Harness()
+        h.prepare()
+        h.layout.calls.clear()
+        h.display.apply_layout("below", "150", 274, rescale=False)
+        self.assertEqual(h.layout.layout_calls(), [("position", VDD_KEY, -160, 1600)])
+
+    def test_screen_already_at_the_target_is_not_moved_again(self):
+        h = Harness()
+        h.prepare()
+        h.display.apply_layout("right", "auto", 274)
+        h.layout.calls.clear()
+        self.assertEqual(h.display.apply_layout("right", "125", 274), Rect(2560, -100, 2880, 1800))
+        self.assertEqual(h.layout.layout_calls(), [("scale", VDD_KEY, 125)])
+
+    def test_placement_goes_past_a_second_monitor_on_that_side(self):
+        side = (Rect(2560, -200, 1920, 1080), False, r"\\.\DISPLAY2")
+        h = Harness(others=[side])
+        h.prepare()
+        h.layout.calls.clear()
+        h.display.apply_layout("right", "auto", 274)
+        self.assertEqual(h.layout.layout_calls()[0], ("position", VDD_KEY, 4480, -100))
+        h.display.apply_layout("above", "auto", 274)
+        self.assertEqual(h.layout.layout_calls()[2], ("position", VDD_KEY, -160, -2000))
+
+
+class ContendedRLock:
+    """threading.RLock that sets ``contended`` when a thread has to wait for it: tests know a thread is blocked."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.contended = threading.Event()
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self._lock.acquire(blocking=False):
+            return True
+        self.contended.set()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        self._lock.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+class QuitRaceTest(unittest.TestCase):
+    def test_stop_arriving_while_activation_waits_for_the_lock_activates_nothing(self):
+        # Quit : stop(immediate) lève le drapeau puis éteint l'écran sous le verrou, pendant que prepare,
+        # déjà passé par ses vérifications, attend ce verrou pour allumer : il ne doit plus rien allumer.
+        h = Harness()
+        lock = ContendedRLock()
+        h.display._lock = lock
+        stop, picked, held = threading.Event(), threading.Event(), threading.Event()
+        real_pick = h.layout.pick_mode
+
+        def pick_mode(modes, width, height):
+            picked.set()
+            self.assertTrue(held.wait(5))
+            return real_pick(modes, width, height)
+
+        h.layout.pick_mode = pick_mode
+        result = []
+        thread = threading.Thread(target=lambda: result.append(h.prepare(should_stop=stop.is_set)))
+        thread.start()
+        self.assertTrue(picked.wait(5))
+        with lock:   # l'extinction immédiate tient le verrou
+            held.set()
+            self.assertTrue(lock.contended.wait(5))   # prepare attend le verrou pour allumer
+            stop.set()
+        thread.join(5)
+        self.assertEqual(result, [None])
+        self.assertEqual(h.layout.path_calls(), [])
+        self.assertTrue(any("stopped" in line for line in h.logs))
+
 
 class ThreadSafetyTest(unittest.TestCase):
     def test_timer_firing_while_prepare_holds_the_lock_waits_and_then_does_nothing(self):
@@ -467,15 +552,18 @@ class ThreadSafetyTest(unittest.TestCase):
         h.display.release()
         timer = h.timers[0]
         fired = threading.Event()
+        lock = ContendedRLock()
+        h.display._lock = lock
 
         def fire():
             timer.fire()
             fired.set()
 
-        with h.display._lock:
+        with lock:
             thread = threading.Thread(target=fire)
             thread.start()
-            self.assertFalse(fired.wait(0.1))   # bloqué par le verrou
+            self.assertTrue(lock.contended.wait(5))   # le Timer attend le verrou
+            self.assertFalse(fired.is_set())
             h.display.cancel_release()          # même thread : verrou réentrant
         thread.join(2)
         self.assertTrue(fired.is_set())
