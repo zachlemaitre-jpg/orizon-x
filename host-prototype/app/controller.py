@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable, Protocol
 
 from PySide6.QtCore import QObject, Signal
 
-from engine import Config, Listener, State, StreamStats
+from engine import STOP_TIMEOUT_S, Config, Listener, State, StreamStats
 
 
 class Engine(Protocol):
@@ -57,6 +58,9 @@ class Controller(QObject):
         self._config = config
         self._engine: Engine | None = None
         self._generation = 0  # numéro du dernier moteur créé ; un arrêt ne le change pas (son STOPPED compte)
+        # Intention de l'utilisateur : un redémarrage en cours ne relance le moteur que si personne ne l'a arrêté entre-temps.
+        self._want_running = False
+        self._restarts: list[threading.Thread] = []  # redémarrages en cours, attendus par stop_blocking
         # RLock : un signal émis depuis le thread Qt appelle ses slots tout de suite, et ils peuvent relancer une commande.
         self._lock = threading.RLock()
         self.state = State.STOPPED
@@ -93,11 +97,13 @@ class Controller(QObject):
 
     def start(self) -> None:
         with self._lock:
+            self._want_running = True
             self._start_locked()
 
     def stop(self) -> threading.Thread | None:
         """Non-blocking: the engine's stop (up to 3 s) runs in a worker thread, returned for tests."""
         with self._lock:
+            self._want_running = False
             engine, self._engine = self._engine, None
         if engine is None:
             return None
@@ -106,13 +112,19 @@ class Controller(QObject):
         return worker
 
     def stop_blocking(self) -> None:
-        """For Quit: returns once every touch contact is lifted and ffmpeg is gone."""
+        """For Quit: returns once every touch contact is lifted and ffmpeg is gone, pending restarts included."""
         with self._lock:
+            self._want_running = False
             engine, self._engine = self._engine, None
+            restarts, self._restarts = self._restarts, []
         if engine is not None:
             engine.stop()
+        deadline = time.monotonic() + STOP_TIMEOUT_S + 0.5
+        for worker in restarts:  # l'ancien moteur d'un redémarrage s'arrête dans ce thread-là
+            worker.join(max(0.0, deadline - time.monotonic()))
 
     def restart(self, config: Config) -> threading.Thread:
+        """Stops then starts with the new config, unless stop() or stop_blocking() is called in between."""
         def work() -> None:
             with self._lock:
                 old, self._engine = self._engine, None
@@ -121,9 +133,13 @@ class Controller(QObject):
             if old is not None:
                 old.stop()
             with self._lock:
-                self._start_locked()  # sans effet si un start() a déjà relancé un moteur entre-temps
+                if self._want_running:
+                    self._start_locked()  # sans effet si un start() a déjà relancé un moteur entre-temps
 
         worker = threading.Thread(target=work, name="engine-restart", daemon=True)
+        with self._lock:
+            self._want_running = True
+            self._restarts = [t for t in self._restarts if t.is_alive()] + [worker]
         worker.start()
         return worker
 

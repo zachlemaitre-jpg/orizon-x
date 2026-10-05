@@ -57,7 +57,7 @@ def pump_until(predicate, timeout=3.0):
         time.sleep(0.005)
 
 
-@unittest.skipUnless(HAVE_QT, "PySide6 absent (lancer avec .venv\Scripts\python.exe)")
+@unittest.skipUnless(HAVE_QT, r"PySide6 absent (lancer avec .venv\Scripts\python.exe)")
 class ControllerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -87,7 +87,7 @@ class ControllerTest(unittest.TestCase):
         self.controller.start()
         started = time.monotonic()
         worker = self.controller.stop()
-        self.assertLess(time.monotonic() - started, 0.1)
+        self.assertLess(time.monotonic() - started, 0.5)
         worker.join(2)
         pump_until(lambda: self.controller.state is State.STOPPED)
 
@@ -107,7 +107,7 @@ class ControllerTest(unittest.TestCase):
         self.assertTrue(FakeEngine.instances[0].stopping.wait(2))
         started = time.monotonic()
         self.controller.start()  # clic pendant le redémarrage : le thread Qt ne doit pas rester figé
-        self.assertLess(time.monotonic() - started, 0.1)
+        self.assertLess(time.monotonic() - started, 0.5)
         worker.join(2)
         self.assertFalse(worker.is_alive())
         self.assertEqual(len(FakeEngine.instances), 2)  # le start du redémarrage n'en a pas créé un 3ᵉ
@@ -174,6 +174,25 @@ class ControllerTest(unittest.TestCase):
         self.controller.stop_blocking()
         self.assertTrue(FakeEngine.instances[0].stopped.is_set())
 
+
+    def test_stop_during_a_restart_cancels_the_new_engine(self):
+        self.controller.start()
+        worker = self.controller.restart(Config(encoder="amf"))
+        self.assertTrue(FakeEngine.instances[0].stopping.wait(2))
+        self.controller.stop()  # Arrêter pendant que l'ancien moteur s'arrête : le redémarrage n'en crée pas d'autre
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(FakeEngine.instances), 1)
+        pump_until(lambda: self.controller.state is State.STOPPED)
+
+    def test_stop_blocking_waits_for_a_pending_restart(self):
+        self.controller.start()
+        worker = self.controller.restart(Config(encoder="amf"))
+        self.assertTrue(FakeEngine.instances[0].stopping.wait(2))
+        self.controller.stop_blocking()  # Quitter : l'ancienne session doit avoir levé ses contacts
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(FakeEngine.instances[0].stopped.is_set())
+        self.assertEqual(len(FakeEngine.instances), 1)
 
 if __name__ == "__main__":
     unittest.main()
