@@ -9,12 +9,20 @@ from pathlib import Path
 from messages import LANGUAGES
 
 ENCODERS = ("auto", "nvenc", "amf")
+MODES = ("extend", "duplicate")  # Extend : écran virtuel ; Duplicate : écran principal
+POSITIONS = ("right", "left", "above", "below")  # côté de l'écran principal où se place l'écran virtuel
+SCALES = ("auto", "100", "125", "150", "175", "200", "225", "250")  # "auto" : selon la densité de la tablette
 
 
 @dataclass
 class Settings:
-    output: str = "auto"  # "auto" ou un index ddagrab
     encoder: str = "auto"
+    mode: str = "extend"
+    position: str = "right"
+    scale: str = "auto"
+    # Position et échelle déjà appliquées à l'écran virtuel : Windows s'en souvient ensuite (remis à False quand
+    # l'utilisateur les change hors flux, pour les appliquer à la prochaine apparition).
+    layout_applied: bool = False
     first_close_hint_shown: bool = False  # bulle « Orizon X tourne toujours » déjà montrée
     language: str | None = None  # None : la langue choisie à l'installation (registre), sinon l'anglais
 
@@ -25,7 +33,10 @@ def default_path() -> Path:
 
 
 def load(path: Path) -> Settings:
-    """Never fails: a missing or broken file gives the defaults, a bad field only resets that field."""
+    """Never fails: a missing or broken file gives the defaults, a bad field only resets that field.
+
+    Unknown fields are ignored, e.g. "output" (screen choice) from versions before the virtual display.
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -33,15 +44,14 @@ def load(path: Path) -> Settings:
     result = Settings()
     if not isinstance(raw, dict):
         return result
-    output = raw.get("output")
-    if isinstance(output, str) and (output == "auto" or output.isdigit()):
-        result.output = output
-    encoder = raw.get("encoder")
-    if encoder in ENCODERS:
-        result.encoder = encoder
-    hint = raw.get("first_close_hint_shown")
-    if isinstance(hint, bool):
-        result.first_close_hint_shown = hint
+    for name, allowed in (("encoder", ENCODERS), ("mode", MODES), ("position", POSITIONS), ("scale", SCALES)):
+        value = raw.get(name)
+        if isinstance(value, str) and value in allowed:
+            setattr(result, name, value)
+    for name in ("layout_applied", "first_close_hint_shown"):
+        value = raw.get(name)
+        if isinstance(value, bool):
+            setattr(result, name, value)
     language = raw.get("language")
     if language in LANGUAGES:
         result.language = language

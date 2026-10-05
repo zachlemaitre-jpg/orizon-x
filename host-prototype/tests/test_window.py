@@ -12,8 +12,12 @@ if HAVE_QT:
     from app import i18n
     from app.window import MainWindow
 
-from engine import State, StreamStats
+from engine import DisplayInfo, State, StreamStats
+from inputstate import Rect
 from messages import msg
+
+INEXACT = DisplayInfo((2800, 1752), (2560, 1600), False, Rect(2560, 0, 2560, 1600))
+EXACT = DisplayInfo((2880, 1800), (2880, 1800), True, Rect(2560, 0, 2880, 1800))
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 absent")
@@ -29,10 +33,16 @@ class WindowTest(unittest.TestCase):
         pixmap.fill()
         self.window = MainWindow(pixmap)
         self.events = []
-        self.window.output_changed.connect(lambda v: self.events.append(("output", v)))
+        self.window.mode_changed.connect(lambda v: self.events.append(("mode", v)))
+        self.window.position_changed.connect(lambda v: self.events.append(("position", v)))
+        self.window.scale_changed.connect(lambda v: self.events.append(("scale", v)))
         self.window.encoder_changed.connect(lambda v: self.events.append(("encoder", v)))
         self.window.language_chosen.connect(lambda v: self.events.append(("language", v)))
         self.window.closed_to_tray.connect(lambda: self.events.append(("closed",)))
+        self.window.quit_clicked.connect(lambda: self.events.append(("quit",)))
+        self.window.use_duplicate_clicked.connect(lambda: self.events.append(("use_duplicate",)))
+        self.window.add_resolution_clicked.connect(lambda w, h: self.events.append(("add_resolution", w, h)))
+        self.window.adjust_requested.connect(lambda: self.events.append(("adjust",)))
 
     def tearDown(self):
         self.window.deleteLater()
@@ -55,24 +65,119 @@ class WindowTest(unittest.TestCase):
         self.window.set_stats(stats)
         self.assertEqual(self.window.detail_text(), "2880×1800 · 60 fps · 18 ms")
 
-    def test_outputs_list_and_selection_without_signal(self):
-        self.window.set_outputs([(0, (2560, 1600)), (1, (2880, 1800))], "1")
-        self.assertEqual(self.window.output_items(),
-                         [("Auto (taille de la tablette)", "auto"), ("Écran 0 — 2560×1600", "0"),
-                          ("Écran 1 — 2880×1800", "1")])
-        self.assertEqual(self.window.selected_output(), "1")
+    def test_combos_list_their_choices_in_french(self):
+        self.assertEqual(self.window.combo_items("mode"), [("Étendre", "extend"), ("Dupliquer", "duplicate")])
+        self.assertEqual(self.window.combo_items("position"),
+                         [("À droite", "right"), ("À gauche", "left"), ("Au-dessus", "above"), ("En dessous", "below")])
+        self.assertEqual(self.window.combo_items("scale"),
+                         [("Auto", "auto"), ("100 %", "100"), ("125 %", "125"), ("150 %", "150"), ("175 %", "175"),
+                          ("200 %", "200"), ("225 %", "225"), ("250 %", "250")])
+        self.assertEqual(self.window.combo_items("encoder"),
+                         [("Auto", "auto"), ("AMF (AMD)", "amf"), ("NVENC (NVIDIA)", "nvenc")])
+        self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Échelle", "Encodeur", "Langue"])
+        self.assertEqual((self.window.adjust_text(), self.window.quit_text()), ("Régler dans Windows…", "Quitter"))
+
+    def test_combos_and_labels_in_english(self):
+        i18n.set_language("en")
+        self.assertEqual(self.window.combo_items("mode"), [("Extend", "extend"), ("Duplicate", "duplicate")])
+        self.assertEqual([label for label, _v in self.window.combo_items("position")],
+                         ["Right", "Left", "Above", "Below"])
+        self.assertEqual([label for label, _v in self.window.combo_items("scale")],
+                         ["Auto", "100%", "125%", "150%", "175%", "200%", "225%", "250%"])
+        self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Scale", "Encoder", "Language"])
+        self.assertEqual((self.window.adjust_text(), self.window.quit_text()), ("Adjust in Windows…", "Quit"))
+
+    def test_settings_are_shown_without_signals(self):
+        self.window.set_mode("duplicate")
+        self.window.set_position("below")
+        self.window.set_scale("175")
+        self.window.set_encoder("nvenc")
+        self.assertEqual([self.window.selected(name) for name in ("mode", "position", "scale", "encoder")],
+                         ["duplicate", "below", "175", "nvenc"])
         self.assertEqual(self.events, [])
 
-    def test_unknown_saved_output_is_kept(self):
-        self.window.set_outputs([], "3")
-        self.assertEqual(self.window.selected_output(), "3")
-
     def test_user_choice_emits(self):
-        self.window.set_outputs([(0, (2560, 1600))], "auto")
-        self.window.choose_output("0")
-        self.window.set_encoder("auto")
+        self.window.choose("mode", "duplicate")
+        self.window.choose("mode", "extend")
+        self.window.choose("position", "left")
+        self.window.choose("scale", "150")
         self.window.choose_encoder("amf")
-        self.assertEqual(self.events, [("output", "0"), ("encoder", "amf")])
+        self.assertEqual(self.events, [("mode", "duplicate"), ("mode", "extend"), ("position", "left"),
+                                       ("scale", "150"), ("encoder", "amf")])
+
+    def test_position_and_scale_are_disabled_in_duplicate(self):
+        self.assertTrue(self.window.is_enabled("position") and self.window.is_enabled("scale"))
+        self.window.set_mode("duplicate")
+        self.assertEqual([self.window.is_enabled(n) for n in ("mode", "position", "scale", "encoder", "language")],
+                         [True, False, False, True, True])
+        self.window.choose("mode", "extend")  # choix de l'utilisateur : réactivés tout de suite
+        self.assertTrue(self.window.is_enabled("position") and self.window.is_enabled("scale"))
+        self.window.choose("mode", "duplicate")
+        self.assertFalse(self.window.is_enabled("position") or self.window.is_enabled("scale"))
+
+    def test_quit_button_emits(self):
+        self.window._quit.click()
+        self.assertEqual(self.events, [("quit",)])
+
+    def test_adjust_link_emits(self):
+        self.window._adjust.click()
+        self.assertEqual(self.events, [("adjust",)])
+
+    def test_use_duplicate_only_on_the_missing_driver_error(self):
+        self.window.show()
+        self.assertFalse(self.window.use_duplicate_visible())
+        for state, detail in ((State.ERROR, msg("display.timeout")), (State.ERROR, msg("error.no_encoder")),
+                              (State.WAITING_DEVICE, msg("adb.no_device"))):
+            self.window.set_state(state, detail)
+            self.assertFalse(self.window.use_duplicate_visible(), detail)
+        self.window.set_state(State.ERROR, msg("display.vdd_missing"))
+        self.assertTrue(self.window.use_duplicate_visible())
+        self.assertEqual(self.window.use_duplicate_text(), "Passer en Dupliquer")
+        self.window._use_duplicate.click()
+        self.assertEqual(self.events, [("use_duplicate",)])
+        i18n.set_language("en")
+        self.assertEqual(self.window.use_duplicate_text(), "Use Duplicate")
+        self.window.set_state(State.WAITING_DEVICE, msg("adb.no_device"))  # l'erreur est passée
+        self.assertFalse(self.window.use_duplicate_visible())
+
+    def test_add_exact_resolution_only_after_an_inexact_display(self):
+        self.window.show()
+        self.window.set_state(State.PREPARING_DISPLAY, msg("state.preparing_display"))
+        self.window.set_display_info(EXACT)
+        self.window.set_state(State.STREAMING, msg("state.starting_stream"))
+        self.assertFalse(self.window.add_resolution_visible())
+        self.window.set_state(State.PREPARING_DISPLAY, msg("state.preparing_display"))  # nouvelle session
+        self.window.set_display_info(INEXACT)
+        self.window.set_state(State.STREAMING, msg("state.starting_stream"))
+        self.window.set_state(State.STREAMING, msg("state.streaming", width=2560, height=1600))
+        self.assertTrue(self.window.add_resolution_visible())
+        self.assertEqual(self.window.add_resolution_text(), "Ajouter la résolution exacte")
+        self.assertIn("2800×1752", self.window.add_resolution_tooltip())
+        i18n.set_language("en")
+        self.assertEqual(self.window.add_resolution_text(), "Add exact resolution")
+        self.assertIn("2800×1752", self.window.add_resolution_tooltip())
+        self.window._add_resolution.click()
+        self.assertEqual(self.events, [("add_resolution", 2800, 1752)])
+        self.assertFalse(self.window.add_resolution_visible())  # une seule invite UAC par clic
+
+    def test_add_exact_resolution_hides_when_the_session_ends(self):
+        self.window.show()
+        for state, detail in ((State.WAITING_APP, msg("state.waiting_app")), (State.STOPPED, msg("state.stopped")),
+                              (State.PREPARING_DISPLAY, msg("state.preparing_display")),
+                              (State.ERROR, msg("display.timeout"))):
+            with self.subTest(state=state):
+                self.window.set_state(State.PREPARING_DISPLAY, msg("state.preparing_display"))
+                self.window.set_display_info(INEXACT)
+                self.window.set_state(State.STREAMING, msg("state.starting_stream"))
+                self.assertTrue(self.window.add_resolution_visible())
+                self.window.set_state(state, detail)
+                self.assertFalse(self.window.add_resolution_visible())
+
+    def test_exact_display_after_an_inexact_one_hides_the_button(self):
+        self.window.show()
+        self.window.set_display_info(INEXACT)
+        self.window.set_display_info(EXACT)
+        self.assertFalse(self.window.add_resolution_visible())
 
     def test_close_hides_and_tells(self):
         self.window.show()
@@ -92,35 +197,21 @@ class WindowTest(unittest.TestCase):
                      Qt.WindowType.WindowSystemMenuHint):
             self.assertTrue(flags & flag, flag)
 
-    def test_outputs_wait_for_the_open_list_to_close(self):
-        self.window.show()
-        self.window.set_outputs([(0, (2560, 1600))], "auto")
-        self.window._outputs.showPopup()
-        self.window.set_outputs([(0, (2560, 1600)), (1, (2880, 1800))], "auto")
-        self.assertEqual(len(self.window.output_items()), 2)  # liste ouverte : pas de saut sous le curseur
-        # Clic sur un élément : Qt ferme la liste puis émet activated avec l'index de l'ancienne liste.
-        self.window._outputs.hidePopup()
-        self.window.choose_output("0")
-        QCoreApplication.processEvents()
-        self.assertEqual([value for _label, value in self.window.output_items()], ["auto", "0", "1"])
-        self.assertEqual(self.window.selected_output(), "0")  # le choix de l'utilisateur est gardé
-        self.assertEqual(self.events, [("output", "0")])
-
     def test_language_switch_retranslates_live(self):
-        self.window.set_outputs([(0, (2560, 1600))], "0")
+        self.window.set_position("left")
         self.window.set_state(State.STOPPED, msg("state.stopped"))
         self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
                          ("Arrêté", "Clique sur Démarrer.", "Démarrer"))
-        self.assertEqual(self.window.field_labels(), ["Écran", "Encodeur", "Langue"])
+        self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Échelle", "Encodeur", "Langue"])
         self.assertEqual(self.window.tooltips(), ["Réduire", "Fermer (Orizon X continue dans la zone de notification)"])
         i18n.set_language("en")
         self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
                          ("Stopped", "Click Start.", "Start"))
-        self.assertEqual(self.window.field_labels(), ["Screen", "Encoder", "Language"])
+        self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Scale", "Encoder", "Language"])
         self.assertEqual(self.window.selected_language(), "en")  # la liste suit une bascule faite ailleurs
         self.assertEqual(self.window.tooltips(), ["Minimize", "Close (Orizon X keeps running in the notification area)"])
-        self.assertEqual(self.window.output_items(), [("Auto (tablet size)", "auto"), ("Screen 0 — 2560×1600", "0")])
-        self.assertEqual(self.window.selected_output(), "0")
+        self.assertEqual(self.window.combo_items("position")[1], ("Left", "left"))
+        self.assertEqual(self.window.selected("position"), "left")  # la sélection ne bouge pas
         self.window.set_state(State.WAITING_APP, msg("state.waiting_app"))
         self.assertEqual(self.window.primary_text(), "Stop")
         self.assertEqual(self.window.detail_text(), "Tablet plugged in. Open Orizon X on it.")
@@ -128,7 +219,8 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.primary_text(), "Arrêter")
         self.assertEqual(self.window.title_text(), "Ouvre Orizon X sur la tablette")
         self.assertEqual(self.window.detail_text(), "Tablette branchée : ouvre Orizon X dessus.")
-        self.assertEqual(self.window.output_items(), [("Auto (taille de la tablette)", "auto"), ("Écran 0 — 2560×1600", "0")])
+        self.assertEqual(self.window.combo_items("position")[1], ("À gauche", "left"))
+        self.assertEqual(self.window.combo_items("mode"), [("Étendre", "extend"), ("Dupliquer", "duplicate")])
         self.assertEqual(self.events, [])  # changer de langue ne touche pas aux réglages
 
     def test_language_list_shows_each_language_in_its_own_name(self):
@@ -141,7 +233,24 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.primary_text(), "Démarrer")  # la bascule passe par i18n.set_language (main.wire)
 
     def test_everything_fits_in_the_window(self):
-        self.assertLessEqual(self.window.layout().minimumSize().height(), self.window.height())
+        self.assertEqual(self.window.width(), 360)
+        self.window.show()
+        for lang in ("fr", "en"):
+            i18n.set_language(lang)
+            for show_action in (False, True):  # un bouton d'action (Passer en Dupliquer…) sous l'état, ou aucun
+                with self.subTest(lang=lang, action=show_action):
+                    if show_action:
+                        self.window.set_state(State.ERROR, msg("display.vdd_missing"))
+                    else:
+                        self.window.set_state(State.STOPPED, msg("state.stopped"))
+                    QCoreApplication.processEvents()
+                    self.assertLessEqual(self.window.layout().minimumSize().height(), self.window.height())
+                    self.assertLessEqual(self.window.layout().totalSizeHint().height(), self.window.height())
+                    for widget in self.window.visible_controls():
+                        self.assertGreaterEqual(widget.width(), widget.minimumSizeHint().width(), widget)
+                        self.assertGreaterEqual(widget.height(), widget.minimumSizeHint().height(), widget)
+                        bottom = widget.mapTo(self.window, widget.rect().bottomRight()).y()
+                        self.assertLess(bottom, self.window.height(), widget)
 
     def test_language_switch_keeps_the_stream_stats(self):
         self.window.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))

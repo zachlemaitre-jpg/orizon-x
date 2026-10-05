@@ -1,4 +1,8 @@
-"""Orizon X PC app: single instance, log file, window and tray around the relay engine."""
+"""Orizon X PC app: single instance, log file, window and tray around the relay engine.
+
+Also the admin command line (--cleanup, --configure-vdd, --install-driver, --remove-driver, --add-resolution, see
+app/admin.py), handled before Qt starts: no window, exit code only.
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +13,7 @@ import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QIcon, QPixmap
@@ -18,17 +22,20 @@ from PySide6.QtWidgets import QApplication
 
 import engine
 import tools
-from app import admin, autostart, i18n
+from app import admin, autostart, elevate, i18n
 from app import settings as settings_store
 from app.controller import Controller
 from app.glass import apply_glass
 from app.tray import Tray
 from app.window import MainWindow
+from vdd import VddController
+from virtual_display import VirtualDisplay
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 INSTANCE_NAME = f"OrizonX-PC-{os.environ.get('USERNAME', 'user')}"
 SHOW_MESSAGE = b"show"
 ASFW_ANY = -1  # AllowSetForegroundWindow : n'importe quel processus
+DISPLAY_SETTINGS_URI = "ms-settings:display"
 logger = logging.getLogger("orizonx")
 
 
@@ -86,67 +93,107 @@ def serve_instance(server: QLocalServer, show_window: Callable[[], None]) -> Non
     server.newConnection.connect(on_new_connection)
 
 
-def make_engine(config: engine.Config, listener: engine.Listener) -> engine.RelayEngine:
-    # Outils cherchés à chaque démarrage : « Réessayer » marche après une installation de ffmpeg/adb.
-    return engine.RelayEngine(config, listener, ffmpeg=tools.find_tool("ffmpeg"), adb=tools.find_tool("adb"))
+class SettingsKeeper:
+    """The user's settings and their file, shared by the Qt thread and the engine thread.
 
+    The engine asks first_time() and calls mark_layout_applied() from its own thread: one lock around every read,
+    change and save (two saves at once would race on the temporary file).
+    """
 
-class OutputProber(QObject):
-    """Lists the capturable screens in the background (ffmpeg takes ~1 s per screen), one probe at a time."""
+    def __init__(self, current: settings_store.Settings, path: Path) -> None:
+        self.current = current
+        self.path = path
+        self._lock = threading.RLock()
 
-    done = Signal(object)
+    def get(self, name: str) -> Any:
+        with self._lock:
+            return getattr(self.current, name)
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._busy = threading.Lock()
+    def update(self, **fields: Any) -> bool:
+        """Sets the fields and saves if any changed; True if something changed."""
+        with self._lock:
+            changed = {name: value for name, value in fields.items() if getattr(self.current, name) != value}
+            for name, value in changed.items():
+                setattr(self.current, name, value)
+            if changed:
+                self._save_locked()
+            return bool(changed)
 
-    def probe(self) -> None:
-        if not self._busy.acquire(blocking=False):
-            return  # une liste est déjà en cours : son résultat suffira
+    def config(self) -> engine.Config:
+        with self._lock:
+            c = self.current
+            return engine.Config(encoder=c.encoder, mode=c.mode, position=c.position, scale=c.scale)
 
-        def work() -> None:
-            try:
-                outputs = engine.probe_outputs(tools.find_tool("ffmpeg"))
-            except tools.ToolMissing as e:  # déjà affiché par l'état ERROR du moteur : une ligne suffit
-                logger.info("Cannot list the screens: %s", e)
-                outputs = []
-            except Exception:  # noqa: BLE001 — liste vide : seul « Auto » reste proposé
-                logger.exception("Cannot list the screens")
-                outputs = []
-            finally:
-                self._busy.release()
-            self.done.emit(outputs)
+    def first_time(self) -> bool:
+        """Engine thread: the virtual screen's position and scale have not been applied yet."""
+        with self._lock:
+            return not self.current.layout_applied
 
-        threading.Thread(target=work, name="probe-outputs", daemon=True).start()
+    def mark_layout_applied(self) -> None:
+        """Engine thread (or relayout worker): Windows now remembers the position and scale."""
+        self.update(layout_applied=True)
 
-
-def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: OutputProber,
-         current: settings_store.Settings, settings_path: Path, log_path: Path,
-         quit_app: Callable[[], None]) -> None:
-    """Connects the controller, the window, the tray and the settings (testable with a fake engine)."""
-
-    def save_settings() -> None:
+    def _save_locked(self) -> None:
         try:
-            settings_store.save(current, settings_path)
+            settings_store.save(self.current, self.path)
         except OSError:
             logger.exception("Settings not saved")
 
+
+def make_engine_factory(display: Any, keeper: SettingsKeeper,
+                        find_tool: Callable[[str], str] = tools.find_tool) -> Callable[..., engine.RelayEngine]:
+    """Engines with the virtual display in Extend mode, without it in Duplicate mode."""
+    def factory(config: engine.Config, listener: engine.Listener) -> engine.RelayEngine:
+        # Outils cherchés à chaque démarrage : « Réessayer » marche après une installation de ffmpeg/adb.
+        return engine.RelayEngine(config, listener, ffmpeg=find_tool("ffmpeg"), adb=find_tool("adb"),
+                                  display=display if config.mode == "extend" else None,
+                                  first_time=keeper.first_time, on_layout_applied=keeper.mark_layout_applied)
+    return factory
+
+
+def open_display_settings() -> None:
+    os.startfile(DISPLAY_SETTINGS_URI)
+
+
+class _ResolutionResult(QObject):
+    """Brings the end of an "Add exact resolution" (worker thread) back to the Qt thread."""
+
+    done = Signal(int, int, object)  # largeur, hauteur, code de sortie | None (UAC refusé) | exception
+
+
+def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: SettingsKeeper, log_path: Path,
+         quit_app: Callable[[], None], display: Any = None,
+         add_resolution: Callable[[int, int], int | None] = elevate.add_resolution,
+         open_settings: Callable[[], None] = open_display_settings) -> None:
+    """Connects the controller, the window, the tray and the settings (testable with fakes).
+
+    display: the app's VirtualDisplay, turned off at once on Quit (an old engine may still hold a grace delay).
+    add_resolution(width, height): blocking UAC + admin process (elevate.add_resolution), run in a worker thread.
+    """
     def on_state(state: engine.State, detail: i18n.Msg) -> None:
         logger.info("State: %s — %s", state.value, detail.text("en"))
         window.set_state(state, detail)
         tray.set_state(state, detail)
 
-    def on_setting(name: str, value: str) -> None:
-        if getattr(current, name) == value:
-            return  # même valeur choisie à nouveau : pas de coupure du flux
-        setattr(current, name, value)
-        save_settings()
-        controller.restart(engine.Config(output=current.output, encoder=current.encoder))
+    def on_mode(value: str) -> None:
+        if keeper.update(mode=value):
+            # Vers Duplicate, l'écran virtuel n'a plus d'usage : éteint sans attendre la grâce.
+            controller.restart(keeper.config(), immediate_display_release=value == "duplicate")
+
+    def on_encoder(value: str) -> None:
+        if keeper.update(encoder=value):
+            controller.restart(keeper.config())
+
+    def on_layout(name: str, value: str) -> None:
+        if keeper.get(name) == value:
+            return  # même valeur choisie à nouveau : rien à déplacer
+        # Pas encore appliquée : le moteur la remet à True s'il déplace l'écran tout de suite (flux en cours),
+        # sinon la prochaine apparition de l'écran l'applique. Pas de redémarrage : le flux continue.
+        keeper.update(**{name: value}, layout_applied=False)
+        controller.relayout(keeper.get("position"), keeper.get("scale"))
 
     def on_language(lang: str) -> None:
-        if current.language != lang:
-            current.language = lang  # choix explicite : il prime désormais sur celui de l'installateur
-            save_settings()
+        keeper.update(language=lang)  # choix explicite : il prime désormais sur celui de l'installateur
         i18n.set_language(lang)  # textes réappliqués tout de suite ; le flux continue
 
     def on_toggle() -> None:
@@ -156,11 +203,10 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
             controller.stop()
 
     def on_closed_to_tray() -> None:
-        if not current.first_close_hint_shown:
+        if not keeper.get("first_close_hint_shown"):
             lang = i18n.current_language()
             tray.show_message(i18n.tr("tray.still_running_title", lang), i18n.tr("tray.still_running_text", lang))
-            current.first_close_hint_shown = True
-            save_settings()
+            keeper.update(first_close_hint_shown=True)
 
     def on_autostart(enabled: bool) -> None:
         try:
@@ -172,24 +218,72 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, prober: Outp
             logger.exception("Start with Windows: failed")
         tray.set_autostart_checked(autostart.is_enabled())
 
+    def on_use_duplicate() -> None:
+        logger.info("Switching to Duplicate mode (virtual display driver not found)")
+        window.set_mode("duplicate")
+        on_mode("duplicate")
+
+    def on_adjust() -> None:
+        try:
+            open_settings()
+        except OSError:
+            logger.exception("Cannot open the Windows display settings")
+
+    resolution_result = _ResolutionResult(controller)  # enfant du contrôleur : vit aussi longtemps que lui
+
+    def on_add_resolution(width: int, height: int) -> None:
+        logger.info("Add exact resolution %dx%d: asking for administrator rights", width, height)
+
+        def work() -> None:
+            try:
+                result: object = add_resolution(width, height)
+            except Exception as e:  # noqa: BLE001 — rapporté au thread Qt, jamais perdu
+                result = e
+            resolution_result.done.emit(width, height, result)
+
+        threading.Thread(target=work, name="add-resolution", daemon=True).start()
+
+    def on_resolution_done(width: int, height: int, result: object) -> None:
+        lang = i18n.current_language()
+        title = i18n.tr("tray.resolution_title", lang)
+        if result == 0:
+            logger.info("Resolution %dx%d added: restarting the engine so the tablet reconnects", width, height)
+            controller.restart(keeper.config())
+        elif result is None:
+            logger.info("Add exact resolution %dx%d: administrator rights refused", width, height)
+            tray.show_message(title, i18n.tr("tray.resolution_refused", lang))
+        else:
+            logger.error("Add exact resolution %dx%d failed: %s", width, height,
+                         f"exit code {result}" if isinstance(result, int) else repr(result))
+            tray.show_message(title, i18n.tr("tray.resolution_failed", lang))
+
     def on_quit() -> None:
         logger.info("Quit requested")
         tray.hide()  # disparaissent tout de suite : l'arrêt du moteur peut prendre jusqu'à 3 s
         window.prepare_quit()
         window.hide()
-        controller.stop_blocking()  # lève les contacts et tue ffmpeg avant de partir
+        # Lève les contacts, tue ffmpeg et éteint l'écran virtuel sans grâce avant de partir.
+        controller.stop_blocking(immediate_display_release=True)
+        if display is not None:
+            display.release(immediate=True)  # filet : grâce d'un ancien moteur (redémarrage en cours), sans effet sinon
         quit_app()
 
     controller.state_changed.connect(on_state)
     controller.log.connect(logger.info)
     controller.stats.connect(window.set_stats)
-    window.output_changed.connect(lambda value: on_setting("output", value))
-    window.encoder_changed.connect(lambda value: on_setting("encoder", value))
+    controller.display_changed.connect(window.set_display_info)
+    window.mode_changed.connect(on_mode)
+    window.position_changed.connect(lambda value: on_layout("position", value))
+    window.scale_changed.connect(lambda value: on_layout("scale", value))
+    window.encoder_changed.connect(on_encoder)
     window.language_chosen.connect(on_language)
     window.primary_clicked.connect(on_toggle)
+    window.quit_clicked.connect(on_quit)
+    window.use_duplicate_clicked.connect(on_use_duplicate)
+    window.add_resolution_clicked.connect(on_add_resolution)
+    window.adjust_requested.connect(on_adjust)
     window.closed_to_tray.connect(on_closed_to_tray)
-    window.shown.connect(prober.probe)
-    prober.done.connect(lambda outputs: window.set_outputs(outputs, current.output))
+    resolution_result.done.connect(on_resolution_done)
     tray.show_requested.connect(window.show_and_raise)
     tray.toggle_requested.connect(on_toggle)
     tray.open_log_requested.connect(lambda: os.startfile(log_path))
@@ -241,24 +335,25 @@ def main(argv: list[str] | None = None) -> int:
     logo = QPixmap(str(ASSETS / "orizonx.png"))
     app.setWindowIcon(QIcon(str(ASSETS / "orizonx.ico")))
 
-    settings_path = settings_store.default_path()
-    current = settings_store.load(settings_path)
+    keeper = SettingsKeeper(settings_store.load(settings_store.default_path()), settings_store.default_path())
+    current = keeper.current
     i18n.set_language(i18n.detect_language(current.language))  # avant de créer la fenêtre et l'icône
-    controller = Controller(make_engine, engine.Config(output=current.output, encoder=current.encoder))
+    display = VirtualDisplay(VddController(), log=logger.info)
+    display.cleanup_on_start()  # une fois : un plantage ou Windows a pu laisser l'écran virtuel allumé
+    controller = Controller(make_engine_factory(display, keeper), keeper.config())
     window = MainWindow(logo)
     window.set_acrylic(apply_glass(int(window.winId())))
+    window.set_mode(current.mode)
+    window.set_position(current.position)
+    window.set_scale(current.scale)
     window.set_encoder(current.encoder)
-    window.set_outputs([], current.output)
     tray = Tray(logo, autostart_supported=autostart.supported(),
                 autostart_enabled=autostart.supported() and autostart.is_enabled())
-    prober = OutputProber()
-    wire(controller=controller, window=window, tray=tray, prober=prober, current=current,
-         settings_path=settings_path, log_path=log_path, quit_app=app.quit)
+    wire(controller=controller, window=window, tray=tray, keeper=keeper, log_path=log_path, quit_app=app.quit,
+         display=display)
     serve_instance(server, window.show_and_raise)
 
     controller.start()
-    if args.minimized:
-        prober.probe()
-    else:
+    if not args.minimized:
         window.show_and_raise()
     return app.exec()
