@@ -264,8 +264,9 @@ private fun BoxScope.UsbRail(usb: List<UsbDrive>, c: Controls) {
 }
 
 /**
- * Two columns with the same top and bottom: Son on the left; Luminosité with the Wi-Fi/Bluetooth/Avion tiles under it
- * on the right. A lone column is centred. USB drives are not here: they live in the side rail ([UsbRail]).
+ * Two equal-width columns with the same top and bottom. Left: the "En cours de lecture" card (when present) then the Son
+ * card; right: Luminosité then the Wi-Fi/Bluetooth/Avion tiles. The last card of each column stretches so both end at the
+ * same line. A lone column is centred. USB drives are not here: they live in the side rail ([UsbRail]).
  */
 @Composable
 private fun LandscapeControls(state: ActionsState, c: Controls) {
@@ -274,27 +275,39 @@ private fun LandscapeControls(state: ActionsState, c: Controls) {
     val radios = hasRadios(state)
     val right = brightness != null || radios
     val nowPlaying = state.nowPlaying
-    if (!sound && !right && nowPlaying == null) return
-    Column(Modifier.widthIn(max = 920.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (nowPlaying != null) NowPlayingCard(nowPlaying, c)
-        if (sound && right) {
-            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                SoundCard(state, c, Modifier.weight(1f).fillMaxHeight(), stretch = true)
-                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    RightColumn(state, c, brightness, radios)
-                }
+    val left = sound || nowPlaying != null
+    if (!left && !right) return
+    if (left && right) {
+        Row(Modifier.widthIn(max = 1040.dp).fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                LeftColumn(state, c, nowPlaying, sound, stretch = true)
             }
-        } else if (sound) {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                SoundCard(state, c, Modifier.widthIn(max = 460.dp).fillMaxWidth())
-            }
-        } else if (right) {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 460.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    RightColumn(state, c, brightness, radios)
-                }
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                RightColumn(state, c, brightness, radios)
             }
         }
+    } else {
+        Box(Modifier.widthIn(max = 1040.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.widthIn(max = 460.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (left) LeftColumn(state, c, nowPlaying, sound, stretch = false) else RightColumn(state, c, brightness, radios)
+            }
+        }
+    }
+}
+
+/** Now playing then Son; with [stretch] the last card takes the remaining height of the column. */
+@Composable
+private fun ColumnScope.LeftColumn(state: ActionsState, c: Controls, nowPlaying: NowPlaying?, sound: Boolean, stretch: Boolean) {
+    if (nowPlaying != null) {
+        val last = !sound
+        NowPlayingCard(
+            nowPlaying, c,
+            if (stretch && last) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth(),
+            stretch = stretch && last,
+        )
+    }
+    if (sound) {
+        SoundCard(state, c, if (stretch) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth(), stretch = stretch)
     }
 }
 
@@ -507,82 +520,110 @@ private fun SpeakerIcon(muted: Boolean, tint: Color, modifier: Modifier = Modifi
 
 // --- Cards ---------------------------------------------------------------------------------
 
+/**
+ * Son card. With the media keys in it (no now-playing card): header, slider with its value, then mute + keys.
+ * Without them (the now-playing card has the keys): compact, header with the value and one row mute button + slider.
+ * With [stretch] the card may be taller than its content: the keys / the slider row take the free space.
+ */
 @Composable
 private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
     val audio = state.audio
+    val keys = soundKeys(state)
+    val muted = audio?.muted == true
     GlassCard(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            val muted = audio?.muted == true
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             SpeakerIcon(muted, if (muted) MuteRed else Color.White, Modifier.size(24.dp))
             Spacer(Modifier.width(8.dp))
             GlassText("Son", size = 16.sp, weight = FontWeight.SemiBold)
-        }
-        if (audio != null) {
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                GlassSlider(
-                    value = audio.volume,
-                    onChange = { v ->
-                        c.update { copy(audio = AudioState(v, audio.muted)) }
-                        c.volumeThrottle.onChange(v)
-                    },
-                    onFinish = { v ->
-                        c.update { copy(audio = AudioState(v, audio.muted)) }
-                        c.volumeThrottle.onRelease(v)
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(12.dp))
-                Box(Modifier.width(52.dp), contentAlignment = Alignment.CenterEnd) {
-                    GlassText(if (audio.muted) "Muet" else "${(audio.volume * 100).roundToInt()} %", size = 16.sp)
-                }
+            if (audio != null && !keys) {
+                Spacer(Modifier.weight(1f))
+                GlassText(if (audio.muted) "Muet" else "${(audio.volume * 100).roundToInt()} %", size = 16.sp)
             }
-            Spacer(Modifier.height(10.dp))
         }
-        // In the equal-height landscape row the card may be taller than its content: push the keys to the bottom.
-        if (stretch) Spacer(Modifier.weight(1f))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (audio != null) {
-                MuteButton(audio.muted, onClick = {
+        if (audio != null && !keys) {
+            if (stretch) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                MuteButton(audio.muted, compact = true, onClick = {
                     c.tap()
                     c.update { copy(audio = AudioState(audio.volume, !audio.muted)) }
                     c.send(ActionMessages.volumeMute(!audio.muted))
                 })
+                Spacer(Modifier.width(14.dp))
+                VolumeSlider(audio, c, Modifier.weight(1f))
             }
-            if (soundKeys(state)) {
-                Spacer(Modifier.weight(1f))
-                RoundKey("⏮") { c.tap(); c.send(ActionMessages.mediaPrevious()) }
-                RoundKey("⏯") { c.tap(); c.send(ActionMessages.mediaPlayPause()) }
-                RoundKey("⏭") { c.tap(); c.send(ActionMessages.mediaNext()) }
+            if (stretch) Spacer(Modifier.weight(1f))
+        } else {
+            if (audio != null) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    VolumeSlider(audio, c, Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp))
+                    Box(Modifier.width(52.dp), contentAlignment = Alignment.CenterEnd) {
+                        GlassText(if (audio.muted) "Muet" else "${(audio.volume * 100).roundToInt()} %", size = 16.sp)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            // In the equal-height landscape row the card may be taller than its content: push the keys to the bottom.
+            if (stretch) Spacer(Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (audio != null) {
+                    MuteButton(audio.muted, onClick = {
+                        c.tap()
+                        c.update { copy(audio = AudioState(audio.volume, !audio.muted)) }
+                        c.send(ActionMessages.volumeMute(!audio.muted))
+                    })
+                }
+                if (keys) {
+                    Spacer(Modifier.weight(1f))
+                    RoundKey("⏮") { c.tap(); c.send(ActionMessages.mediaPrevious()) }
+                    RoundKey("⏯") { c.tap(); c.send(ActionMessages.mediaPlayPause()) }
+                    RoundKey("⏭") { c.tap(); c.send(ActionMessages.mediaNext()) }
+                }
             }
         }
     }
 }
 
-/** Cover (placeholder note when missing or not the announced one), track texts and the media keys. */
 @Composable
-private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
+private fun VolumeSlider(audio: AudioState, c: Controls, modifier: Modifier) {
+    GlassSlider(
+        value = audio.volume,
+        onChange = { v ->
+            c.update { copy(audio = AudioState(v, audio.muted)) }
+            c.volumeThrottle.onChange(v)
+        },
+        onFinish = { v ->
+            c.update { copy(audio = AudioState(v, audio.muted)) }
+            c.volumeThrottle.onRelease(v)
+        },
+        modifier = modifier,
+    )
+}
+
+/** Cover on the left; title, artist · album, app and the three keys under them on the right (centred when [stretch]). */
+@Composable
+private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
     val cover = c.artwork?.takeIf { now.artworkId != null && it.first == now.artworkId }?.second
     GlassCard(modifier) {
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        if (stretch) Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(120.dp).clip(CoverShape).background(Color.White.copy(alpha = 0.10f)),
+                Modifier.size(112.dp).clip(CoverShape).background(Color.White.copy(alpha = 0.10f)),
                 contentAlignment = Alignment.Center,
             ) {
                 if (cover != null) {
                     Image(cover, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 } else {
-                    Picto(R.drawable.ic_action_music_note, 56.dp, alpha = 0.6f)
+                    Picto(R.drawable.ic_action_music_note, 52.dp, alpha = 0.6f)
                 }
             }
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
-                Column {
-                    OneLine(now.title.ifBlank { "Lecture en cours" }, 18.sp, FontWeight.Bold, 1f)
-                    val details = listOf(now.artist, now.album).filter { it.isNotBlank() }.joinToString(" · ")
-                    if (details.isNotEmpty()) OneLine(details, 14.sp, FontWeight.Normal, 0.8f)
-                    if (now.app.isNotBlank()) OneLine(now.app, 12.sp, FontWeight.Normal, 0.55f)
-                }
-                Spacer(Modifier.height(8.dp))
+            Column(Modifier.weight(1f)) {
+                OneLine(now.title.ifBlank { "Lecture en cours" }, 18.sp, FontWeight.Bold, 1f)
+                val details = listOf(now.artist, now.album).filter { it.isNotBlank() }.joinToString(" · ")
+                if (details.isNotEmpty()) OneLine(details, 14.sp, FontWeight.Normal, 0.8f)
+                if (now.app.isNotBlank()) OneLine(now.app, 12.sp, FontWeight.Normal, 0.55f)
+                Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     RoundIconKey(R.drawable.ic_action_skip_previous) { c.tap(); c.send(ActionMessages.mediaPrevious()) }
                     RoundIconKey(if (now.playing) R.drawable.ic_action_pause else R.drawable.ic_action_play) {
@@ -594,6 +635,7 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                 }
             }
         }
+        if (stretch) Spacer(Modifier.weight(1f))
     }
 }
 
@@ -746,21 +788,29 @@ private fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier:
     }
 }
 
-/** Speaker toggle: red tint, slashed speaker and the label "Muet" when muted; plain "Son" otherwise. */
+/**
+ * Speaker toggle: red tint, slashed speaker and the label "Muet" when muted; plain "Son" otherwise.
+ * [compact] is a 56 dp square with the icon alone (the card header already says "Son").
+ */
 @Composable
-private fun MuteButton(muted: Boolean, onClick: () -> Unit) {
+private fun MuteButton(muted: Boolean, onClick: () -> Unit, compact: Boolean = false) {
     val tint = if (muted) MuteRed else Color.White
-    Column(
-        Modifier
-            .clip(TileShape)
-            .background(if (muted) MuteRed.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
-            .border(if (muted) 2.dp else 1.dp, if (muted) MuteRed.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.25f), TileShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        SpeakerIcon(muted, tint, Modifier.size(30.dp))
-        GlassText(if (muted) "Muet" else "Son", size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
+    val shape = if (compact) RoundedCornerShape(16.dp) else TileShape
+    val base = Modifier
+        .clip(shape)
+        .background(if (muted) MuteRed.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
+        .border(if (muted) 2.dp else 1.dp, if (muted) MuteRed.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.25f), shape)
+        .semantics { contentDescription = if (muted) "Réactiver le son" else "Couper le son" }
+        .clickable(onClick = onClick)
+    if (compact) {
+        Box(base.size(56.dp), contentAlignment = Alignment.Center) {
+            SpeakerIcon(muted, tint, Modifier.size(30.dp))
+        }
+    } else {
+        Column(base.padding(horizontal = 16.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            SpeakerIcon(muted, tint, Modifier.size(30.dp))
+            GlassText(if (muted) "Muet" else "Son", size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
+        }
     }
 }
 
