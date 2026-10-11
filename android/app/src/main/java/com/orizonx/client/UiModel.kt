@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.orizonx.client.protocol.PcMessage
 import com.orizonx.client.stats.LatencyTracker
+import org.json.JSONObject
 
 sealed interface ConnectionState {
     data class Waiting(val reason: String?) : ConnectionState
@@ -43,9 +44,35 @@ class UiModel : Session.Listener {
     var streamGeneration by mutableIntStateOf(0)
         private set
 
+    /** Role chosen on the waiting screen (persisted by the activity). */
+    var role by mutableStateOf(DeviceRole.SCREEN)
+        private set
+
+    /** Role announced to the PC on the open connection; null while no PC is connected. */
+    var connectedRole by mutableStateOf<DeviceRole?>(null)
+        private set
+
+    /** Latest ACTIONS_STATE payload from the PC (consumed by the Actions UI); null until received or after a disconnect. */
+    var actionsState by mutableStateOf<JSONObject?>(null)
+        private set
+
     @Volatile private var decoderName = ""
 
+    fun chooseRole(value: DeviceRole) {
+        role = value
+    }
+
+    override fun onConnected(role: DeviceRole) {
+        connectedRole = role
+    }
+
+    override fun onActionsState(json: JSONObject) {
+        actionsState = json
+    }
+
     fun showWaiting(reason: String?) {
+        connectedRole = null
+        actionsState = null
         waitingReason = reason
         state = ConnectionState.Waiting(reason)
         hud = null

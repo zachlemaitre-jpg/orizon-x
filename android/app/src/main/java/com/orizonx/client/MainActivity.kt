@@ -1,6 +1,8 @@
 package com.orizonx.client
 
+import android.content.pm.ActivityInfo
 import android.os.Bundle
+import android.os.Build
 import android.view.Surface
 import android.view.View
 import android.view.WindowInsets
@@ -16,16 +18,20 @@ import com.orizonx.client.ui.OrizonXApp
 class MainActivity : ComponentActivity() {
     private val model = UiModel()
     private var receiver: Receiver? = null
+    private lateinit var roleStore: RoleStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        roleStore = RoleStore(getSharedPreferences("orizonx", MODE_PRIVATE), smallestWidthDp())
+        model.chooseRole(roleStore.load())
+        applyOrientation(model.role)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val screen = screenInfo()
-        setContent { OrizonXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed) }
+        setContent { OrizonXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed, ::onRoleChosen) }
     }
 
     override fun onResume() {
@@ -38,6 +44,33 @@ class MainActivity : ComponentActivity() {
             it.hide(WindowInsets.Type.systemBars())
             it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+    }
+
+    private fun smallestWidthDp() = resources.configuration.smallestScreenWidthDp
+
+    /** Landscape-only to stream (as before); free rotation for the Actions remote. */
+    private fun applyOrientation(role: DeviceRole) {
+        requestedOrientation = when (role) {
+            DeviceRole.SCREEN -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            DeviceRole.ACTIONS -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+    }
+
+    private fun currentDeviceInfo() = deviceInfoFor(model.role, smallestWidthDp(), Build.MODEL, appVersion())
+
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (_: Exception) {
+        "?"
+    }
+
+    /** Waiting-screen button: persist, rotate, and drop the PC connection so the PC reconnects with the new role. */
+    private fun onRoleChosen(role: DeviceRole) {
+        if (role == model.role) return
+        roleStore.save(role)
+        model.chooseRole(role)
+        applyOrientation(role)
+        receiver?.closeConnection()
     }
 
     /** Physical screen size in landscape orientation. */
@@ -61,7 +94,7 @@ class MainActivity : ComponentActivity() {
 
     private fun onSurfaceCreated(surface: Surface) {
         receiver?.stop()
-        receiver = Receiver(surface, screenInfo(), model)
+        receiver = Receiver(surface, screenInfo(), model, ::currentDeviceInfo)
     }
 
     private fun onSurfaceDestroyed() {

@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.orizonx.client.ConnectionState
+import com.orizonx.client.DeviceRole
 import com.orizonx.client.ScreenInfo
 import com.orizonx.client.UiModel
 import kotlinx.coroutines.delay
@@ -37,6 +38,7 @@ fun OrizonXApp(
     onVideoView: (android.view.View) -> Unit,
     onSurfaceCreated: (Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
+    onRoleChosen: (DeviceRole) -> Unit,
 ) {
     val streaming = model.state is ConnectionState.Streaming
     Box(
@@ -56,7 +58,7 @@ fun OrizonXApp(
         VideoSurface(videoModifier, onVideoView, onSurfaceCreated, onSurfaceDestroyed)
 
         AnimatedVisibility(visible = !streaming, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
-            WaitingScreen(model.waitingReason, screen)
+            WaitingScreen(model.waitingReason, screen, model.role, model.connectedRole, onRoleChosen)
         }
 
         if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))

@@ -10,6 +10,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +22,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.orizonx.client.DeviceRole
 import com.orizonx.client.R
 import com.orizonx.client.ScreenInfo
 import com.orizonx.client.protocol.Protocol
@@ -47,11 +51,22 @@ private val Pink = Color(0xFFD4537E)
 private val Amber = Color(0xFFFAC775)
 
 @Composable
-fun WaitingScreen(reason: String?, screen: ScreenInfo) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+fun WaitingScreen(
+    reason: String?,
+    screen: ScreenInfo,
+    role: DeviceRole,
+    connectedRole: DeviceRole?,
+    onRoleChosen: (DeviceRole) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         BlobBackground()
-        GlassCard(Modifier.fillMaxWidth(0.55f).wrapContentWidth().widthIn(max = 620.dp)) {
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        val actionsConnected = connectedRole == DeviceRole.ACTIONS
+        val fraction = if (maxWidth < 600.dp) 0.92f else 0.55f
+        GlassCard(Modifier.fillMaxWidth(fraction).wrapContentWidth().widthIn(max = 620.dp)) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 Image(
                     painterResource(R.drawable.ic_orizonx_logo),
                     contentDescription = "Logo Orizon X",
@@ -66,16 +81,24 @@ fun WaitingScreen(reason: String?, screen: ScreenInfo) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     PulsingDot()
                     Spacer(Modifier.width(10.dp))
-                    GlassText("En attente du PC…", size = 16.sp)
+                    GlassText(if (actionsConnected) "PC connecté — mode Actions" else "En attente du PC…", size = 16.sp)
+                }
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    GlassButton("Écran", selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp))
+                    GlassButton("Actions", selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = Modifier.weight(1f))
                 }
                 if (reason != null) {
                     Spacer(Modifier.height(8.dp))
                     GlassText(reason, size = 13.sp, color = Amber, align = TextAlign.Center)
                 }
                 Spacer(Modifier.height(14.dp))
-                GlassText("Lance Orizon X sur le PC.", size = 13.sp, alpha = 0.85f)
-                Spacer(Modifier.height(10.dp))
-                GlassText("Appui long à 4 doigts : infos de connexion", size = 12.sp, alpha = 0.75f)
+                if (!actionsConnected) GlassText("Lance Orizon X sur le PC.", size = 13.sp, alpha = 0.85f)
+                if (role == DeviceRole.SCREEN) {
+                    Spacer(Modifier.height(10.dp))
+                    GlassText("Appui long à 4 doigts : infos de connexion", size = 12.sp, alpha = 0.75f)
+                }
                 Spacer(Modifier.height(18.dp))
                 Row {
                     GlassText("${screen.width}×${screen.height}", size = 12.sp, alpha = 0.7f)

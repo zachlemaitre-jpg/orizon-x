@@ -19,11 +19,13 @@ class Receiver(
     private val surface: Surface,
     private val screen: ScreenInfo,
     private val model: UiModel,
+    private val deviceInfo: () -> TabletMessage.DeviceInfo,
 ) {
     @Volatile private var running = true
     @Volatile private var server: Server? = null
     @Volatile private var socket: Socket? = null
     @Volatile private var session: Session? = null
+    @Volatile private var roleSwitch = false
     private val worker = thread(name = "net-reader") { loop() }
 
     /** Forwards an INPUT frame to the running session, if any. */
@@ -31,11 +33,19 @@ class Receiver(
         session?.sendInput(message)
     }
 
+    /** Drops the open PC connection (role change); the loop then listens again and the PC reconnects with the new role. */
+    fun closeConnection() {
+        if (session == null) return
+        roleSwitch = true
+        runCatching { socket?.close() }
+    }
+
     private fun loop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
         var reason: String? = null
         try {
             while (running) {
+                roleSwitch = false
                 model.showWaiting(reason)
                 try {
                     val listening = server ?: Server().also { server = it }
@@ -47,7 +57,7 @@ class Receiver(
                         connection.close()
                         break
                     }
-                    val current = Session(connection, surface, screen, model)
+                    val current = Session(connection, surface, screen, deviceInfo(), model)
                     session = current
                     try {
                         current.run()
@@ -73,7 +83,7 @@ class Receiver(
                         reason = "Écoute impossible : ${e.message ?: e.javaClass.simpleName}"
                         if (!pause()) break
                     } else {
-                        reason = "PC déconnecté"
+                        reason = if (roleSwitch) null else "PC déconnecté"
                     }
                 } catch (e: Exception) {
                     if (!running) break

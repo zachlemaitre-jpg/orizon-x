@@ -2,12 +2,16 @@ package com.orizonx.client.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -55,6 +59,33 @@ fun GlassPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         content = content,
     )
+}
+
+/** Large glass button; [selected] adds a stronger fill and a bright edge. */
+@Composable
+fun GlassButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .heightIn(min = 64.dp)
+            .clip(CardShape)
+            .background(Color.White.copy(alpha = if (selected) 0.28f else 0.08f))
+            .border(
+                if (selected) 2.dp else 1.dp,
+                if (selected) Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.9f), Color.White.copy(alpha = 0.5f)))
+                else edgeBrush(0.35f, 0.10f),
+                CardShape,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        GlassText(
+            text,
+            size = 20.sp,
+            alpha = if (selected) 1f else 0.75f,
+            weight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
 }
 
 @Composable

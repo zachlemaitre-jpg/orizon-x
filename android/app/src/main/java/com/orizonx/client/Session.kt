@@ -29,9 +29,13 @@ class Session(
     private val socket: Socket,
     private val surface: Surface,
     private val screen: ScreenInfo,
+    private val deviceInfo: TabletMessage.DeviceInfo,
     private val listener: Listener,
 ) {
     interface Listener {
+        /** HELLO and DEVICE_INFO were sent; [role] is the role announced to the PC. */
+        fun onConnected(role: DeviceRole)
+        fun onActionsState(json: org.json.JSONObject)
         fun onStreaming(config: PcMessage.Config, decoder: String)
         fun onStats(window: LatencyTracker.Window)
     }
@@ -57,6 +61,8 @@ class Session(
         var config: PcMessage.Config? = null
         try {
             writer.write(TabletMessage.Hello(screen.width, screen.height, screen.dpi))
+            writer.write(deviceInfo) // immediately after HELLO: the PC waits at most 1 s for it, then assumes "screen"
+            listener.onConnected(DeviceRole.fromWire(deviceInfo.role) ?: DeviceRole.SCREEN)
             timers.every(PING_INTERVAL_MS, initialDelayMs = 0) { writer.write(TabletMessage.Ping(nowUs())) }
             timers.every(STATS_INTERVAL_MS, initialDelayMs = STATS_INTERVAL_MS) { sendStats(writer) }
             try {
@@ -96,7 +102,7 @@ class Session(
                             }
                         }
                         is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
-                        is ActionsStateMessage -> Unit // Actions role: handled by the Actions UI (later task)
+                        is ActionsStateMessage -> listener.onActionsState(message.json)
                     }
                 }
             } catch (e: SocketException) {
