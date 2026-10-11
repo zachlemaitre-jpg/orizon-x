@@ -1,5 +1,6 @@
 package com.orizonx.client.protocol
 
+import org.json.JSONObject
 import java.io.IOException
 
 /** TABX protocol v1 constants. Reference: protocol/PROTOCOL.md. */
@@ -8,12 +9,16 @@ object Protocol {
     const val PORT = 27183
     const val HEADER_SIZE = 8
     const val MAX_PAYLOAD = 16 * 1024 * 1024
+
+    /** Largest JSON payload (DEVICE_INFO, ACTION, ACTIONS_STATE). */
+    const val MAX_JSON = 64 * 1024
     val MAGIC: ByteArray = "TABX".toByteArray(Charsets.US_ASCII)
 
     // PC -> tablet
     const val TYPE_CONFIG = 0x01
     const val TYPE_VIDEO = 0x02
     const val TYPE_PONG = 0x03
+    const val TYPE_ACTIONS_STATE = 0x04
 
     // tablet -> PC
     const val TYPE_HELLO = 0x81
@@ -21,6 +26,8 @@ object Protocol {
     const val TYPE_KEYFRAME_REQ = 0x83
     const val TYPE_STATS = 0x84
     const val TYPE_INPUT = 0x85
+    const val TYPE_DEVICE_INFO = 0x86
+    const val TYPE_ACTION = 0x87
 
     const val DEVICE_TOUCH = 1
     const val DEVICE_PEN = 2
@@ -62,6 +69,9 @@ sealed interface PcMessage {
     data class Pong(val tTabUs: Long, val tPcUs: Long) : PcMessage
 }
 
+/** The complete Actions state broadcast by the PC (ACTIONS_STATE, JSON). Parsing into a model is up to the UI layer. */
+class ActionsStateMessage(val json: JSONObject) : PcMessage
+
 /** Messages sent to the PC. */
 sealed interface TabletMessage {
     data class Hello(val width: Int, val height: Int, val dpi: Int, val version: Int = Protocol.VERSION) : TabletMessage
@@ -80,4 +90,10 @@ sealed interface TabletMessage {
 
     /** Complete state of one device (touch or pen) right after an event. */
     data class Input(val device: Int, val contacts: List<InputContact>) : TabletMessage
+
+    /** Role and identity of this device, sent right after Hello. [role] is "screen" or "actions"; [kind] "phone" or "tablet". */
+    data class DeviceInfo(val role: String, val kind: String, val name: String, val app: String) : TabletMessage
+
+    /** One user action for the PC; [json] must carry a string "id" (spec actions-mode §2.2). */
+    class Action(val json: JSONObject) : TabletMessage
 }

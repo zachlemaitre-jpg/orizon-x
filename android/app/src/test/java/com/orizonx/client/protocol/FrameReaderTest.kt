@@ -1,6 +1,7 @@
 package com.orizonx.client.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.EOFException
@@ -68,5 +69,59 @@ class FrameReaderTest {
             }
         }
         assertEquals(PcMessage.Pong(123456789, 987654321), FrameReader(trickle).read())
+    }
+
+    private fun jsonFrame(type: Int, payload: ByteArray): String =
+        "%02x000000%08x".format(type, payload.size) + payload.toHex()
+
+    private fun jsonFrame(type: Int, text: String): String = jsonFrame(type, text.toByteArray(Charsets.UTF_8))
+
+    @Test
+    fun decodesActionsStateAsJson() {
+        val message = read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, """{"v":1,"wifi":{"ssid":"Café"}}""")) as ActionsStateMessage
+        assertEquals(1, message.json.getInt("v"))
+        assertEquals("Café", message.json.getJSONObject("wifi").getString("ssid"))
+    }
+
+    @Test
+    fun actionsStateIsFollowedByNextMessage() {
+        val reader = FrameReader(ByteArrayInputStream(hex(jsonFrame(Protocol.TYPE_ACTIONS_STATE, """{"v":1}""") + pongHex)))
+        assertTrue(reader.read() is ActionsStateMessage)
+        assertEquals(PcMessage.Pong(123456789, 987654321), reader.read())
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsInvalidActionsStateJson() {
+        read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, "{not json"))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsEmptyActionsState() {
+        read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, ""))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsActionsStateThatIsNotAnObject() {
+        read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, "[1,2]"))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsActionsStateWithInvalidUtf8() {
+        read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, byteArrayOf('{'.code.toByte(), '"'.code.toByte(), 0xFF.toByte(), '"'.code.toByte(), '}'.code.toByte())))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsActionsStateOverSixtyFourKib() {
+        val big = """{"v":1,"pad":"${"x".repeat(Protocol.MAX_JSON)}"}"""
+        read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, big))
+    }
+
+    @Test
+    fun acceptsActionsStateOfExactlySixtyFourKib() {
+        val head = """{"pad":""""
+        val tail = """"}"""
+        val text = head + "x".repeat(Protocol.MAX_JSON - head.length - tail.length) + tail
+        assertEquals(Protocol.MAX_JSON, text.length)
+        assertTrue(read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, text)) is ActionsStateMessage)
     }
 }

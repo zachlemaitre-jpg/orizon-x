@@ -1,6 +1,7 @@
 """TABX protocol v1, PC side. Reference: protocol/PROTOCOL.md."""
 from __future__ import annotations
 
+import json
 import struct
 from dataclasses import dataclass
 from typing import BinaryIO
@@ -9,18 +10,22 @@ VERSION = 1
 PORT = 27183
 MAGIC = b"TABX"
 MAX_PAYLOAD = 16 * 1024 * 1024
+MAX_JSON = 64 * 1024  # largest JSON payload (DEVICE_INFO, ACTION, ACTIONS_STATE)
 HEADER = struct.Struct(">BBHI")
 
 # PC -> tablet
 CONFIG = 0x01
 VIDEO = 0x02
 PONG = 0x03
+ACTIONS_STATE = 0x04
 # tablet -> PC
 HELLO = 0x81
 PING = 0x82
 KEYFRAME_REQ = 0x83
 STATS = 0x84
 INPUT = 0x85
+DEVICE_INFO = 0x86
+ACTION = 0x87
 
 DEVICE_TOUCH = 1
 DEVICE_PEN = 2
@@ -92,7 +97,20 @@ class Input:
     contacts: tuple[Contact, ...]
 
 
-TabletMessage = Hello | Ping | KeyframeRequest | Stats | Input
+@dataclass(frozen=True)
+class DeviceInfo:
+    role: str
+    kind: str
+    name: str
+    app: str
+
+
+@dataclass(frozen=True)
+class Action:
+    fields: dict  # the decoded JSON object; "id" is always a str
+
+
+TabletMessage = Hello | Ping | KeyframeRequest | Stats | Input | DeviceInfo | Action
 
 
 def _frame(msg_type: int, flags: int, payload: bytes) -> bytes:
@@ -109,6 +127,17 @@ def encode_video(pts_us: int, data: bytes, flags: int = 0) -> bytes:
 
 def encode_pong(t_tab_us: int, t_pc_us: int) -> bytes:
     return _frame(PONG, 0, _PONG.pack(t_tab_us, t_pc_us))
+
+
+def encode_actions_state(state: dict) -> bytes:
+    """Frames the complete Actions state as compact UTF-8 JSON. Raises ValueError if it cannot be encoded or exceeds MAX_JSON."""
+    try:
+        payload = json.dumps(state, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"ACTIONS_STATE is not encodable as JSON: {e}") from e
+    if len(payload) > MAX_JSON:
+        raise ValueError(f"ACTIONS_STATE too large: {len(payload)} bytes (max {MAX_JSON})")
+    return _frame(ACTIONS_STATE, 0, payload)
 
 
 def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
@@ -129,6 +158,10 @@ def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
             return Stats(*_STATS.unpack(payload))
         if msg_type == INPUT:
             return _decode_input(payload)
+        if msg_type == DEVICE_INFO:
+            return _decode_device_info(payload)
+        if msg_type == ACTION:
+            return _decode_action(payload)
     except struct.error as e:
         raise ProtocolError(f"invalid payload for type 0x{msg_type:02x}: {e}") from e
     return None
@@ -149,6 +182,37 @@ def _decode_input(payload: bytes) -> Input:
         Contact(*_CONTACT.unpack_from(payload, _INPUT_HEAD.size + i * _CONTACT.size)) for i in range(count)
     )
     return Input(device, contacts)
+
+
+def _reject_constant(name: str):
+    raise ValueError(f"non-finite number {name}")
+
+
+def _decode_json_object(name: str, payload: bytes) -> dict:
+    if len(payload) > MAX_JSON:
+        raise ProtocolError(f"{name} too large: {len(payload)} bytes (max {MAX_JSON})")
+    try:
+        value = json.loads(payload.decode("utf-8"), parse_constant=_reject_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:  # JSONDecodeError is a ValueError
+        raise ProtocolError(f"{name}: invalid JSON payload: {e}") from e
+    if not isinstance(value, dict):
+        raise ProtocolError(f"{name}: payload is not a JSON object")
+    return value
+
+
+def _decode_device_info(payload: bytes) -> DeviceInfo:
+    obj = _decode_json_object("DEVICE_INFO", payload)
+    for key in ("role", "kind", "name", "app"):
+        if not isinstance(obj.get(key), str):
+            raise ProtocolError(f"DEVICE_INFO: field {key!r} missing or not a string")
+    return DeviceInfo(obj["role"], obj["kind"], obj["name"], obj["app"])
+
+
+def _decode_action(payload: bytes) -> Action:
+    obj = _decode_json_object("ACTION", payload)
+    if not isinstance(obj.get("id"), str):
+        raise ProtocolError("ACTION: field 'id' missing or not a string")
+    return Action(obj)
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:

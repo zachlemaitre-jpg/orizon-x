@@ -2,6 +2,7 @@ package com.orizonx.client
 
 import android.util.Log
 import android.view.Surface
+import com.orizonx.client.protocol.ActionsStateMessage
 import com.orizonx.client.protocol.FrameReader
 import com.orizonx.client.protocol.FrameWriter
 import com.orizonx.client.protocol.PcMessage
@@ -95,6 +96,7 @@ class Session(
                             }
                         }
                         is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
+                        is ActionsStateMessage -> Unit // Actions role: handled by the Actions UI (later task)
                     }
                 }
             } catch (e: SocketException) {

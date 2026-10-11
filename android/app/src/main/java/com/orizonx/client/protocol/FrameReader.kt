@@ -2,7 +2,12 @@ package com.orizonx.client.protocol
 
 import java.io.BufferedInputStream
 import java.io.DataInputStream
+import org.json.JSONException
+import org.json.JSONObject
 import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 
 /** Reads PC -> tablet messages. Not thread-safe: use from a single reader thread. */
 class FrameReader(input: InputStream) {
@@ -39,8 +44,31 @@ class FrameReader(input: InputStream) {
                     expectSize("PONG", size, 16)
                     return PcMessage.Pong(stream.readLong(), stream.readLong())
                 }
+                Protocol.TYPE_ACTIONS_STATE -> {
+                    if (size > Protocol.MAX_JSON) throw ProtocolException("ACTIONS_STATE trop gros : $size octets")
+                    val bytes = ByteArray(size)
+                    stream.readFully(bytes)
+                    return ActionsStateMessage(parseJsonObject("ACTIONS_STATE", bytes))
+                }
                 else -> skip(size)
             }
+        }
+    }
+
+    private fun parseJsonObject(name: String, bytes: ByteArray): JSONObject {
+        val text = try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString()
+        } catch (e: CharacterCodingException) {
+            throw ProtocolException("$name : UTF-8 invalide")
+        }
+        try {
+            return JSONObject(text)
+        } catch (e: JSONException) {
+            throw ProtocolException("$name : JSON invalide (${e.message})")
         }
     }
 

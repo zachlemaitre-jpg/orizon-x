@@ -3,6 +3,7 @@ package com.orizonx.client.protocol
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
+import org.json.JSONObject
 import java.io.OutputStream
 import java.nio.ByteBuffer
 
@@ -16,8 +17,24 @@ class FrameWriter(output: OutputStream) {
         stream.flush()
     }
 
+    fun deviceInfo(role: String, kind: String, name: String, app: String) =
+        write(TabletMessage.DeviceInfo(role, kind, name, app))
+
+    fun action(json: JSONObject) = write(TabletMessage.Action(json))
+
     companion object {
         private fun u32(value: Long): Int = value.coerceIn(0, 0xFFFF_FFFFL).toInt()
+
+        /** Compact UTF-8 JSON object with the keys in the given order (org.json's own key order is not stable). */
+        private fun jsonBytes(name: String, entries: List<Pair<String, Any?>>): ByteArray {
+            val text = entries.joinToString(prefix = "{", postfix = "}", separator = ",") { (key, value) ->
+                val single = JSONObject().put(key, value).toString()
+                single.substring(1, single.length - 1)
+            }
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            require(bytes.size <= Protocol.MAX_JSON) { "$name trop gros : ${bytes.size} octets" }
+            return bytes
+        }
 
         fun encode(message: TabletMessage): ByteArray {
             val payload = ByteArrayOutputStream()
@@ -59,6 +76,31 @@ class FrameWriter(output: OutputStream) {
                         out.writeByte(contact.tiltY.coerceIn(-90, 90))
                     }
                     Protocol.TYPE_INPUT
+                }
+                is TabletMessage.DeviceInfo -> {
+                    out.write(
+                        jsonBytes(
+                            "DEVICE_INFO",
+                            listOf(
+                                "role" to message.role,
+                                "kind" to message.kind,
+                                "name" to message.name,
+                                "app" to message.app,
+                            ),
+                        ),
+                    )
+                    Protocol.TYPE_DEVICE_INFO
+                }
+                is TabletMessage.Action -> {
+                    require(message.json.opt("id") is String) { "ACTION : \"id\" manquant ou pas une chaîne" }
+                    val rest = message.json.keys().asSequence().filter { it != "id" }.sorted()
+                    out.write(
+                        jsonBytes(
+                            "ACTION",
+                            listOf("id" to message.json.getString("id")) + rest.map { it to message.json.get(it) }.toList(),
+                        ),
+                    )
+                    Protocol.TYPE_ACTION
                 }
             }
             val body = payload.toByteArray()

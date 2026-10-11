@@ -23,6 +23,22 @@
       "type": "PONG",
       "fields": {"t_tab_us": 123456789, "t_pc_us": 987654321},
       "hex": "030000000000001000000000075bcd15000000003ade68b1"
+    },
+    {
+      "name": "actions_state_full",
+      "type": "ACTIONS_STATE",
+      "fields": {"state": {"v": 1,
+        "clock": {"epoch_ms": 1760185920000, "utc_offset_min": 120},
+        "battery": {"available": true, "percent": 76, "charging": true},
+        "audio": {"available": true, "volume": 0.42, "muted": false},
+        "media": {"available": true},
+        "brightness": {"available": true, "value": 0.7},
+        "wifi": {"available": true, "on": true, "ssid": "Café"},
+        "bluetooth": {"available": true, "on": true, "connected": ["Casque"]},
+        "airplane": {"available": true, "on": false},
+        "usb": [{"drive": "E:", "label": "KINGSTON", "free_bytes": 12884901888, "total_bytes": 31914983424}],
+        "notice": {"code": "usb_busy", "drive": "E:"}}},
+      "hex": "040000000000021a7b2276223a312c22636c6f636b223a7b2265706f63685f6d73223a313736303138353932303030302c227574635f6f66667365745f6d696e223a3132307d2c2262617474657279223a7b22617661696c61626c65223a747275652c2270657263656e74223a37362c226368617267696e67223a747275657d2c22617564696f223a7b22617661696c61626c65223a747275652c22766f6c756d65223a302e34322c226d75746564223a66616c73657d2c226d65646961223a7b22617661696c61626c65223a747275657d2c226272696768746e657373223a7b22617661696c61626c65223a747275652c2276616c7565223a302e377d2c2277696669223a7b22617661696c61626c65223a747275652c226f6e223a747275652c2273736964223a22436166c3a9227d2c22626c7565746f6f7468223a7b22617661696c61626c65223a747275652c226f6e223a747275652c22636f6e6e6563746564223a5b22436173717565225d7d2c22616972706c616e65223a7b22617661696c61626c65223a747275652c226f6e223a66616c73657d2c22757362223a5b7b226472697665223a22453a222c226c6162656c223a224b494e4753544f4e222c22667265655f6279746573223a31323838343930313838382c22746f74616c5f6279746573223a33313931343938333432347d5d2c226e6f74696365223a7b22636f6465223a227573625f62757379222c226472697665223a22453a227d7d"
     }
   ],
   "tablet_to_pc": [
@@ -72,6 +88,24 @@
       "type": "INPUT",
       "fields": {"device": 1, "contacts": []},
       "hex": "85000000000000020100"
+    },
+    {
+      "name": "device_info_actions_phone",
+      "type": "DEVICE_INFO",
+      "fields": {"role": "actions", "kind": "phone", "name": "Pixel 8", "app": "0.5.0"},
+      "hex": "86000000000000407b22726f6c65223a22616374696f6e73222c226b696e64223a2270686f6e65222c226e616d65223a22506978656c2038222c22617070223a22302e352e30227d"
+    },
+    {
+      "name": "action_volume_set",
+      "type": "ACTION",
+      "fields": {"id": "volume.set", "value": 0.42},
+      "hex": "87000000000000207b226964223a22766f6c756d652e736574222c2276616c7565223a302e34327d"
+    },
+    {
+      "name": "action_usb_eject",
+      "type": "ACTION",
+      "fields": {"id": "usb.eject", "drive": "E:"},
+      "hex": "870000000000001f7b226964223a227573622e656a656374222c226472697665223a22453a227d"
     }
   ]
 }

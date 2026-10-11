@@ -1,5 +1,6 @@
 package com.orizonx.client.protocol
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -29,5 +30,53 @@ class FrameWriterTest {
         val fingers = (0 until 12).map { InputContact(it, 3, 0, 0) }
         val touch = FrameWriter.encode(TabletMessage.Input(Protocol.DEVICE_TOUCH, fingers))
         assertEquals(8 + 2 + 10 * Protocol.MAX_TOUCH_CONTACTS, touch.size)
+    }
+
+    @Test
+    fun deviceInfoIsCompactJsonInFixedKeyOrder() {
+        val bytes = FrameWriter.encode(TabletMessage.DeviceInfo("screen", "tablet", "Tab \"S9\" é", "0.5.0"))
+        val json = """{"role":"screen","kind":"tablet","name":"Tab \"S9\" é","app":"0.5.0"}"""
+        assertEquals(0x86, bytes[0].toInt() and 0xFF)
+        assertEquals(json.toByteArray(Charsets.UTF_8).size, bytes.size - 8)
+        assertEquals(json, String(bytes, 8, bytes.size - 8, Charsets.UTF_8))
+    }
+
+    @Test
+    fun writerHelpersSendDeviceInfoAndAction() {
+        val sink = java.io.ByteArrayOutputStream()
+        val writer = FrameWriter(sink)
+        writer.deviceInfo("actions", "phone", "Pixel 8", "0.5.0")
+        writer.action(JSONObject().put("id", "wifi.set").put("value", true))
+        val expected = FrameWriter.encode(TabletMessage.DeviceInfo("actions", "phone", "Pixel 8", "0.5.0")) +
+            FrameWriter.encode(TabletMessage.Action(JSONObject().put("id", "wifi.set").put("value", true)))
+        assertEquals(expected.toHex(), sink.toByteArray().toHex())
+    }
+
+    @Test
+    fun actionPutsIdFirstThenSortedKeysWhateverTheInsertionOrder() {
+        val a = JSONObject().put("value", 0.5).put("zeta", 1).put("id", "x.y").put("alpha", "é")
+        val b = JSONObject().put("id", "x.y").put("alpha", "é").put("zeta", 1).put("value", 0.5)
+        val bytesA = FrameWriter.encode(TabletMessage.Action(a))
+        assertEquals(bytesA.toHex(), FrameWriter.encode(TabletMessage.Action(b)).toHex())
+        assertEquals(
+            """{"id":"x.y","alpha":"é","value":0.5,"zeta":1}""",
+            String(bytesA, 8, bytesA.size - 8, Charsets.UTF_8),
+        )
+        assertEquals(0x87, bytesA[0].toInt() and 0xFF)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun actionWithoutStringIdIsRejected() {
+        FrameWriter.encode(TabletMessage.Action(JSONObject().put("id", 3)))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun actionOverSixtyFourKibIsRejected() {
+        FrameWriter.encode(TabletMessage.Action(JSONObject().put("id", "x").put("pad", "a".repeat(Protocol.MAX_JSON))))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun deviceInfoOverSixtyFourKibIsRejected() {
+        FrameWriter.encode(TabletMessage.DeviceInfo("screen", "tablet", "a".repeat(Protocol.MAX_JSON), "1"))
     }
 }

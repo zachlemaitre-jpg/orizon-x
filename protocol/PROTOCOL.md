@@ -24,6 +24,7 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x01 | CONFIG | codec u8 (1 = H.264), width u16, height u16, fps u16 |
 | 0x02 | VIDEO | pts_us u64, puis une unité d'accès H.264 Annex-B. Flags : KEY = 0x01, CODEC_CONFIG = 0x02 |
 | 0x03 | PONG | t_tab_us u64 (renvoyé tel quel), t_pc_us u64 |
+| 0x04 | ACTIONS_STATE | JSON UTF-8 : l'état complet du mode Actions (voir « Mode Actions »). Au plus 65 536 octets |
 
 ## Tablette → PC
 
@@ -34,6 +35,8 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x83 | KEYFRAME_REQ | vide |
 | 0x84 | STATS | fps u16, latency_avg_us u32, latency_max_us u32, dropped u32, rtt_us u32 (chaque seconde) |
 | 0x85 | INPUT | device u8 (1 tactile, 2 stylet), count u8 (≤ 10 tactile, ≤ 1 stylet), puis count × contact de 10 octets (voir ci-dessous) |
+| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"}`. Au plus 65 536 octets |
+| 0x87 | ACTION | JSON UTF-8 : `{"id":"<action>", …}` ; `id` est une chaîne obligatoire. Au plus 65 536 octets |
 
 ## INPUT (phase 4)
 
@@ -44,6 +47,25 @@ Contact (10 octets) : `id u8, flags u8, x u16, y u16, pressure u16, tilt_x i8, t
 - `x`, `y` : 0..65535 sur l'image vidéo. `pressure` : 0..1024 (stylet). `tilt_x`, `tilt_y` : degrés −90..90 (stylet).
 
 Chaque message est l'**état complet** d'un périphérique. Un contact absent de la trame suivante est levé, et `count = 0` signifie que tout est levé ou hors de portée. Un contact CANCELED n'apparaît que dans une trame.
+
+## Mode Actions
+
+Les messages 0x04, 0x86 et 0x87 portent un **objet JSON encodé en UTF-8**, de 65 536 octets au plus. Un payload plus grand, un JSON invalide, un JSON qui n'est pas un objet, de l'UTF-8 invalide, un champ de `DEVICE_INFO` absent ou qui n'est pas une chaîne, ou un `ACTION` sans `id` chaîne sont des erreurs de protocole. Les champs inconnus d'un objet sont ignorés. Les JSON envoyés sont compacts (sans espace) et les clés de `DEVICE_INFO` sont dans l'ordre ci-dessus ; `ACTION` écrit `id` en premier, puis les autres clés par ordre alphabétique. Les vecteurs de `test-vectors.json` fixent ces octets.
+
+### Séquence
+
+1. La tablette envoie `HELLO`, puis **immédiatement** `DEVICE_INFO`.
+2. Le PC attend `DEVICE_INFO` **1 s au plus** après le `HELLO`. Sans réponse (ancienne application), ou si `role` n'est pas `actions`, le rôle vaut `screen` : le comportement est celui de la version précédente (`CONFIG`, `VIDEO`, `INPUT`).
+3. En rôle `actions`, le PC n'envoie ni `CONFIG` ni `VIDEO` : il envoie un `ACTIONS_STATE` complet, puis un nouveau à chaque changement (l'état complet, pas de diff) et au moins toutes les 30 s. La tablette envoie des `ACTION`. `PING`/`PONG` ne changent pas.
+4. Pour changer de rôle, la tablette ferme la connexion et se reconnecte avec le nouveau `DEVICE_INFO`.
+
+### Contenu
+
+L'état (`"v":1`) et la liste des actions (`volume.set`, `media.play_pause`, `wifi.set`, `usb.eject`, …) sont décrits dans `docs/superpowers/specs/2026-10-11-actions-mode-design.md` §2.1 et §2.2. Un `ACTION` dont l'`id` est inconnu est journalisé et ignoré.
+
+### Compatibilité
+
+Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.
 
 ## Horloges
 
