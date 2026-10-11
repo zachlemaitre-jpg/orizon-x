@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,9 +15,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -50,20 +54,25 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.orizonx.client.R
 import com.orizonx.client.actions.ActionMessages
 import com.orizonx.client.actions.ActionThrottle
 import com.orizonx.client.actions.ActionsFormat
@@ -187,15 +196,14 @@ private class Controls(
 private fun ActionsBody(state: ActionsState, c: Controls, landscape: Boolean, modifier: Modifier) {
     BoxWithConstraints(modifier) {
         val viewport = maxHeight
-        // "HH:MM" plus the small seconds is ~3.3 em wide: scale the font so it never clips.
-        val clockSp = min(if (landscape) 112f else 80f, maxWidth.value / 3.6f)
+        // MAZAGLA is wide: "HH:MM" (fixed digit cells) plus the small seconds is ~3.75 em: scale the font so it never clips.
+        val clockSp = min(if (landscape) 112f else 80f, maxWidth.value / 4.1f)
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Column(Modifier.fillMaxWidth().heightIn(min = viewport), horizontalAlignment = Alignment.CenterHorizontally) {
                 ClockBlock(state.clock, state.battery, clockSp, if (landscape) 26f else 22f)
                 Spacer(Modifier.height(16.dp))
                 Spacer(Modifier.weight(1f))
-                val all = cards(state, c)
-                if (landscape) LandscapeControls(all) else PortraitControls(all)
+                if (landscape) LandscapeControls(state, c) else PortraitControls(cards(state, c))
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -209,29 +217,58 @@ private fun PortraitControls(all: List<@Composable () -> Unit>) {
     }
 }
 
+/**
+ * Two columns with the same top and bottom: Son on the left; Luminosité with the Wi-Fi/Bluetooth/Avion tiles under it
+ * on the right. USB drives span the full width above. A lone column is centred.
+ */
 @Composable
-private fun LandscapeControls(all: List<@Composable () -> Unit>) {
-    val columns = min(2, all.size)
-    if (columns == 0) return
-    Row(
-        Modifier.widthIn(max = if (columns == 1) 460.dp else 920.dp).fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        for (col in 0 until columns) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                all.filterIndexed { i, _ -> i % columns == col }.forEach { it() }
+private fun LandscapeControls(state: ActionsState, c: Controls) {
+    val sound = hasSound(state)
+    val brightness = state.brightness
+    val radios = hasRadios(state)
+    val right = brightness != null || radios
+    if (!sound && !right && state.usb.isEmpty()) return
+    Column(Modifier.widthIn(max = 920.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        for (drive in state.usb) UsbCard(drive, c)
+        if (sound && right) {
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                SoundCard(state, c, Modifier.weight(1f).fillMaxHeight(), stretch = true)
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    RightColumn(state, c, brightness, radios)
+                }
+            }
+        } else if (sound) {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                SoundCard(state, c, Modifier.widthIn(max = 460.dp).fillMaxWidth())
+            }
+        } else if (right) {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = 460.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    RightColumn(state, c, brightness, radios)
+                }
             }
         }
     }
 }
 
+/** Luminosité then the radio tiles; the last element takes the remaining height of the column. */
+@Composable
+private fun ColumnScope.RightColumn(state: ActionsState, c: Controls, brightness: BrightnessState?, radios: Boolean) {
+    if (brightness != null) {
+        BrightnessCard(brightness, c, if (radios) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().weight(1f))
+    }
+    if (radios) RadioTiles(state, c, Modifier.fillMaxWidth().weight(1f))
+}
+
+private fun hasSound(state: ActionsState) = state.audio != null || state.mediaAvailable
+private fun hasRadios(state: ActionsState) = state.wifi != null || state.bluetooth != null || state.airplane != null
+
 /** The controls the PC reports as available, in display order. */
 private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit> {
     val list = mutableListOf<@Composable () -> Unit>()
-    if (state.audio != null || state.mediaAvailable) list += { SoundCard(state, c) }
+    if (hasSound(state)) list += { SoundCard(state, c) }
     state.brightness?.let { b -> list += { BrightnessCard(b, c) } }
-    if (state.wifi != null || state.bluetooth != null || state.airplane != null) list += { RadioTiles(state, c) }
+    if (hasRadios(state)) list += { RadioTiles(state, c) }
     for (drive in state.usb) list += { UsbCard(drive, c) }
     return list
 }
@@ -255,19 +292,13 @@ private fun ClockBlock(clock: ClockState?, battery: BatteryState?, clockSp: Floa
         if (clock != null) {
             val offset = clock.utcOffsetMin
             Row(verticalAlignment = Alignment.Bottom) {
-                BasicText(
-                    ActionsFormat.hoursMinutes(now, offset),
-                    style = TextStyle(color = Color.White, fontSize = clockSp.sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
-                    maxLines = 1,
-                    softWrap = false,
-                )
+                ClockDigits(ActionsFormat.hoursMinutes(now, offset), clockSp, Color.White)
                 Spacer(Modifier.width((clockSp / 14f).dp))
-                BasicText(
+                ClockDigits(
                     ":" + ActionsFormat.seconds(now, offset),
-                    style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = (clockSp * 0.36f).sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
-                    modifier = Modifier.padding(bottom = (clockSp * 0.16f).dp),
-                    maxLines = 1,
-                    softWrap = false,
+                    clockSp * 0.36f,
+                    Color.White.copy(alpha = 0.6f),
+                    Modifier.padding(bottom = (clockSp * 0.16f).dp),
                 )
             }
             GlassText(ActionsFormat.date(now, offset), size = dateSp.sp, alpha = 0.9f)
@@ -277,6 +308,35 @@ private fun ClockBlock(clock: ClockState?, battery: BatteryState?, clockSp: Floa
             BatteryPicto(battery)
         }
     }
+}
+
+/**
+ * Clock text in MAZAGLA. Its digits are proportional (the "1" is narrower), so every character gets a fixed cell:
+ * the clock keeps a constant width instead of shifting every second.
+ */
+@Composable
+private fun ClockDigits(text: String, sizeSp: Float, color: Color, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current
+    val style = TextStyle(color = color, fontSize = sizeSp.sp, fontFamily = BrandFont, fontWeight = FontWeight.Normal)
+    Row(modifier) {
+        for (ch in text) {
+            val cell: Dp = with(density) { (sizeSp * (if (ch == ':') 0.30f else 0.69f)).sp.toDp() }
+            Box(Modifier.width(cell), contentAlignment = Alignment.Center) {
+                BasicText(ch.toString(), style = style, maxLines = 1, softWrap = false)
+            }
+        }
+    }
+}
+
+/** White Material icon from [res], tinted; [alpha] dims it. */
+@Composable
+private fun Picto(res: Int, size: Dp, alpha: Float = 1f, modifier: Modifier = Modifier) {
+    Image(
+        painterResource(res),
+        contentDescription = null,
+        modifier = modifier.size(size),
+        colorFilter = ColorFilter.tint(Color.White.copy(alpha = alpha)),
+    )
 }
 
 /** Battery drawn with a Canvas: outline, terminal nub, proportional fill and the percentage inside; a bolt when charging. */
@@ -398,12 +458,12 @@ private fun SpeakerIcon(muted: Boolean, tint: Color, modifier: Modifier = Modifi
 // --- Cards ---------------------------------------------------------------------------------
 
 @Composable
-private fun SoundCard(state: ActionsState, c: Controls) {
+private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
     val audio = state.audio
-    GlassCard(Modifier.fillMaxWidth()) {
+    GlassCard(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val muted = audio?.muted == true
-            SpeakerIcon(muted, if (muted) MuteRed else Color.White, Modifier.size(22.dp))
+            SpeakerIcon(muted, if (muted) MuteRed else Color.White, Modifier.size(24.dp))
             Spacer(Modifier.width(8.dp))
             GlassText("Son", size = 16.sp, weight = FontWeight.SemiBold)
         }
@@ -429,6 +489,8 @@ private fun SoundCard(state: ActionsState, c: Controls) {
             }
             Spacer(Modifier.height(10.dp))
         }
+        // In the equal-height landscape row the card may be taller than its content: push the keys to the bottom.
+        if (stretch) Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (audio != null) {
                 MuteButton(audio.muted, onClick = {
@@ -448,9 +510,13 @@ private fun SoundCard(state: ActionsState, c: Controls) {
 }
 
 @Composable
-private fun BrightnessCard(brightness: BrightnessState, c: Controls) {
-    GlassCard(Modifier.fillMaxWidth()) {
-        GlassText("Luminosité", size = 16.sp, weight = FontWeight.SemiBold)
+private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Picto(R.drawable.ic_action_brightness, 24.dp)
+            Spacer(Modifier.width(8.dp))
+            GlassText("Luminosité", size = 16.sp, weight = FontWeight.SemiBold)
+        }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             GlassSlider(
@@ -474,24 +540,24 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls) {
 }
 
 @Composable
-private fun RadioTiles(state: ActionsState, c: Controls) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun RadioTiles(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         state.wifi?.let { wifi: WifiState ->
-            Tile("Wi-Fi", wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f)) {
+            Tile(R.drawable.ic_action_wifi, "Wi-Fi", wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(wifi = WifiState(!wifi.on, wifi.ssid)) }
                 c.send(ActionMessages.wifiSet(!wifi.on))
             }
         }
         state.bluetooth?.let { bt: BluetoothState ->
-            Tile("Bluetooth", bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f)) {
+            Tile(R.drawable.ic_action_bluetooth, "Bluetooth", bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(bluetooth = BluetoothState(!bt.on, bt.connected)) }
                 c.send(ActionMessages.bluetoothSet(!bt.on))
             }
         }
         state.airplane?.let { plane: AirplaneState ->
-            Tile("Avion", onOff(plane.on), plane.on, Modifier.weight(1f)) {
+            Tile(R.drawable.ic_action_airplane, "Avion", onOff(plane.on), plane.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(airplane = AirplaneState(!plane.on)) }
                 c.send(ActionMessages.airplaneSet(!plane.on))
@@ -587,10 +653,11 @@ private fun RoundKey(glyph: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Tile(title: String, subtitle: String, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun Tile(icon: Int, title: String, subtitle: String, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val fg = if (on) 1f else 0.5f
     Column(
         modifier
-            .heightIn(min = 92.dp)
+            .heightIn(min = 104.dp)
             .clip(TileShape)
             .background(Color.White.copy(alpha = if (on) 0.28f else 0.08f))
             .border(if (on) 2.dp else 1.dp, Color.White.copy(alpha = if (on) 0.85f else 0.25f), TileShape)
@@ -599,11 +666,13 @@ private fun Tile(title: String, subtitle: String, on: Boolean, modifier: Modifie
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        GlassText(title, size = 16.sp, weight = if (on) FontWeight.SemiBold else FontWeight.Normal, alpha = if (on) 1f else 0.8f)
+        Picto(icon, 28.dp, fg)
         Spacer(Modifier.height(4.dp))
+        GlassText(title, size = 16.sp, weight = if (on) FontWeight.SemiBold else FontWeight.Normal, alpha = fg)
+        Spacer(Modifier.height(2.dp))
         BasicText(
             subtitle,
-            style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, textAlign = TextAlign.Center),
+            style = TextStyle(color = Color.White.copy(alpha = if (on) 0.75f else 0.4f), fontSize = 12.sp, textAlign = TextAlign.Center),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
