@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -44,7 +46,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -61,6 +70,7 @@ import com.orizonx.client.actions.ActionsFormat
 import com.orizonx.client.actions.ActionsState
 import com.orizonx.client.actions.AirplaneState
 import com.orizonx.client.actions.AudioState
+import com.orizonx.client.actions.BatteryLevel
 import com.orizonx.client.actions.BatteryState
 import com.orizonx.client.actions.BluetoothState
 import com.orizonx.client.actions.BrightnessState
@@ -71,9 +81,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val Amber = Color(0xFFFAC775)
+private val MuteRed = Color(0xFFFF6B6B)
+private val BatteryGreen = Color(0xFF34C77B)
+private val BatteryAmber = Color(0xFFF2A93B)
+private val BatteryRed = Color(0xFFE5484D)
 private val PillShape = RoundedCornerShape(24.dp)
 private val TileShape = RoundedCornerShape(18.dp)
 
@@ -136,10 +151,8 @@ fun ActionsScreen(rawState: JSONObject?, onAction: (JSONObject) -> Unit, onSwitc
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         GlassText("Connexion au PC…", size = 16.sp, alpha = 0.8f)
                     }
-                } else if (landscape) {
-                    LandscapeLayout(state, controls)
                 } else {
-                    PortraitLayout(state, controls)
+                    ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
                 }
             }
             AnimatedVisibility(
@@ -166,34 +179,48 @@ private class Controls(
     val brightnessThrottle: ActionThrottle,
 )
 
+/**
+ * Clock, date and PC battery centred at the top; the controls form a centred block anchored to the bottom.
+ * Scrolls only when the content does not fit.
+ */
 @Composable
-private fun PortraitLayout(state: ActionsState, c: Controls) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        ClockBlock(state.clock, state.battery, Modifier.fillMaxWidth().padding(vertical = 8.dp), Alignment.CenterHorizontally)
-        for (card in cards(state, c)) card()
-        Spacer(Modifier.height(24.dp))
+private fun ActionsBody(state: ActionsState, c: Controls, landscape: Boolean, modifier: Modifier) {
+    BoxWithConstraints(modifier) {
+        val viewport = maxHeight
+        // "HH:MM" plus the small seconds is ~3.3 em wide: scale the font so it never clips.
+        val clockSp = min(if (landscape) 112f else 80f, maxWidth.value / 3.6f)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxWidth().heightIn(min = viewport), horizontalAlignment = Alignment.CenterHorizontally) {
+                ClockBlock(state.clock, state.battery, clockSp, if (landscape) 26f else 22f)
+                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.weight(1f))
+                val all = cards(state, c)
+                if (landscape) LandscapeControls(all) else PortraitControls(all)
+                Spacer(Modifier.height(16.dp))
+            }
+        }
     }
 }
 
 @Composable
-private fun LandscapeLayout(state: ActionsState, c: Controls) {
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Box(Modifier.weight(0.35f).fillMaxSize(), contentAlignment = Alignment.Center) {
-            ClockBlock(state.clock, state.battery, Modifier.fillMaxWidth(), Alignment.Start)
-        }
-        val all = cards(state, c)
-        Row(
-            Modifier.weight(0.65f).fillMaxSize().verticalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            for (parity in 0..1) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    all.filterIndexed { i, _ -> i % 2 == parity }.forEach { it() }
-                    Spacer(Modifier.height(24.dp))
-                }
+private fun PortraitControls(all: List<@Composable () -> Unit>) {
+    Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        for (card in all) card()
+    }
+}
+
+@Composable
+private fun LandscapeControls(all: List<@Composable () -> Unit>) {
+    val columns = min(2, all.size)
+    if (columns == 0) return
+    Row(
+        Modifier.widthIn(max = if (columns == 1) 460.dp else 920.dp).fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        for (col in 0 until columns) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                all.filterIndexed { i, _ -> i % columns == col }.forEach { it() }
             }
         }
     }
@@ -213,7 +240,7 @@ private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit
 
 /** Ticks locally from the PC's epoch_ms plus the time elapsed since the state arrived, in the PC's UTC offset. */
 @Composable
-private fun ClockBlock(clock: ClockState?, battery: BatteryState?, modifier: Modifier, align: Alignment.Horizontal) {
+private fun ClockBlock(clock: ClockState?, battery: BatteryState?, clockSp: Float, dateSp: Float) {
     val received = remember(clock) { SystemClock.elapsedRealtime() }
     var now by remember(clock) { mutableLongStateOf(clock?.epochMs ?: 0L) }
     LaunchedEffect(clock) {
@@ -224,26 +251,146 @@ private fun ClockBlock(clock: ClockState?, battery: BatteryState?, modifier: Mod
             }
         }
     }
-    Column(modifier, horizontalAlignment = align) {
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         if (clock != null) {
             val offset = clock.utcOffsetMin
             Row(verticalAlignment = Alignment.Bottom) {
                 BasicText(
                     ActionsFormat.hoursMinutes(now, offset),
-                    style = TextStyle(color = Color.White, fontSize = 64.sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
+                    style = TextStyle(color = Color.White, fontSize = clockSp.sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
+                    maxLines = 1,
+                    softWrap = false,
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width((clockSp / 14f).dp))
                 BasicText(
                     ":" + ActionsFormat.seconds(now, offset),
-                    style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 28.sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
-                    modifier = Modifier.padding(bottom = 10.dp),
+                    style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = (clockSp * 0.36f).sp, fontWeight = FontWeight.Light, fontFeatureSettings = "tnum"),
+                    modifier = Modifier.padding(bottom = (clockSp * 0.16f).dp),
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
-            GlassText(ActionsFormat.date(now, offset), size = 20.sp, alpha = 0.9f)
+            GlassText(ActionsFormat.date(now, offset), size = dateSp.sp, alpha = 0.9f)
         }
         if (battery != null) {
-            Spacer(Modifier.height(6.dp))
-            GlassText(ActionsFormat.battery(battery), size = 16.sp, alpha = 0.75f)
+            Spacer(Modifier.height(10.dp))
+            BatteryPicto(battery)
+        }
+    }
+}
+
+/** Battery drawn with a Canvas: outline, terminal nub, proportional fill and the percentage inside; a bolt when charging. */
+@Composable
+private fun BatteryPicto(battery: BatteryState) {
+    val fillColor = when (ActionsFormat.batteryLevel(battery.percent)) {
+        BatteryLevel.NORMAL -> BatteryGreen
+        BatteryLevel.LOW -> BatteryAmber
+        BatteryLevel.CRITICAL -> BatteryRed
+    }
+    val fraction = ActionsFormat.batteryFill(battery.percent)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(width = 76.dp, height = 32.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val nubW = 4.dp.toPx()
+                val stroke = 2.dp.toPx()
+                val bodyW = size.width - nubW
+                val outline = Color.White.copy(alpha = 0.85f)
+                drawRoundRect(
+                    outline,
+                    topLeft = Offset(stroke / 2, stroke / 2),
+                    size = Size(bodyW - stroke, size.height - stroke),
+                    cornerRadius = CornerRadius(8.dp.toPx()),
+                    style = Stroke(stroke),
+                )
+                drawRoundRect(
+                    outline,
+                    topLeft = Offset(bodyW, size.height * 0.32f),
+                    size = Size(nubW, size.height * 0.36f),
+                    cornerRadius = CornerRadius(1.5.dp.toPx()),
+                )
+                val pad = stroke + 1.5.dp.toPx()
+                val innerW = bodyW - 2 * pad
+                val fillW = if (fraction > 0f) (innerW * fraction).coerceAtLeast(6.dp.toPx()) else 0f
+                if (fillW > 0f) {
+                    drawRoundRect(
+                        fillColor.copy(alpha = 0.9f),
+                        topLeft = Offset(pad, pad),
+                        size = Size(fillW, size.height - 2 * pad),
+                        cornerRadius = CornerRadius(5.dp.toPx()),
+                    )
+                }
+            }
+            BasicText(
+                "${battery.percent}%",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum",
+                    shadow = Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 3f),
+                ),
+                modifier = Modifier.padding(end = 4.dp),
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        if (battery.charging) {
+            Spacer(Modifier.width(6.dp))
+            BoltIcon(Modifier.size(width = 14.dp, height = 24.dp))
+        }
+    }
+}
+
+@Composable
+private fun BoltIcon(modifier: Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val bolt = Path().apply {
+            moveTo(0.62f * w, 0f)
+            lineTo(0.05f * w, 0.56f * h)
+            lineTo(0.45f * w, 0.56f * h)
+            lineTo(0.30f * w, h)
+            lineTo(0.95f * w, 0.40f * h)
+            lineTo(0.55f * w, 0.40f * h)
+            close()
+        }
+        drawPath(bolt, Amber)
+    }
+}
+
+/** Speaker with sound waves; with a diagonal slash when [muted]. */
+@Composable
+private fun SpeakerIcon(muted: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val u = size.minDimension / 24f
+        val body = Path().apply {
+            moveTo(3f * u, 9f * u)
+            lineTo(7f * u, 9f * u)
+            lineTo(12.5f * u, 4.5f * u)
+            lineTo(12.5f * u, 19.5f * u)
+            lineTo(7f * u, 15f * u)
+            lineTo(3f * u, 15f * u)
+            close()
+        }
+        drawPath(body, tint)
+        if (muted) {
+            val from = Offset(3.5f * u, 3.5f * u)
+            val to = Offset(20.5f * u, 20.5f * u)
+            drawLine(Color.Black.copy(alpha = 0.35f), from, to, strokeWidth = 4.6f * u, cap = StrokeCap.Round)
+            drawLine(tint, from, to, strokeWidth = 2.4f * u, cap = StrokeCap.Round)
+        } else {
+            for (r in listOf(4.5f, 8.5f)) {
+                drawArc(
+                    tint,
+                    startAngle = -50f,
+                    sweepAngle = 100f,
+                    useCenter = false,
+                    topLeft = Offset((11f - r) * u, (12f - r) * u),
+                    size = Size(2 * r * u, 2 * r * u),
+                    style = Stroke(1.9f * u, cap = StrokeCap.Round),
+                )
+            }
         }
     }
 }
@@ -254,7 +401,12 @@ private fun ClockBlock(clock: ClockState?, battery: BatteryState?, modifier: Mod
 private fun SoundCard(state: ActionsState, c: Controls) {
     val audio = state.audio
     GlassCard(Modifier.fillMaxWidth()) {
-        GlassText("Son", size = 16.sp, weight = FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val muted = audio?.muted == true
+            SpeakerIcon(muted, if (muted) MuteRed else Color.White, Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+            GlassText("Son", size = 16.sp, weight = FontWeight.SemiBold)
+        }
         if (audio != null) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -279,7 +431,7 @@ private fun SoundCard(state: ActionsState, c: Controls) {
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (audio != null) {
-                Pill("Muet", selected = audio.muted, onClick = {
+                MuteButton(audio.muted, onClick = {
                     c.tap()
                     c.update { copy(audio = AudioState(audio.volume, !audio.muted)) }
                     c.send(ActionMessages.volumeMute(!audio.muted))
@@ -398,6 +550,24 @@ private fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier:
         contentAlignment = Alignment.Center,
     ) {
         GlassText(text, size = 15.sp, weight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+    }
+}
+
+/** Speaker toggle: red tint, slashed speaker and the label "Muet" when muted; plain "Son" otherwise. */
+@Composable
+private fun MuteButton(muted: Boolean, onClick: () -> Unit) {
+    val tint = if (muted) MuteRed else Color.White
+    Column(
+        Modifier
+            .clip(TileShape)
+            .background(if (muted) MuteRed.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
+            .border(if (muted) 2.dp else 1.dp, if (muted) MuteRed.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.25f), TileShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        SpeakerIcon(muted, tint, Modifier.size(30.dp))
+        GlassText(if (muted) "Muet" else "Son", size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 

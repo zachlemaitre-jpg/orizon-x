@@ -55,6 +55,23 @@ class ActionsFormatTest {
     }
 
     @Test
+    fun batteryLevelThresholds() {
+        assertEquals(BatteryLevel.NORMAL, ActionsFormat.batteryLevel(100))
+        assertEquals(BatteryLevel.NORMAL, ActionsFormat.batteryLevel(21))
+        assertEquals(BatteryLevel.LOW, ActionsFormat.batteryLevel(20))
+        assertEquals(BatteryLevel.LOW, ActionsFormat.batteryLevel(11))
+        assertEquals(BatteryLevel.CRITICAL, ActionsFormat.batteryLevel(10))
+        assertEquals(BatteryLevel.CRITICAL, ActionsFormat.batteryLevel(0))
+    }
+
+    @Test
+    fun batteryFillIsClamped() {
+        assertEquals(0.76f, ActionsFormat.batteryFill(76), 0.0001f)
+        assertEquals(0f, ActionsFormat.batteryFill(-5), 0f)
+        assertEquals(1f, ActionsFormat.batteryFill(140), 0f)
+    }
+
+    @Test
     fun noticeTexts() {
         assertEquals("La clé est utilisée, ferme les fichiers ouverts", ActionsFormat.notice("usb_busy"))
         assertEquals("Impossible d'éjecter la clé", ActionsFormat.notice("usb_failed"))

@@ -4,6 +4,9 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.Locale
 
+/** How alarming the battery pictogram should look. */
+enum class BatteryLevel { NORMAL, LOW, CRITICAL }
+
 /** French display strings for the Actions screen. Pure, so they are unit-tested. */
 object ActionsFormat {
     private val DAYS = listOf("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
@@ -34,6 +37,16 @@ object ActionsFormat {
 
     /** "PC 76 % · en charge" */
     fun battery(b: BatteryState): String = "PC ${b.percent} %" + if (b.charging) " · en charge" else ""
+
+    /** Green above 20 %, amber at 20 % or less, red at 10 % or less. */
+    fun batteryLevel(percent: Int): BatteryLevel = when {
+        percent <= 10 -> BatteryLevel.CRITICAL
+        percent <= 20 -> BatteryLevel.LOW
+        else -> BatteryLevel.NORMAL
+    }
+
+    /** Filled share of the battery body, 0..1. */
+    fun batteryFill(percent: Int): Float = percent.coerceIn(0, 100) / 100f
 
     /** "12 Go libres", "1,5 Go libres", "512 Mo libres". */
     fun freeSpace(bytes: Long): String {
