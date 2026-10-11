@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -31,6 +32,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,6 +70,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -104,6 +109,8 @@ private val BatteryRed = Color(0xFFE5484D)
 private val PillShape = RoundedCornerShape(24.dp)
 private val TileShape = RoundedCornerShape(18.dp)
 private val CoverShape = RoundedCornerShape(16.dp)
+private val ChipShape = RoundedCornerShape(20.dp)
+private val UsbChipMaxWidth = 280.dp
 
 /**
  * The Actions remote: clock, PC battery and the controls reported by the PC's latest ACTIONS_STATE ([rawState]).
@@ -214,24 +221,51 @@ private fun ActionsBody(state: ActionsState, c: Controls, landscape: Boolean, mo
             Column(Modifier.fillMaxWidth().heightIn(min = viewport), horizontalAlignment = Alignment.CenterHorizontally) {
                 ClockBlock(state.clock, state.battery, clockSp, if (landscape) 26f else 22f)
                 Spacer(Modifier.height(16.dp))
-                Spacer(Modifier.weight(1f))
-                if (landscape) LandscapeControls(state, c) else PortraitControls(cards(state, c))
+                if (landscape) {
+                    // The free space between the clock and the bottom block holds the USB side rail, on the right edge.
+                    Box(Modifier.weight(1f).fillMaxWidth()) { UsbRail(state.usb, c) }
+                    LandscapeControls(state, c)
+                } else {
+                    Spacer(Modifier.weight(1f))
+                    PortraitControls(state.usb, c, cards(state, c))
+                }
                 Spacer(Modifier.height(16.dp))
             }
         }
     }
 }
 
+/** USB chips in a scrollable row just above the bottom column (nothing without a drive). */
 @Composable
-private fun PortraitControls(all: List<@Composable () -> Unit>) {
+private fun PortraitControls(usb: List<UsbDrive>, c: Controls, all: List<@Composable () -> Unit>) {
     Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (usb.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                for (drive in usb) UsbChip(drive, c, Modifier.width(UsbChipMaxWidth))
+            }
+        }
         for (card in all) card()
+    }
+}
+
+/** Side rail on the right edge: one chip per drive, stacked; nothing without a drive. */
+@Composable
+private fun BoxScope.UsbRail(usb: List<UsbDrive>, c: Controls) {
+    if (usb.isEmpty()) return
+    Column(
+        Modifier.align(Alignment.CenterEnd).wrapContentHeight(unbounded = true).width(UsbChipMaxWidth),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth())
     }
 }
 
 /**
  * Two columns with the same top and bottom: Son on the left; Luminosité with the Wi-Fi/Bluetooth/Avion tiles under it
- * on the right. USB drives span the full width above. A lone column is centred.
+ * on the right. A lone column is centred. USB drives are not here: they live in the side rail ([UsbRail]).
  */
 @Composable
 private fun LandscapeControls(state: ActionsState, c: Controls) {
@@ -240,10 +274,9 @@ private fun LandscapeControls(state: ActionsState, c: Controls) {
     val radios = hasRadios(state)
     val right = brightness != null || radios
     val nowPlaying = state.nowPlaying
-    if (!sound && !right && state.usb.isEmpty() && nowPlaying == null) return
+    if (!sound && !right && nowPlaying == null) return
     Column(Modifier.widthIn(max = 920.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (nowPlaying != null) NowPlayingCard(nowPlaying, c)
-        for (drive in state.usb) UsbCard(drive, c)
         if (sound && right) {
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 SoundCard(state, c, Modifier.weight(1f).fillMaxHeight(), stretch = true)
@@ -287,7 +320,6 @@ private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit
     if (hasSound(state)) list += { SoundCard(state, c) }
     state.brightness?.let { b -> list += { BrightnessCard(b, c) } }
     if (hasRadios(state)) list += { RadioTiles(state, c) }
-    for (drive in state.usb) list += { UsbCard(drive, c) }
     return list
 }
 
@@ -634,36 +666,65 @@ private fun RadioTiles(state: ActionsState, c: Controls, modifier: Modifier = Mo
 
 private fun onOff(on: Boolean) = if (on) "Activé" else "Désactivé"
 
+/**
+ * Compact USB chip: pictogram, "label  E:" with "12 Go libres" under it, then the open-folder and eject buttons.
+ * Landscape stacks the chips in a side rail on the right; portrait scrolls them in a row above the controls.
+ */
 @Composable
-private fun UsbCard(drive: UsbDrive, c: Controls) {
-    GlassCard(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
+private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .height(68.dp)
+            .clip(ChipShape)
+            .background(Color.White.copy(alpha = 0.10f))
+            .border(1.dp, Color.White.copy(alpha = 0.25f), ChipShape)
+            .padding(start = 14.dp, end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Picto(R.drawable.ic_action_usb, 28.dp, alpha = 0.9f)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            BasicText(
+                drive.label.ifBlank { "Clé USB" } + "  " + drive.drive,
+                style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            drive.freeBytes?.let {
                 BasicText(
-                    drive.label.ifBlank { "Clé USB" },
-                    style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+                    ActionsFormat.freeSpace(it),
+                    style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            GlassText(drive.drive, size = 16.sp, alpha = 0.8f)
         }
-        drive.freeBytes?.let {
-            Spacer(Modifier.height(4.dp))
-            GlassText(ActionsFormat.freeSpace(it), size = 14.sp, alpha = 0.75f)
+        Spacer(Modifier.width(6.dp))
+        ChipIconButton(R.drawable.ic_action_folder_open, "Ouvrir ${drive.drive}") {
+            c.tap()
+            c.send(ActionMessages.usbOpen(drive.drive))
         }
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            GlassButton("Ouvrir", selected = false, modifier = Modifier.weight(1f), onClick = {
-                c.tap()
-                c.send(ActionMessages.usbOpen(drive.drive))
-            })
-            GlassButton("Éjecter", selected = false, modifier = Modifier.weight(1f), onClick = {
-                c.tap()
-                c.send(ActionMessages.usbEject(drive.drive))
-            })
+        Spacer(Modifier.width(6.dp))
+        ChipIconButton(R.drawable.ic_action_eject, "Éjecter ${drive.drive}") {
+            c.tap()
+            c.send(ActionMessages.usbEject(drive.drive))
         }
+    }
+}
+
+@Composable
+private fun ChipIconButton(icon: Int, description: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.10f))
+            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+            .semantics { contentDescription = description }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Picto(icon, 22.dp)
     }
 }
 
