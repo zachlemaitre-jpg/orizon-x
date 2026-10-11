@@ -3,7 +3,14 @@
 The CLI (relay.py) and the PC app (app/) both drive it through a Listener. Threads: one engine thread and, per
 session, a tablet reader and an ffmpeg stderr pump.
 
-Session order: HELLO → tablet reader (answers PING from then on) → screen choice → ffmpeg. In Extend mode with a
+Session order: HELLO → tablet reader (answers PING from then on) → DEVICE_INFO (waited for at most
+Deps.device_info_timeout_s, 1 s; none means role "screen") → by role:
+- "actions": an Actions session. The hub (Deps.actions_hub_factory, actions.hub.ActionsHub) polls the PC and sends
+  ACTIONS_STATE; the reader passes every ACTION to it. No virtual screen, no ffmpeg, no injector. State ACTIONS until
+  the device leaves or stop(), then the hub stops.
+- anything else: the screen session below.
+
+Screen session: screen choice → ffmpeg. In Extend mode with a
 virtual display (the app), the screen choice is PREPARING_DISPLAY: display.prepare() turns the virtual screen on
 at the tablet's size, then its ddagrab index is read from DXGI by its GDI name (dxgi_outputs, instant), or found
 by probing ddagrab once per output (seconds) when DXGI cannot tell. Duplicate mode captures the main screen, found
@@ -44,6 +51,7 @@ class State(Enum):
     WAITING_APP = "waiting_app"  # adb OK, Orizon X pas ouverte sur la tablette
     PREPARING_DISPLAY = "preparing_display"  # tablette connectée, écran virtuel en cours d'allumage
     STREAMING = "streaming"
+    ACTIONS = "actions"  # appareil en rôle Actions : contrôles du PC, sans vidéo ni écran virtuel
     ERROR = "error"  # fatal : le moteur s'est arrêté
 
 
@@ -138,6 +146,10 @@ STOP_TIMEOUT_S = 3.0
 ENCODER_PROBE_TIMEOUT_S = 10
 ADB_TIMEOUT_S = 10
 FFMPEG_WAIT_S = 2  # après kill()
+DEVICE_INFO_TIMEOUT_S = 1.0  # attente de DEVICE_INFO après le HELLO ; au-delà (ancienne app), rôle screen
+ACTIONS_WAIT_SLICE_S = 0.25  # la session Actions vérifie stop() à ce rythme (stop() ferme aussi le socket)
+ROLE_SCREEN = "screen"
+ROLE_ACTIONS = "actions"
 
 PREPARING_DETAIL = msg("state.preparing_capture")
 PREPARING_DISPLAY_DETAIL = msg("state.preparing_display")
@@ -346,6 +358,25 @@ def stream(source: BinaryIO, send: Callable[[bytes], None], fps: int, stop: thre
             send(protocol.encode_video(now_us(), unit, protocol.FLAG_KEY if info.is_idr else 0))
 
 
+class ActionsHub(Protocol):
+    """What the engine needs from actions.hub.ActionsHub."""
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def handle(self, action: dict) -> None: ...  # depuis le lecteur de la tablette : ne doit pas bloquer
+
+
+def default_actions_hub(send: Callable[[dict], None], log: Callable[[str], None]) -> ActionsHub:
+    """The real hub over the real providers (a provider whose library is missing is reported unavailable).
+
+    Imported here, not at module level: the screen role (and the CLI) never loads pycaw, comtypes or winrt.
+    """
+    from actions.hub import ActionsHub as _ActionsHub, default_providers
+    return _ActionsHub(default_providers(log), send, log=log)
+
+
 @dataclass
 class Deps:
     """Everything the engine touches outside Python; tests swap in fakes."""
@@ -356,8 +387,11 @@ class Deps:
     create_injector: Callable[..., Any] = injector.create_for_stream
     monitors: Callable[[], list[injector.Monitor]] = injector.monitors
     list_outputs: Callable[[], list[dxgi_outputs.Output]] = dxgi_outputs.enumerate_outputs
+    # (send(state dict), log) -> hub d'une session Actions ; send encode et envoie un ACTIONS_STATE
+    actions_hub_factory: Callable[[Callable[[dict], None], Callable[[str], None]], ActionsHub] = default_actions_hub
     poll_s: float = 1.0
     retry_delay_s: float = RETRY_DELAY_S
+    device_info_timeout_s: float = DEVICE_INFO_TIMEOUT_S
 
 
 @dataclass
@@ -759,8 +793,11 @@ class RelayEngine:
 
     def _session(self, sock: socket.socket, rfile: SocketReader, hello: protocol.Hello, encoder: str,
                  outputs: Outputs) -> SessionResult:
-        """Starts the tablet reader (PING, stats, input), chooses the screen to capture (preparing the virtual
-        screen if any), then streams until the tablet leaves or stop() is called.
+        """Starts the tablet reader (PING, stats, input, DEVICE_INFO, ACTION) and waits for DEVICE_INFO.
+
+        Role "actions": runs the Actions hub until the device leaves or stop() is called (no screen, no ffmpeg).
+        Otherwise chooses the screen to capture (preparing the virtual screen if any), then streams until the tablet
+        leaves or stop() is called.
 
         ffmpeg exiting on its own, or killed by restart_capture (the screen moved), starts a new capture on the same
         connection, its output found again; after MAX_FFMPEG_FAILURES captures in a row without video, the session
@@ -780,12 +817,20 @@ class RelayEngine:
             with send_lock:  # l'horodatage est pris sous le verrou : pas d'attente entre la mesure et l'envoi
                 sock.sendall(protocol.encode_pong(t_tab_us, now_us()))
 
+        def send_actions_state(state: dict) -> None:
+            """Called by the hub (its own thread); its errors (ValueError, OSError) go back to the hub."""
+            data = protocol.encode_actions_state(state)
+            with send_lock:
+                sock.sendall(data)
+
         if self._stop_event.is_set():  # stop() pendant la connexion : ne pas lancer ffmpeg pour rien
             self._close_socket(sock)
             return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
         stderr_tail: collections.deque[str] = collections.deque(maxlen=20)  # de la capture en cours
         disconnected = threading.Event()
         closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
+        disconnect_lock = threading.Lock()
+        disconnect_logged = False  # « Tablet disconnected » : une fois, par le lecteur ou par l'envoi qui échoue
         keyframe_requests = 0  # la tablette en envoie une juste après chaque CONFIG (normal) : on ne journalise que les suivantes
         input_failed = False  # un échec d'injection n'est journalisé qu'une fois par session
         stream_size: tuple[int, int] | None = None
@@ -796,6 +841,13 @@ class RelayEngine:
         restart_pending = False  # posé sous capture_lock par restart_capture : l'écran a bougé, capture à relancer
         target_rect: Rect | None = None  # écran Windows capturé, s'il est connu : le tactile le vise directement
         session_over = False  # posé sous injector_lock à la fin : un retarget tardif ne crée plus d'injecteur
+        device_ready = threading.Event()  # DEVICE_INFO reçu, ou le lecteur s'est arrêté
+        device_lock = threading.Lock()
+        device_info: protocol.DeviceInfo | None = None  # le premier DEVICE_INFO, s'il arrive avant le choix du rôle
+        role_chosen = False  # posé sous device_lock : un DEVICE_INFO plus tardif est ignoré
+        actions_hub: ActionsHub | None = None  # session Actions en cours : le lecteur lui passe les ACTION
+        action_failed = False  # un échec du hub n'est journalisé qu'une fois par session
+        action_ignored = False  # ACTION hors session Actions : journalisé une fois
 
         def restart_capture() -> None:
             """The virtual screen moved (relayout): ddagrab loses its duplication, so the capture starts again."""
@@ -847,13 +899,43 @@ class RelayEngine:
             except (OSError, ValueError):
                 pass  # le thread ne doit jamais mourir tant que ffmpeg écrit
 
+        def log_disconnected(error: BaseException) -> None:
+            """The tablet left: logged once, by whichever of the reader and the video send notices it first."""
+            nonlocal disconnect_logged
+            with disconnect_lock:  # journalisé sous le verrou : l'autre thread ne peut pas finir la session avant
+                if not disconnect_logged:
+                    disconnect_logged = True
+                    self._log(f"Tablet disconnected ({error})")
+
         def read_tablet() -> None:
-            nonlocal keyframe_requests, input_failed
+            nonlocal keyframe_requests, input_failed, device_info, action_failed, action_ignored
             try:
                 while True:
                     message = protocol.read_message(rfile)
                     if isinstance(message, protocol.Ping):
                         send_pong(message.t_tab_us)
+                    elif isinstance(message, protocol.Action):
+                        hub = actions_hub
+                        if hub is None:
+                            if not action_ignored:
+                                action_ignored = True
+                                self._log("ACTION ignored: not an Actions session")
+                            continue
+                        try:
+                            hub.handle(message.fields)
+                        except Exception as e:  # noqa: BLE001 — le lecteur doit continuer à répondre aux PING
+                            if not action_failed:
+                                action_failed = True
+                                self._log(f"Actions: action failed: {e}")
+                    elif isinstance(message, protocol.DeviceInfo):
+                        with device_lock:
+                            late = role_chosen or device_info is not None
+                            if not late:
+                                device_info = message
+                        if late:
+                            self._log(f"Late DEVICE_INFO ignored (role {message.role})")
+                        else:
+                            device_ready.set()
                     elif isinstance(message, protocol.Stats):
                         size = stream_size
                         if size is not None:
@@ -876,9 +958,10 @@ class RelayEngine:
                                     self._log(f"Touch failed, input ignored: {e}")
             except (EOFError, OSError, protocol.ProtocolError) as e:
                 if not closing.is_set() and not self._stop_event.is_set():
-                    self._log(f"Tablet disconnected ({e})")
+                    log_disconnected(e)
             finally:
                 disconnected.set()  # avant de lire `ffmpeg` : le thread du moteur vérifie ce drapeau après l'avoir lancé
+                device_ready.set()  # le thread du moteur n'attend plus DEVICE_INFO
                 with contextlib.suppress(OSError):
                     sock.close()  # sous Windows, seul closesocket() interrompt un sendall bloqué dans stream()
                 process = ffmpeg
@@ -894,7 +977,38 @@ class RelayEngine:
         send_failed = False
         died = False  # MAX_FFMPEG_FAILURES captures de suite sans vidéo
         failures = 0
+        actions_session = False
         try:
+            # L'appareil envoie DEVICE_INFO juste après le HELLO ; une ancienne app n'en envoie pas : rôle screen.
+            timeout = self._deps.device_info_timeout_s
+            device_ready.wait(timeout)
+            with device_lock:
+                role_chosen = True
+                info = device_info
+            if should_stop():
+                return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
+            if info is None:
+                self._log(f"No DEVICE_INFO within {timeout:g} s: screen role")
+            elif info.role in (ROLE_SCREEN, ROLE_ACTIONS):
+                self._log(f"Device role: {info.role} ({info.name}, {info.kind})")
+            else:
+                self._log(f"Device role: {info.role} ({info.name}, {info.kind}): unknown, screen role used")
+            if info is not None and info.role == ROLE_ACTIONS:
+                actions_session = True
+                hub = self._deps.actions_hub_factory(send_actions_state, self._log)
+                try:
+                    actions_hub = hub
+                    hub.start()
+                    self._set_state(State.ACTIONS, msg("state.actions", name=info.name or info.kind))
+                    while not should_stop():  # la tablette part, ou stop() (qui ferme aussi le socket)
+                        disconnected.wait(ACTIONS_WAIT_SLICE_S)
+                finally:
+                    actions_hub = None
+                    try:
+                        hub.stop()
+                    except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fin de la session
+                        self._log(f"Actions: hub stop failed: {e}")
+                return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
             capture = self._choose_capture(hello, outputs, should_stop)
             if capture is None or should_stop():
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
@@ -943,8 +1057,10 @@ class RelayEngine:
                 stderr_thread.start()
                 try:
                     stream(process.stdout, send, self._config.fps, disconnected, on_stream_size, self._log)
-                except OSError:
+                except OSError as e:
                     send_failed = True  # sendall a échoué : la tablette est partie
+                    if not self._stop_event.is_set():  # stop() ferme le socket : ce n'est pas un départ
+                        log_disconnected(e)  # avant closing : le lecteur, lui, se taira
                 if send_failed or should_stop():
                     break
                 # ffmpeg s'est arrêté seul, ou restart_capture l'a tué : la tablette est toujours là.
@@ -993,7 +1109,8 @@ class RelayEngine:
             # Écran virtuel (prepare a été appelé, même s'il a échoué) : éteint après la grâce, annulée si la tablette
             # revient ; Quit (stop(immediate_display_release=True)) : éteint tout de suite, ici aussi, car stop() a
             # pu l'éteindre pendant qu'un appel Windows de prepare le rallumait (sans effet s'il est déjà éteint).
-            if self._uses_display():
+            # Session Actions : l'écran virtuel n'a pas servi (celui d'une session précédente s'éteint après sa grâce).
+            if self._uses_display() and not actions_session:
                 if self._immediate_release:
                     self._release_display(immediate=True)
                     self._immediate_release_done = True

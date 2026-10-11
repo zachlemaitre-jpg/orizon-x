@@ -56,6 +56,15 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.detail_text(), "Erreur inattendue : boom")
         self.assertEqual(self.window.primary_text(), "Réessayer")
 
+    def test_actions_state_shows_the_device(self):
+        self.window.set_state(State.ACTIONS, msg("state.actions", name="Pixel 8"))
+        self.assertEqual(self.window.title_text(), "Appareil Actions")
+        self.assertEqual(self.window.detail_text(), "Pixel 8 connecté")
+        self.assertEqual(self.window.primary_text(), "Arrêter")
+        i18n.set_language("en")
+        self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
+                         ("Actions device", "Pixel 8 connected", "Stop"))
+
     def test_stats_only_shown_while_streaming(self):
         stats = StreamStats(2880, 1800, 60, 18.0, 30.0, 0, 0.4)
         self.window.set_state(State.WAITING_APP, msg("state.waiting_app"))

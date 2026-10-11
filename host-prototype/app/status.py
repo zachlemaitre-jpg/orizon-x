@@ -10,6 +10,7 @@ TITLE_KEYS = {
     State.WAITING_APP: "status.waiting_app",
     State.PREPARING_DISPLAY: "status.preparing_display",
     State.STREAMING: "status.streaming",
+    State.ACTIONS: "status.actions",
     State.ERROR: "status.error",
 }
 
@@ -19,10 +20,12 @@ COLORS = {
     State.WAITING_APP: "#F5B544",
     State.PREPARING_DISPLAY: "#F5B544",
     State.STREAMING: "#4ADE80",
+    State.ACTIONS: "#4ADE80",
     State.ERROR: "#F87171",
 }
 
-_ACTIVE = frozenset({State.WAITING_DEVICE, State.WAITING_APP, State.PREPARING_DISPLAY, State.STREAMING})
+_ACTIVE = frozenset({State.WAITING_DEVICE, State.WAITING_APP, State.PREPARING_DISPLAY, State.STREAMING,
+                     State.ACTIONS})
 
 
 def is_active(state: State) -> bool:

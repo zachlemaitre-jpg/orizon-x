@@ -22,6 +22,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "state.starting_stream": {"en": "Starting the stream…", "fr": "Démarrage du flux…"},
     "state.streaming": {"en": "Stream {width}×{height}", "fr": "Flux {width}×{height}"},
     "state.stopped": {"en": "Stopped.", "fr": "Arrêté."},
+    "state.actions": {"en": "{name} connected", "fr": "{name} connecté"},
     # --- adb ---
     "adb.timeout": {"en": "adb is not responding (timed out).", "fr": "adb ne répond pas (délai dépassé)."},
     "adb.failed": {"en": "adb is not responding: {error}", "fr": "adb ne répond pas : {error}"},
@@ -99,6 +100,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "status.waiting_app": {"en": "Open Orizon X on the tablet", "fr": "Ouvre Orizon X sur la tablette"},
     "status.preparing_display": {"en": "Preparing the screen", "fr": "Préparation de l'écran"},
     "status.streaming": {"en": "Connected", "fr": "Connecté"},
+    "status.actions": {"en": "Actions device", "fr": "Appareil Actions"},
     "status.error": {"en": "Error", "fr": "Erreur"},
     "status.click_start": {"en": "Click Start.", "fr": "Clique sur Démarrer."},
     "button.stop": {"en": "Stop", "fr": "Arrêter"},

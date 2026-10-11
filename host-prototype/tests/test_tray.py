@@ -44,6 +44,12 @@ class TrayTest(unittest.TestCase):
         self.assertEqual(self.tray.toggle_text(), "Réessayer")
         self.assertEqual(self.tray.status_text(), "Erreur — Erreur inattendue : boom")
 
+    def test_actions_state_updates_menu_and_tooltip(self):
+        self.tray.set_state(State.ACTIONS, msg("state.actions", name="Pixel 8"))
+        self.assertEqual(self.tray.toggle_text(), "Arrêter")
+        self.assertEqual(self.tray.status_text(), "Appareil Actions — Pixel 8 connecté")
+        self.assertEqual(self.tray.tooltip(), "Orizon X — Appareil Actions\nPixel 8 connecté")
+
     def test_language_switch_retranslates_live(self):
         self.tray.set_state(State.STREAMING, msg("state.streaming", width=2880, height=1800))
         self.assertEqual(self.tray.menu_texts(), ["Connecté — Flux 2880×1800", "Arrêter", "Ouvrir la fenêtre",

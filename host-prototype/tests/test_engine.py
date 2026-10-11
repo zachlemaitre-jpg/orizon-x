@@ -1,3 +1,4 @@
+import json
 import queue
 import re
 import socket
@@ -36,6 +37,19 @@ def touch_frame(*contacts):
     payload = protocol._INPUT_HEAD.pack(protocol.DEVICE_TOUCH, len(contacts))
     payload += b"".join(protocol._CONTACT.pack(*c) for c in contacts)
     return protocol._frame(protocol.INPUT, 0, payload)
+
+
+def device_info_frame(role="actions", kind="phone", name="Pixel 8", app="1.0"):
+    payload = json.dumps({"role": role, "kind": kind, "name": name, "app": app}).encode()
+    return protocol._frame(protocol.DEVICE_INFO, 0, payload)
+
+
+def action_frame(**fields):
+    return protocol._frame(protocol.ACTION, 0, json.dumps(fields).encode())
+
+
+def keyframe_request_frame():
+    return protocol._frame(protocol.KEYFRAME_REQ, 0, b"")
 
 
 def wait_until(predicate, timeout=5.0):
@@ -165,12 +179,13 @@ class FakePopen:
 
 
 class FakeTablet:
-    """The tablet end of a socket pair: sends HELLO at once and records every frame the PC sends."""
+    """The tablet end of a socket pair: sends HELLO at once (then `after_hello`, e.g. a DEVICE_INFO frame) and
+    records every frame the PC sends."""
 
-    def __init__(self, version=protocol.VERSION):
+    def __init__(self, version=protocol.VERSION, after_hello=b""):
         self.pc, self.tab = socket.socketpair()
         self.frames = queue.Queue()
-        self.tab.sendall(hello_frame(version))
+        self.tab.sendall(hello_frame(version) + after_hello)
         threading.Thread(target=self._drain, daemon=True).start()
 
     def _drain(self):
@@ -215,10 +230,12 @@ class FakeConnect:
     """socket.create_connection stand-in: each call hands the engine a new FakeTablet, or refuses.
 
     silent=True mimics adb with no app listening on the tablet: the connection is accepted, then closed without HELLO.
+    after_hello: bytes each new tablet sends right after its HELLO (a DEVICE_INFO frame, for instance).
     """
 
-    def __init__(self, version=protocol.VERSION):
+    def __init__(self, version=protocol.VERSION, after_hello=b""):
         self.version = version
+        self.after_hello = after_hello
         self.refuse = False
         self.silent = False
         self.silent_calls = 0
@@ -232,7 +249,7 @@ class FakeConnect:
             pc, tab = socket.socketpair()
             tab.close()
             return pc
-        tablet = FakeTablet(self.version)
+        tablet = FakeTablet(self.version, self.after_hello)
         self.tablets.append(tablet)
         return tablet.pc
 
@@ -265,6 +282,46 @@ class FakeInjectors:
         self.created.append(injector)
         self.rects.append(rect)
         return injector
+
+
+class FakeHub:
+    """actions.hub.ActionsHub stand-in: records start/stop and the actions; the test calls `send` itself."""
+
+    def __init__(self, send, log, handle_error=None):
+        self.send = send
+        self.log = log
+        self.handle_error = handle_error
+        self.handled = []
+        self.started = threading.Event()
+        self.stopped = threading.Event()
+
+    def start(self):
+        self.started.set()
+
+    def stop(self):
+        self.stopped.set()
+
+    def handle(self, action):
+        self.handled.append(action)
+        if self.handle_error is not None:
+            raise self.handle_error
+
+
+class FakeHubs:
+    """Deps.actions_hub_factory stand-in: one FakeHub per Actions session."""
+
+    def __init__(self, handle_error=None):
+        self.handle_error = handle_error
+        self.created = []
+
+    def __call__(self, send, log):
+        hub = FakeHub(send, log, self.handle_error)
+        self.created.append(hub)
+        return hub
+
+    def first(self, timeout=5.0):
+        wait_until(lambda: self.created, timeout)
+        return self.created[0]
 
 
 PRIMARY = Rect(0, 0, 2560, 1600)
@@ -440,10 +497,13 @@ def dxgi_list(*names, adapter=0):
 
 
 def make_engine(test, run=None, popen=None, connect=None, injectors=None, config=engine.Config(encoder="amf"),
-                recorder=None, monitors=None, dxgi=no_dxgi, retry_delay_s=0.0, **engine_args):
+                recorder=None, monitors=None, dxgi=no_dxgi, retry_delay_s=0.0, hubs=None,
+                device_info_timeout_s=0.05, **engine_args):
     """engine_args: display, first_time, on_layout_applied (RelayEngine keywords).
 
     dxgi: Deps.list_outputs; the default fails, so the screen is found by probing ddagrab (FakeRun.outputs).
+    hubs: Deps.actions_hub_factory (a FakeHubs by default: no test ever builds the real providers).
+    device_info_timeout_s: short by default, so that sessions without DEVICE_INFO (screen role) start quickly.
     """
     recorder = recorder or Recorder()
     listed = [(PRIMARY, True, r"\\.\DISPLAY1"), (VDD_RECT, False, r"\\.\DISPLAY9")] if monitors is None else monitors
@@ -456,6 +516,8 @@ def make_engine(test, run=None, popen=None, connect=None, injectors=None, config
         list_outputs=dxgi,
         poll_s=0.01,
         retry_delay_s=retry_delay_s,
+        actions_hub_factory=hubs or FakeHubs(),
+        device_info_timeout_s=device_info_timeout_s,
     )
     relay = engine.RelayEngine(config, recorder, ffmpeg="ffmpeg.exe", adb="adb.exe", deps=deps, **engine_args)
     test.addCleanup(relay.stop)
@@ -616,6 +678,27 @@ class StreamingTest(unittest.TestCase):
         self.assertTrue(popen.procs[0].killed.is_set())
         self.assertTrue(injectors.created[0].closed)
         self.assertTrue(any(line.startswith("Tablet disconnected") for line in rec.logs))
+
+    def test_tablet_leaving_is_logged_once_even_when_the_video_send_notices_it_first(self):
+        stdout = FedStdout()
+
+        def fed():
+            ffmpeg = FakeFfmpeg()
+            ffmpeg.stdout = stdout
+            return ffmpeg
+
+        connect = FakeConnect()
+        relay, rec = make_engine(self, connect=connect, popen=FakePopen(fed))
+        relay.start()
+        stdout.feed(SAMPLE)
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        connect.refuse = True
+        tablet.leave()
+        for _ in range(20):  # de la vidéo pendant le départ : l'envoi échoue, peut-être avant que le lecteur le voie
+            stdout.feed(SAMPLE)
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertEqual(len([line for line in rec.logs if line.startswith("Tablet disconnected")]), 1)
 
     def test_auto_encoder_falls_back_to_amf(self):
         popen = FakePopen(live)
@@ -1461,6 +1544,256 @@ class DxgiOutputChoiceTest(unittest.TestCase):
         self.assertEqual(ddagrab_probes(run), [])  # ni avant la connexion, ni pendant la session
         self.assertIn("Captured screen: #1 (main screen 2560x1600)", rec.logs)
         self.assertEqual(injectors.rects, [PRIMARY])
+
+
+class DeviceRoleTest(unittest.TestCase):
+    """After HELLO the engine waits (at most Deps.device_info_timeout_s) for DEVICE_INFO: role actions starts an
+    Actions session (hub, no virtual screen, no ffmpeg, no injector); anything else streams the screen."""
+
+    EXTEND = DisplayTest.EXTEND
+
+    def actions_engine(self, after_hello=None, hubs=None, **kwargs):
+        """An engine in Extend mode with a virtual display, whose tablets say they are Actions devices."""
+        connect = FakeConnect(after_hello=device_info_frame() if after_hello is None else after_hello)
+        display, popen, injectors = FakeDisplay(), FakePopen(live), FakeInjectors()
+        hubs = hubs or FakeHubs()
+        run = FakeRun(outputs=((0, (2560, 1600)),))
+        relay, rec = make_engine(self, run=run, popen=popen, connect=connect, injectors=injectors,
+                                 config=self.EXTEND, display=display, hubs=hubs, device_info_timeout_s=5.0,
+                                 **kwargs)
+        relay.start()
+        return relay, rec, connect, hubs, display, popen, injectors, run
+
+    def test_default_device_info_timeout_is_one_second(self):
+        self.assertEqual(engine.DEVICE_INFO_TIMEOUT_S, 1.0)
+        self.assertEqual(engine.Deps().device_info_timeout_s, 1.0)
+
+    def test_default_hub_factory_builds_the_actions_hub_with_the_default_providers(self):
+        send, log = (lambda state: None), (lambda line: None)
+        with mock.patch("actions.hub.default_providers", return_value={"clock": "c"}) as providers, \
+                mock.patch("actions.hub.ActionsHub") as hub_class:
+            hub = engine.Deps().actions_hub_factory(send, log)
+        providers.assert_called_once_with(log)
+        hub_class.assert_called_once_with({"clock": "c"}, send, log=log)
+        self.assertIs(hub, hub_class.return_value)
+
+    def test_actions_role_never_touches_display_ffmpeg_or_injector(self):
+        relay, rec, connect, hubs, display, popen, injectors, run = self.actions_engine()
+        hub = hubs.first()
+        self.assertTrue(hub.started.wait(5))
+        rec.wait_state(State.ACTIONS)
+        self.assertEqual(rec.states[-1], (State.ACTIONS, msg("state.actions", name="Pixel 8")))
+        tablet = first_tablet(connect)
+        down = protocol.CONTACT_CONTACT | protocol.CONTACT_IN_RANGE
+        tablet.send(touch_frame((0, down, 10, 10, 0, 0, 0)))  # ignorés : ni injecteur, ni flux
+        tablet.send(keyframe_request_frame())
+        tablet.send(stats_frame())
+        tablet.send(ping_frame(7))
+        tablet.next_message(protocol.PONG)  # le lecteur a traité tout ce qui précède
+        self.assertEqual(display.calls, [])
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(injectors.created, [])
+        self.assertEqual(ddagrab_probes(run), [])
+        self.assertEqual(rec.stats, [])
+        seen = [s for s, _ in rec.states]
+        self.assertNotIn(State.PREPARING_DISPLAY, seen)
+        self.assertNotIn(State.STREAMING, seen)
+        self.assertIn("Device role: actions (Pixel 8, phone)", rec.logs)
+        self.assertEqual(len(hubs.created), 1)
+        self.assertTrue(relay.is_running())
+
+    def test_action_is_routed_to_the_hub(self):
+        relay, rec, connect, hubs, *_ = self.actions_engine()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        tablet.send(action_frame(id="volume.set", value=0.5))
+        tablet.send(action_frame(id="usb.eject", drive="E:"))
+        wait_until(lambda: len(hub.handled) == 2)
+        self.assertEqual(hub.handled, [{"id": "volume.set", "value": 0.5}, {"id": "usb.eject", "drive": "E:"}])
+
+    def test_hub_send_reaches_the_tablet_as_actions_state(self):
+        relay, rec, connect, hubs, *_ = self.actions_engine()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        state = {"v": 1, "audio": {"available": True, "volume": 0.42, "muted": False}, "usb": []}
+        hub.send(state)
+        _type, flags, payload = tablet.next_message(protocol.ACTIONS_STATE)
+        self.assertEqual(flags, 0)
+        self.assertEqual(json.loads(payload.decode("utf-8")), state)
+        hub.send({"v": 1, "usb": [{"drive": "E:", "label": "KINGSTON"}]})
+        _type, _flags, payload = tablet.next_message(protocol.ACTIONS_STATE)
+        self.assertEqual(json.loads(payload)["usb"], [{"drive": "E:", "label": "KINGSTON"}])
+
+    def test_failing_send_or_hub_never_kills_the_reader(self):
+        hubs = FakeHubs(handle_error=RuntimeError("hub en panne"))
+        relay, rec, connect, hubs, *_ = self.actions_engine(hubs=hubs)
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        with self.assertRaises(ValueError):
+            hub.send({"v": 1, "bad": float("nan")})  # non encodable : l'erreur va au hub, qui la journalise
+        tablet.send(action_frame(id="volume.mute", value=True))
+        tablet.send(action_frame(id="volume.mute", value=False))
+        wait_until(lambda: len(hub.handled) == 2)
+        tablet.send(ping_frame(99))
+        _type, _flags, payload = tablet.next_message(protocol.PONG)
+        self.assertEqual(protocol._PONG.unpack(payload)[0], 99)
+        failures = [line for line in rec.logs if line.startswith("Actions: action failed")]
+        self.assertEqual(failures, ["Actions: action failed: hub en panne"])  # une fois par session
+        hub.send({"v": 1})
+        tablet.next_message(protocol.ACTIONS_STATE)
+        self.assertIs(rec.last_state(), State.ACTIONS)
+
+    def test_ping_is_answered_in_an_actions_session(self):
+        relay, rec, connect, hubs, *_ = self.actions_engine()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        tablet.send(ping_frame(5555))
+        _type, _flags, payload = tablet.next_message(protocol.PONG)
+        self.assertEqual(protocol._PONG.unpack(payload)[0], 5555)
+
+    def test_no_device_info_within_the_timeout_streams_the_screen(self):
+        connect, popen, hubs = FakeConnect(), FakePopen(live), FakeHubs()
+        relay, rec = make_engine(self, connect=connect, popen=popen, hubs=hubs, device_info_timeout_s=0.2)
+        relay.start()
+        tablet = first_tablet(connect)
+        connected = time.monotonic()
+        tablet.next_message(protocol.CONFIG)
+        self.assertGreaterEqual(time.monotonic() - connected, 0.15)  # le PC a bien attendu DEVICE_INFO
+        rec.wait_state(State.STREAMING)
+        self.assertEqual(hubs.created, [])
+        self.assertEqual(len(popen.calls), 1)
+        self.assertIn("No DEVICE_INFO within 0.2 s: screen role", rec.logs)
+        self.assertNotIn(State.ACTIONS, [s for s, _ in rec.states])
+
+    def test_device_info_after_the_timeout_is_ignored(self):
+        connect, hubs = FakeConnect(), FakeHubs()
+        relay, rec = make_engine(self, connect=connect, hubs=hubs, device_info_timeout_s=0.05)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        tablet.send(device_info_frame())
+        rec.wait_for(lambda: "Late DEVICE_INFO ignored (role actions)" in rec.logs)
+        self.assertEqual(hubs.created, [])
+        self.assertIs(rec.last_state(), State.STREAMING)
+
+    def test_explicit_screen_role_streams_without_waiting(self):
+        connect = FakeConnect(after_hello=device_info_frame(role="screen", kind="tablet", name="Galaxy Tab S9"))
+        popen, hubs = FakePopen(live), FakeHubs()
+        relay, rec = make_engine(self, connect=connect, popen=popen, hubs=hubs, device_info_timeout_s=30.0)
+        started = time.monotonic()
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        self.assertLess(time.monotonic() - started, 10.0)  # n'a pas attendu les 30 s
+        rec.wait_state(State.STREAMING)
+        self.assertEqual(hubs.created, [])
+        self.assertEqual(len(popen.calls), 1)
+        self.assertIn("Device role: screen (Galaxy Tab S9, tablet)", rec.logs)
+
+    def test_explicit_screen_role_with_a_virtual_display_prepares_it(self):
+        relay, rec, connect, hubs, display, popen, _injectors, run = self.actions_engine(
+            after_hello=device_info_frame(role="screen", kind="tablet", name="Galaxy Tab S9"),
+            dxgi=lambda: dxgi_list(r"\\.\DISPLAY1", r"\\.\DISPLAY9"))
+        first_tablet(connect).next_message(protocol.CONFIG)
+        self.assertEqual(len(display.prepares()), 1)
+        self.assertEqual(hubs.created, [])
+        self.assertEqual(len(popen.calls), 1)
+
+    def test_unknown_role_streams_the_screen(self):
+        connect = FakeConnect(after_hello=device_info_frame(role="remote"))
+        popen, hubs = FakePopen(live), FakeHubs()
+        relay, rec = make_engine(self, connect=connect, popen=popen, hubs=hubs, device_info_timeout_s=5.0)
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        self.assertEqual(hubs.created, [])
+        self.assertIn("Device role: remote (Pixel 8, phone): unknown, screen role used", rec.logs)
+
+    def test_action_in_a_screen_session_is_ignored(self):
+        connect, injectors = FakeConnect(), FakeInjectors()
+        relay, rec = make_engine(self, connect=connect, injectors=injectors)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        tablet.send(action_frame(id="volume.set", value=0.1))
+        tablet.send(action_frame(id="volume.set", value=0.2))
+        tablet.send(ping_frame(1))
+        tablet.next_message(protocol.PONG)
+        self.assertEqual([line for line in rec.logs if line.startswith("ACTION ignored")],
+                         ["ACTION ignored: not an Actions session"])
+        self.assertIs(rec.last_state(), State.STREAMING)
+
+    def test_stop_stops_the_hub(self):
+        relay, rec, connect, hubs, display, popen, *_ = self.actions_engine()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        started = time.monotonic()
+        relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
+        self.assertFalse(relay.is_running())
+        self.assertTrue(hub.stopped.is_set())
+        self.assertEqual(rec.states[-1], (State.STOPPED, msg("state.stopped")))
+        tablet.wait_closed()
+        self.assertEqual(display.calls, [])  # rien à éteindre : l'écran virtuel n'a jamais servi
+        self.assertEqual(popen.calls, [])
+        self.assertFalse(any(line.startswith("Tablet disconnected") for line in rec.logs))
+
+    def test_quit_in_an_actions_session_releases_nothing(self):
+        relay, rec, connect, hubs, display, *_ = self.actions_engine()
+        rec.wait_state(State.ACTIONS)
+        relay.stop(immediate_display_release=True)
+        self.assertTrue(hubs.created[0].stopped.is_set())
+        self.assertEqual(display.calls, [])
+
+    def test_tablet_leaving_stops_the_hub_and_waits_again(self):
+        relay, rec, connect, hubs, display, popen, *_ = self.actions_engine()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        connect.refuse = True
+        first_tablet(connect).leave()
+        self.assertTrue(hub.stopped.wait(5))
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertTrue(any(line.startswith("Tablet disconnected") for line in rec.logs))
+        self.assertTrue(relay.is_running())
+        self.assertEqual(display.calls, [])
+        self.assertEqual(popen.calls, [])
+
+    def test_a_new_actions_session_gets_a_new_hub(self):
+        relay, rec, connect, hubs, *_ = self.actions_engine()
+        first = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        first_tablet(connect).leave()
+        self.assertTrue(first.stopped.wait(5))
+        wait_until(lambda: len(hubs.created) == 2)
+        self.assertTrue(hubs.created[1].started.wait(5))
+        self.assertFalse(hubs.created[1].stopped.is_set())
+
+    def test_stop_while_waiting_for_device_info_ends_quickly(self):
+        connect, popen, hubs = FakeConnect(), FakePopen(live), FakeHubs()
+        relay, rec = make_engine(self, connect=connect, popen=popen, hubs=hubs, device_info_timeout_s=30.0)
+        relay.start()
+        rec.wait_for(lambda: any(line.startswith("Tablet connected") for line in rec.logs))
+        started = time.monotonic()
+        relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
+        self.assertFalse(relay.is_running())
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(hubs.created, [])
+        self.assertIs(rec.last_state(), State.STOPPED)
+
+    def test_tablet_leaving_while_waiting_for_device_info_ends_the_session(self):
+        connect, popen, hubs = FakeConnect(), FakePopen(live), FakeHubs()
+        relay, rec = make_engine(self, connect=connect, popen=popen, hubs=hubs, device_info_timeout_s=30.0)
+        relay.start()
+        tablet = first_tablet(connect)
+        rec.wait_for(lambda: any(line.startswith("Tablet connected") for line in rec.logs))
+        connect.refuse = True
+        tablet.leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP, timeout=5.0)
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(hubs.created, [])
 
 
 if __name__ == "__main__":

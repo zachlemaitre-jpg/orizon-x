@@ -27,6 +27,18 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(status.detail_for(State.PREPARING_DISPLAY, msg("state.preparing_display"), "fr"),
                          "Préparation de l'écran…")
 
+    def test_actions_is_an_active_green_state_with_the_device_name(self):
+        self.assertEqual(status.title(State.ACTIONS, "en"), "Actions device")
+        self.assertEqual(status.title(State.ACTIONS, "fr"), "Appareil Actions")
+        self.assertEqual(status.COLORS[State.ACTIONS], status.COLORS[State.STREAMING])
+        self.assertTrue(status.is_active(State.ACTIONS))
+        self.assertEqual(status.primary_label(State.ACTIONS, "en"), "Stop")
+        self.assertEqual(status.primary_label(State.ACTIONS, "fr"), "Arrêter")
+        self.assertEqual(status.detail_for(State.ACTIONS, msg("state.actions", name="Pixel 8"), "en"),
+                         "Pixel 8 connected")
+        self.assertEqual(status.detail_for(State.ACTIONS, msg("state.actions", name="Pixel 8"), "fr"),
+                         "Pixel 8 connecté")
+
     def test_primary_label(self):
         self.assertEqual(status.primary_label(State.STREAMING, "fr"), "Arrêter")
         self.assertEqual(status.primary_label(State.WAITING_DEVICE, "fr"), "Arrêter")
