@@ -7,14 +7,7 @@ from actions import now_playing as np_mod
 from actions.base import ProviderError
 from actions.now_playing import MediaInfo, NowPlayingProvider, WinRTNowPlayingApi, app_name
 
-try:
-    import winrt.windows.media.control  # noqa: F401
-    import winrt.windows.storage.streams  # noqa: F401
-    _HAS_WINRT_MEDIA = True
-except ImportError:
-    _HAS_WINRT_MEDIA = False
-
-SPOTIFY ="SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
+SPOTIFY = "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
 PNG = b"\x89PNG\r\n\x1a\n" + b"cover-1"
 PNG2 = b"\x89PNG\r\n\x1a\n" + b"cover-2"
 
@@ -500,10 +493,14 @@ class WinRTApiTest(unittest.TestCase):
         info = self.api(FakeSession(props=FakeProps(None, None, None))).current(lambda key: False, 1000)
         self.assertEqual((info.title, info.artist, info.album), ("", "", ""))
 
-    @unittest.skipUnless(_HAS_WINRT_MEDIA, "winrt-Windows.Media.Control not installed")
     def test_constructor_imports_the_real_classes_without_calling_winrt(self):
+        # No winrt import at module level: importing winrt before PySide6 crashes the process (access
+        # violation), and test discovery imports this module before the Qt tests.
         worker = FakeWorker()
-        WinRTNowPlayingApi(worker=worker)
+        try:
+            WinRTNowPlayingApi(worker=worker)
+        except ImportError:
+            self.skipTest("winrt-Windows.Media.Control / Storage.Streams not installed")
         self.assertEqual(worker.timeouts, [])
 
     def test_constructor_without_winrt_raises_import_error(self):
