@@ -1,5 +1,6 @@
 package com.orizonx.client.protocol
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -123,5 +124,66 @@ class FrameReaderTest {
         val text = head + "x".repeat(Protocol.MAX_JSON - head.length - tail.length) + tail
         assertEquals(Protocol.MAX_JSON, text.length)
         assertTrue(read(jsonFrame(Protocol.TYPE_ACTIONS_STATE, text)) is ActionsStateMessage)
+    }
+
+    // --- MEDIA_ARTWORK (0x05) ---
+
+    private val artworkId = "0123456789abcdef0123456789abcdef01234567"
+
+    private fun artworkPayload(id: String, image: ByteArray): ByteArray =
+        byteArrayOf(id.length.toByte()) + id.toByteArray(Charsets.US_ASCII) + image
+
+    @Test
+    fun decodesMediaArtwork() {
+        val image = byteArrayOf(1, 2, 3, 0xFF.toByte())
+        val message = read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, artworkPayload(artworkId, image))) as MediaArtworkMessage
+        assertEquals(artworkId, message.id)
+        assertArrayEquals(image, message.bytes)
+    }
+
+    @Test
+    fun mediaArtworkIsFollowedByNextMessage() {
+        val frame = jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, artworkPayload(artworkId, byteArrayOf(9, 9)))
+        val reader = FrameReader(ByteArrayInputStream(hex(frame + pongHex)))
+        assertTrue(reader.read() is MediaArtworkMessage)
+        assertEquals(PcMessage.Pong(123456789, 987654321), reader.read())
+    }
+
+    @Test
+    fun acceptsMediaArtworkOfExactlyMaxArtwork() {
+        val image = ByteArray(Protocol.MAX_ARTWORK - 1 - artworkId.length) { 7 }
+        val message = read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, artworkPayload(artworkId, image))) as MediaArtworkMessage
+        assertEquals(image.size, message.bytes.size)
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsMediaArtworkOverMaxArtwork() {
+        val image = ByteArray(Protocol.MAX_ARTWORK - artworkId.length) { 7 } // payload = MAX_ARTWORK + 1
+        read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, artworkPayload(artworkId, image)))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsMediaArtworkWithEmptyPayload() {
+        read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, ByteArray(0)))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsMediaArtworkWithZeroIdLength() {
+        read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, byteArrayOf(0, 1, 2, 3)))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsMediaArtworkWhoseIdOverrunsThePayload() {
+        read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, byteArrayOf(40) + "abc".toByteArray() + byteArrayOf(1)))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsMediaArtworkWithoutImageBytes() {
+        read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, artworkPayload(artworkId, ByteArray(0))))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsMediaArtworkWithNonAsciiId() {
+        read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, byteArrayOf(2, 0xC3.toByte(), 0xA9.toByte(), 1, 2)))
     }
 }

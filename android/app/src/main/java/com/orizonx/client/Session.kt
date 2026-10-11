@@ -5,6 +5,7 @@ import android.view.Surface
 import com.orizonx.client.protocol.ActionsStateMessage
 import com.orizonx.client.protocol.FrameReader
 import com.orizonx.client.protocol.FrameWriter
+import com.orizonx.client.protocol.MediaArtworkMessage
 import com.orizonx.client.protocol.PcMessage
 import com.orizonx.client.protocol.Protocol
 import com.orizonx.client.protocol.ProtocolException
@@ -36,6 +37,9 @@ class Session(
         /** HELLO and DEVICE_INFO were sent; [role] is the role announced to the PC. */
         fun onConnected(role: DeviceRole)
         fun onActionsState(json: org.json.JSONObject)
+
+        /** Cover art for `now_playing.artwork == id`; [bytes] is the raw JPEG/PNG. Called on the reader thread: do not decode here. */
+        fun onMediaArtwork(id: String, bytes: ByteArray)
         fun onStreaming(config: PcMessage.Config, decoder: String)
         fun onStats(window: LatencyTracker.Window)
     }
@@ -114,6 +118,7 @@ class Session(
                         }
                         is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
                         is ActionsStateMessage -> listener.onActionsState(message.json)
+                        is MediaArtworkMessage -> listener.onMediaArtwork(message.id, message.bytes)
                     }
                 }
             } catch (e: SocketException) {

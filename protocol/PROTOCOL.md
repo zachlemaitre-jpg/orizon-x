@@ -25,6 +25,7 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x02 | VIDEO | pts_us u64, puis une unité d'accès H.264 Annex-B. Flags : KEY = 0x01, CODEC_CONFIG = 0x02 |
 | 0x03 | PONG | t_tab_us u64 (renvoyé tel quel), t_pc_us u64 |
 | 0x04 | ACTIONS_STATE | JSON UTF-8 : l'état complet du mode Actions (voir « Mode Actions »). Au plus 65 536 octets |
+| 0x05 | MEDIA_ARTWORK | `n` u8 (longueur de l'id, 1..255), puis l'id (`n` octets ASCII, sha1 hexadécimal : 40 caractères), puis l'image brute (JPEG ou PNG, au moins 1 octet). Payload total de 524 288 octets (512 Kio) au plus |
 
 ## Tablette → PC
 
@@ -59,9 +60,23 @@ Les messages 0x04, 0x86 et 0x87 portent un **objet JSON encodé en UTF-8**, de 6
 3. En rôle `actions`, le PC n'envoie ni `CONFIG` ni `VIDEO` : il envoie un `ACTIONS_STATE` complet, puis un nouveau à chaque changement (l'état complet, pas de diff) et au moins toutes les 30 s. La tablette envoie des `ACTION`. `PING`/`PONG` ne changent pas.
 4. Pour changer de rôle, la tablette ferme la connexion et se reconnecte avec le nouveau `DEVICE_INFO`.
 
+### Pochette (`MEDIA_ARTWORK`, 0x05)
+
+Le bloc « En cours de lecture » de l'état (`now_playing`, voir ci-dessous) référence sa pochette par un identifiant. Le PC envoie `MEDIA_ARTWORK` **une fois par pochette**, juste **avant** le premier `ACTIONS_STATE` qui la référence. L'image est transmise telle que Windows la fournit (JPEG ou PNG, sans transcodage). La tablette garde la dernière pochette reçue et l'affiche tant que `now_playing.artwork` vaut son id.
+
+Sont des erreurs de protocole : un payload de plus de 524 288 octets, vide, avec `n` = 0, dont l'id dépasse le payload ou ne laisse aucun octet d'image, ou dont l'id contient un octet non ASCII. Cette limite remplace, pour ce type, la limite générale. Voir le vecteur `media_artwork_small`.
+
 ### Contenu
 
 L'état (`"v":1`) et la liste des actions (`volume.set`, `media.play_pause`, `wifi.set`, `usb.eject`, …) sont décrits dans `docs/superpowers/specs/2026-10-11-actions-mode-design.md` §2.1 et §2.2. Un `ACTION` dont l'`id` est inconnu est journalisé et ignoré.
+
+Le bloc `now_playing` décrit la session média Windows courante (Spotify, navigateur, VLC…) :
+
+```json
+"now_playing":{"available":true,"app":"Spotify","title":"…","artist":"…","album":"…","playing":true,"artwork":"<sha1 hex>"}
+```
+
+`available: false` (ou section absente) quand aucune session média n'existe. `app`, `title`, `artist`, `album` sont des chaînes (vides si inconnues), `playing` un booléen, `artwork` l'id d'un `MEDIA_ARTWORK` ou `null` sans pochette.
 
 ### Compatibilité
 

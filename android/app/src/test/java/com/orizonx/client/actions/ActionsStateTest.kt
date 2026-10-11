@@ -137,4 +137,40 @@ class ActionsStateTest {
         assertEquals(Notice("action_failed", null), parse("""{"notice":{"code":"action_failed"}}""").notice)
         assertNull(parse("""{"notice":{"drive":"E:"}}""").notice)
     }
+
+    @Test
+    fun nowPlayingIsParsed() {
+        val s = parse(
+            """{"now_playing":{"available":true,"app":"Spotify","title":"Song","artist":"Artist","album":"Album",
+               "playing":true,"artwork":"0123456789abcdef0123456789abcdef01234567"}}""",
+        )
+        assertEquals(
+            NowPlaying("Spotify", "Song", "Artist", "Album", true, "0123456789abcdef0123456789abcdef01234567"),
+            s.nowPlaying,
+        )
+    }
+
+    @Test
+    fun nowPlayingWithoutArtworkOrOptionalTexts() {
+        assertEquals(
+            NowPlaying("Chrome", "Video", "", "", false, null),
+            parse("""{"now_playing":{"available":true,"app":"Chrome","title":"Video","artwork":null}}""").nowPlaying,
+        )
+        assertNull(parse("""{"now_playing":{"available":true,"artwork":""}}""").nowPlaying!!.artworkId)
+    }
+
+    @Test
+    fun nowPlayingIsNullWhenAbsentOrUnavailable() {
+        assertNull(parse("{}").nowPlaying)
+        assertNull(parse("""{"now_playing":{"available":false,"title":"x","playing":true}}""").nowPlaying)
+        assertNull(parse("""{"now_playing":{"title":"x"}}""").nowPlaying)
+        assertNull(parse("""{"now_playing":"x"}""").nowPlaying)
+        assertNull(parse("""{"now_playing":null}""").nowPlaying)
+    }
+
+    @Test
+    fun nowPlayingNullTextsBecomeEmpty() {
+        val n = parse("""{"now_playing":{"available":true,"app":null,"title":null,"artist":null,"album":null}}""").nowPlaying!!
+        assertEquals(NowPlaying("", "", "", "", false, null), n)
+    }
 }

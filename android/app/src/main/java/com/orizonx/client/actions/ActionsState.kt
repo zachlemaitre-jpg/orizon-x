@@ -19,6 +19,16 @@ data class AirplaneState(val on: Boolean)
 /** [freeBytes] / [totalBytes] are null when the PC did not report them. */
 data class UsbDrive(val drive: String, val label: String, val freeBytes: Long?, val totalBytes: Long?)
 
+/** [artworkId] (sha1 hex) names the MEDIA_ARTWORK image of the track, null when it has no cover. */
+data class NowPlaying(
+    val app: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val playing: Boolean,
+    val artworkId: String?,
+)
+
 data class Notice(val code: String, val drive: String?)
 
 /**
@@ -36,6 +46,7 @@ data class ActionsState(
     val bluetooth: BluetoothState? = null,
     val airplane: AirplaneState? = null,
     val usb: List<UsbDrive> = emptyList(),
+    val nowPlaying: NowPlaying? = null,
     val notice: Notice? = null,
 ) {
     companion object {
@@ -67,6 +78,16 @@ data class ActionsState(
             },
             airplane = available(json, "airplane")?.let { AirplaneState(it.optBoolean("on", false)) },
             usb = drives(json),
+            nowPlaying = available(json, "now_playing")?.let { n ->
+                NowPlaying(
+                    app = text(n, "app") ?: "",
+                    title = text(n, "title") ?: "",
+                    artist = text(n, "artist") ?: "",
+                    album = text(n, "album") ?: "",
+                    playing = n.optBoolean("playing", false),
+                    artworkId = text(n, "artwork"),
+                )
+            },
             notice = json.optJSONObject("notice")?.let { n ->
                 text(n, "code")?.let { Notice(it, text(n, "drive")) }
             },

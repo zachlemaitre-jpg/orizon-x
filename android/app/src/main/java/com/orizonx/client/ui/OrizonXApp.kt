@@ -65,7 +65,7 @@ fun OrizonXApp(
 
         // VideoSurface stays composed underneath: it owns the Receiver's lifecycle (Surface created/destroyed).
         AnimatedVisibility(visible = actionsActive, enter = fadeIn(tween(300)), exit = fadeOut(tween(300))) {
-            ActionsScreen(model.actionsState, onAction, onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) })
+            ActionsScreen(model.actionsState, model.artwork, onAction, onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) })
         }
 
         if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))

@@ -50,6 +50,19 @@ class FrameReader(input: InputStream) {
                     stream.readFully(bytes)
                     return ActionsStateMessage(parseJsonObject("ACTIONS_STATE", bytes))
                 }
+                Protocol.TYPE_MEDIA_ARTWORK -> {
+                    if (size > Protocol.MAX_ARTWORK) throw ProtocolException("MEDIA_ARTWORK trop gros : $size octets")
+                    if (size < 1) throw ProtocolException("MEDIA_ARTWORK vide")
+                    val idLength = stream.readUnsignedByte()
+                    if (idLength == 0) throw ProtocolException("MEDIA_ARTWORK : identifiant vide")
+                    if (1 + idLength >= size) throw ProtocolException("MEDIA_ARTWORK : $size octets pour un identifiant de $idLength")
+                    val idBytes = ByteArray(idLength)
+                    stream.readFully(idBytes)
+                    if (idBytes.any { it < 0 }) throw ProtocolException("MEDIA_ARTWORK : identifiant non ASCII")
+                    val image = ByteArray(size - 1 - idLength)
+                    stream.readFully(image)
+                    return MediaArtworkMessage(String(idBytes, Charsets.US_ASCII), image)
+                }
                 else -> skip(size)
             }
         }

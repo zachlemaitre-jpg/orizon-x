@@ -47,6 +47,11 @@ class ProtocolVectorsTest {
                     val expected = f.getJSONObject("state")
                     assertTrue(vector.getString("name"), jsonEquals(expected, message.json))
                 }
+                "MEDIA_ARTWORK" -> {
+                    message as MediaArtworkMessage
+                    assertEquals(f.getString("id"), message.id)
+                    assertArrayEquals(hex(f.getString("data")), message.bytes)
+                }
                 else -> fail("type inattendu : ${vector.getString("type")}")
             }
         }

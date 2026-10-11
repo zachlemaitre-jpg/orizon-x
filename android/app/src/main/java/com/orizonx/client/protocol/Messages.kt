@@ -12,6 +12,9 @@ object Protocol {
 
     /** Largest JSON payload (DEVICE_INFO, ACTION, ACTIONS_STATE). */
     const val MAX_JSON = 64 * 1024
+
+    /** Largest MEDIA_ARTWORK payload: id length byte + id + raw image (JPEG or PNG). */
+    const val MAX_ARTWORK = 512 * 1024
     val MAGIC: ByteArray = "TABX".toByteArray(Charsets.US_ASCII)
 
     // PC -> tablet
@@ -19,6 +22,7 @@ object Protocol {
     const val TYPE_VIDEO = 0x02
     const val TYPE_PONG = 0x03
     const val TYPE_ACTIONS_STATE = 0x04
+    const val TYPE_MEDIA_ARTWORK = 0x05
 
     // tablet -> PC
     const val TYPE_HELLO = 0x81
@@ -71,6 +75,16 @@ sealed interface PcMessage {
 
 /** The complete Actions state broadcast by the PC (ACTIONS_STATE, JSON). Parsing into a model is up to the UI layer. */
 class ActionsStateMessage(val json: JSONObject) : PcMessage
+
+/** Cover art of the "now playing" block: [id] (sha1 hex, as referenced by `now_playing.artwork`) and the raw JPEG/PNG [bytes]. */
+class MediaArtworkMessage(val id: String, val bytes: ByteArray) : PcMessage {
+    override fun equals(other: Any?): Boolean =
+        other is MediaArtworkMessage && other.id == id && other.bytes.contentEquals(bytes)
+
+    override fun hashCode(): Int = 31 * id.hashCode() + bytes.contentHashCode()
+
+    override fun toString(): String = "MediaArtworkMessage(id=$id, bytes=${bytes.size})"
+}
 
 /** Messages sent to the PC. */
 sealed interface TabletMessage {

@@ -50,11 +50,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
@@ -84,6 +86,7 @@ import com.orizonx.client.actions.BatteryState
 import com.orizonx.client.actions.BluetoothState
 import com.orizonx.client.actions.BrightnessState
 import com.orizonx.client.actions.ClockState
+import com.orizonx.client.actions.NowPlaying
 import com.orizonx.client.actions.UsbDrive
 import com.orizonx.client.actions.WifiState
 import kotlinx.coroutines.Job
@@ -100,13 +103,20 @@ private val BatteryAmber = Color(0xFFF2A93B)
 private val BatteryRed = Color(0xFFE5484D)
 private val PillShape = RoundedCornerShape(24.dp)
 private val TileShape = RoundedCornerShape(18.dp)
+private val CoverShape = RoundedCornerShape(16.dp)
 
 /**
  * The Actions remote: clock, PC battery and the controls reported by the PC's latest ACTIONS_STATE ([rawState]).
  * Actions update the displayed state immediately (optimistic); the next ACTIONS_STATE wins.
+ * [artwork] is the last cover received (id, bitmap); it is shown only while it matches `now_playing.artwork`.
  */
 @Composable
-fun ActionsScreen(rawState: JSONObject?, onAction: (JSONObject) -> Unit, onSwitchMode: () -> Unit) {
+fun ActionsScreen(
+    rawState: JSONObject?,
+    artwork: Pair<String, ImageBitmap>?,
+    onAction: (JSONObject) -> Unit,
+    onSwitchMode: () -> Unit,
+) {
     val view = LocalView.current
     DisposableEffect(view) {
         view.keepScreenOn = true
@@ -145,6 +155,7 @@ fun ActionsScreen(rawState: JSONObject?, onAction: (JSONObject) -> Unit, onSwitc
         update = update,
         volumeThrottle = volumeThrottle,
         brightnessThrottle = brightnessThrottle,
+        artwork = artwork,
     )
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -186,6 +197,7 @@ private class Controls(
     val update: (ActionsState.() -> ActionsState) -> Unit,
     val volumeThrottle: ActionThrottle,
     val brightnessThrottle: ActionThrottle,
+    val artwork: Pair<String, ImageBitmap>?,
 )
 
 /**
@@ -227,8 +239,10 @@ private fun LandscapeControls(state: ActionsState, c: Controls) {
     val brightness = state.brightness
     val radios = hasRadios(state)
     val right = brightness != null || radios
-    if (!sound && !right && state.usb.isEmpty()) return
+    val nowPlaying = state.nowPlaying
+    if (!sound && !right && state.usb.isEmpty() && nowPlaying == null) return
     Column(Modifier.widthIn(max = 920.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (nowPlaying != null) NowPlayingCard(nowPlaying, c)
         for (drive in state.usb) UsbCard(drive, c)
         if (sound && right) {
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -260,12 +274,16 @@ private fun ColumnScope.RightColumn(state: ActionsState, c: Controls, brightness
     if (radios) RadioTiles(state, c, Modifier.fillMaxWidth().weight(1f))
 }
 
-private fun hasSound(state: ActionsState) = state.audio != null || state.mediaAvailable
+/** The media keys live in the "En cours de lecture" card when it is shown, in the Son card otherwise. */
+private fun soundKeys(state: ActionsState) = state.mediaAvailable && state.nowPlaying == null
+
+private fun hasSound(state: ActionsState) = state.audio != null || soundKeys(state)
 private fun hasRadios(state: ActionsState) = state.wifi != null || state.bluetooth != null || state.airplane != null
 
 /** The controls the PC reports as available, in display order. */
 private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit> {
     val list = mutableListOf<@Composable () -> Unit>()
+    state.nowPlaying?.let { n -> list += { NowPlayingCard(n, c) } }
     if (hasSound(state)) list += { SoundCard(state, c) }
     state.brightness?.let { b -> list += { BrightnessCard(b, c) } }
     if (hasRadios(state)) list += { RadioTiles(state, c) }
@@ -499,7 +517,7 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
                     c.send(ActionMessages.volumeMute(!audio.muted))
                 })
             }
-            if (state.mediaAvailable) {
+            if (soundKeys(state)) {
                 Spacer(Modifier.weight(1f))
                 RoundKey("⏮") { c.tap(); c.send(ActionMessages.mediaPrevious()) }
                 RoundKey("⏯") { c.tap(); c.send(ActionMessages.mediaPlayPause()) }
@@ -507,6 +525,54 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
             }
         }
     }
+}
+
+/** Cover (placeholder note when missing or not the announced one), track texts and the media keys. */
+@Composable
+private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
+    val cover = c.artwork?.takeIf { now.artworkId != null && it.first == now.artworkId }?.second
+    GlassCard(modifier) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Box(
+                Modifier.size(120.dp).clip(CoverShape).background(Color.White.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (cover != null) {
+                    Image(cover, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } else {
+                    Picto(R.drawable.ic_action_music_note, 56.dp, alpha = 0.6f)
+                }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    OneLine(now.title.ifBlank { "Lecture en cours" }, 18.sp, FontWeight.Bold, 1f)
+                    val details = listOf(now.artist, now.album).filter { it.isNotBlank() }.joinToString(" · ")
+                    if (details.isNotEmpty()) OneLine(details, 14.sp, FontWeight.Normal, 0.8f)
+                    if (now.app.isNotBlank()) OneLine(now.app, 12.sp, FontWeight.Normal, 0.55f)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RoundIconKey(R.drawable.ic_action_skip_previous) { c.tap(); c.send(ActionMessages.mediaPrevious()) }
+                    RoundIconKey(if (now.playing) R.drawable.ic_action_pause else R.drawable.ic_action_play) {
+                        c.tap()
+                        c.update { copy(nowPlaying = nowPlaying?.copy(playing = !now.playing)) }
+                        c.send(ActionMessages.mediaPlayPause())
+                    }
+                    RoundIconKey(R.drawable.ic_action_skip_next) { c.tap(); c.send(ActionMessages.mediaNext()) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OneLine(text: String, size: androidx.compose.ui.unit.TextUnit, weight: FontWeight, alpha: Float) {
+    BasicText(
+        text,
+        style = TextStyle(color = Color.White.copy(alpha = alpha), fontSize = size, fontWeight = weight),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -649,6 +715,21 @@ private fun RoundKey(glyph: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         GlassText(glyph, size = 22.sp, align = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun RoundIconKey(icon: Int, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(52.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.10f))
+            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Picto(icon, 28.dp)
     }
 }
 

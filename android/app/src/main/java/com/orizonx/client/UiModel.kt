@@ -4,9 +4,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import com.orizonx.client.actions.ArtworkDecoder
 import com.orizonx.client.protocol.PcMessage
 import com.orizonx.client.stats.LatencyTracker
 import org.json.JSONObject
+import java.util.concurrent.Executors
 
 sealed interface ConnectionState {
     data class Waiting(val reason: String?) : ConnectionState
@@ -56,7 +59,17 @@ class UiModel : Session.Listener {
     var actionsState by mutableStateOf<JSONObject?>(null)
         private set
 
+    /** Last cover art received, decoded and keyed by the id the PC announced in `now_playing.artwork`. */
+    var artwork by mutableStateOf<Pair<String, ImageBitmap>?>(null)
+        private set
+
     @Volatile private var decoderName = ""
+
+    /** Bumped on each disconnect so a decode still in flight cannot resurrect the previous session's cover. */
+    @Volatile private var artworkEpoch = 0
+    private val artworkDecoder = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "artwork-decoder").apply { isDaemon = true }
+    }
 
     fun chooseRole(value: DeviceRole) {
         role = value
@@ -70,9 +83,21 @@ class UiModel : Session.Listener {
         actionsState = json
     }
 
+    override fun onMediaArtwork(id: String, bytes: ByteArray) {
+        val epoch = artworkEpoch
+        runCatching {
+            artworkDecoder.execute {
+                val bitmap = runCatching { ArtworkDecoder.decode(bytes) }.getOrNull() ?: return@execute
+                if (epoch == artworkEpoch) artwork = id to bitmap
+            }
+        }
+    }
+
     fun showWaiting(reason: String?) {
         connectedRole = null
         actionsState = null
+        artworkEpoch++
+        artwork = null
         waitingReason = reason
         state = ConnectionState.Waiting(reason)
         hud = null
