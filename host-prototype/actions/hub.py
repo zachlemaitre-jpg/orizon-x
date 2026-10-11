@@ -12,7 +12,7 @@ One thread owns everything:
   as it lasts.
 
 State shape: ``{"v": 1, "clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-"usb": [...], optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
+"usb": [...], "now_playing", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
 ``airplane`` come from ``merge_radio_state(radios, wifi_info, bt_info)`` (see actions.radios); ``usb`` is the list
 of drives. A section whose provider is missing or raising is ``{"available": False}`` (``[]`` for usb) until the
 provider answers again; the failure is logged once per streak.
@@ -22,7 +22,15 @@ A state is sent when it differs from the last one sent, or ``refresh_s`` after t
 refresh resynchronises it); a change of UTC offset still counts. ``notice`` (``{"code": ..., "drive": ...}``) is put
 in the next state only, and that state is sent even if nothing else changed.
 
-Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb.
+Cover art (spec §7): ``now_playing.artwork`` is the sha1 of the current cover (actions.now_playing). When a state
+to send references a cover the device does not hold (the device keeps only the last one received), the hub first
+calls ``send_artwork(id, image)`` with the provider's ``artwork_bytes(id)``, then ``send(state)``. A cover that cannot
+be sent (no ``send_artwork`` callback, no bytes, or ``send_artwork`` raised ValueError: not encodable) is replaced
+by ``None`` in the state; another error of ``send_artwork`` (the socket closed) holds the state back as well, and
+both are tried again at the next poll.
+
+Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
+now_playing.
 """
 from __future__ import annotations
 
@@ -53,7 +61,7 @@ _ROUTES = (
 )
 
 _FAST = ("audio",)
-_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb")
+_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing")
 _UNAVAILABLE = {"available": False}
 
 _COINIT_MULTITHREADED = 0
@@ -95,12 +103,14 @@ def _comparable(state: dict) -> dict:
 
 class ActionsHub:
     def __init__(self, providers: dict, send: Callable[[dict], None], *,
+                 send_artwork: Optional[Callable[[str, bytes], None]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  poll_fast_s: float = 0.25, poll_slow_s: float = 1.0, refresh_s: float = 30.0,
                  log: Optional[Callable[[str], None]] = None,
                  com_init: Callable[[], Optional[Callable[[], None]]] = _com_init) -> None:
         self._providers = providers
         self._send = send
+        self._send_artwork = send_artwork
         self._clock = clock
         self._poll_fast_s = poll_fast_s
         self._poll_slow_s = poll_slow_s
@@ -122,6 +132,9 @@ class ActionsHub:
         self._last_sent: Optional[dict] = None
         self._last_sent_at = 0.0
         self._send_failed = False
+        self._artwork_sent: Optional[str] = None  # the cover the device holds (it keeps only the last one)
+        self._artwork_refused: Optional[str] = None  # a cover send_artwork could not encode: never retried
+        self._artwork_logged: Optional[str] = None
 
     # --- public API ---
 
@@ -262,24 +275,77 @@ class ActionsHub:
         usb = self._snap.get("usb")
         drives = usb.get("drives", []) if usb and usb.get("available", True) else []
         state["usb"] = [dict(d) for d in drives]
+        state["now_playing"] = self._section("now_playing")
         return state
+
+    def _log_artwork_once(self, artwork_id: str, line: str) -> None:
+        if self._artwork_logged != artwork_id:
+            self._artwork_logged = artwork_id
+            self._log(line)
+
+    def _pending_artwork(self, state: dict) -> Optional[tuple[str, bytes]]:
+        """The cover to send before this state, if any. A cover that cannot be sent (no send_artwork, no bytes,
+        refused before) is replaced by None in the state, so that no state references a cover the device lacks."""
+        section = state.get("now_playing")
+        if not isinstance(section, dict) or "artwork" not in section:
+            return None
+        artwork_id = section["artwork"]
+        if not isinstance(artwork_id, str) or not artwork_id:
+            section["artwork"] = None
+            return None
+        if artwork_id == self._artwork_sent:
+            return None
+        if self._send_artwork is None or artwork_id == self._artwork_refused:
+            section["artwork"] = None
+            return None
+        getter = getattr(self._providers.get("now_playing"), "artwork_bytes", None)
+        data: Any = None
+        if callable(getter):
+            try:
+                data = getter(artwork_id)
+            except Exception as e:  # noqa: BLE001
+                self._log_artwork_once(artwork_id, f"hub: artwork {artwork_id} unreadable: {e!r}")
+                data = None
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            section["artwork"] = None
+            return None
+        return artwork_id, bytes(data)
+
+    def _note_send_failure(self, e: Exception) -> None:
+        if not self._send_failed:
+            self._send_failed = True
+            self._log(f"hub: send failed: {e!r}")
 
     def _maybe_send(self, now: float) -> None:
         state = self._build_state()
+        artwork = self._pending_artwork(state)
         cmp = _comparable(state)
         due = (self._last_sent is None or cmp != self._last_sent or self._notice is not None
-               or now - self._last_sent_at >= self._refresh_s)
+               or now - self._last_sent_at >= self._refresh_s or artwork is not None)
         if not due:
             return
         out = copy.deepcopy(state)
         if self._notice is not None:
             out["notice"] = dict(self._notice)
+        if artwork is not None and self._send_artwork is not None:  # the cover first, then the state
+            artwork_id, data = artwork
+            try:
+                self._send_artwork(artwork_id, data)
+            except ValueError as e:  # not encodable (too big...): the state goes without it
+                self._artwork_refused = artwork_id
+                self._log_artwork_once(artwork_id, f"hub: artwork {artwork_id} not sent: {e}")
+                out["now_playing"]["artwork"] = None
+                state["now_playing"]["artwork"] = None
+                cmp = _comparable(state)
+            except Exception as e:  # noqa: BLE001 - the socket closed: no state either (it would reference it)
+                self._note_send_failure(e)
+                return
+            else:
+                self._artwork_sent = artwork_id
         try:
             self._send(out)
         except Exception as e:  # noqa: BLE001 - e.g. the socket closed; the session will stop us
-            if not self._send_failed:
-                self._send_failed = True
-                self._log(f"hub: send failed: {e!r}")
+            self._note_send_failure(e)
             return
         self._send_failed = False
         self._notice = None
@@ -342,8 +408,12 @@ def default_providers(log: Optional[Callable[[str], None]] = None) -> dict:
         from actions.usb import UsbProvider
         return UsbProvider(log=log)
 
+    def now_playing() -> Any:
+        from actions.now_playing import NowPlayingProvider
+        return NowPlayingProvider()
+
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),
-                          ("bt_info", bt_info), ("usb", usb)):
+                          ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing)):
         add(name, factory)
     return providers

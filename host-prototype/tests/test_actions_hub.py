@@ -33,6 +33,29 @@ class FakeProvider:
         return self.result
 
 
+COVER_A = b"\x89PNG-cover-A"
+COVER_B = b"\xff\xd8\xff-cover-B"
+ID_A = "a" * 40
+ID_B = "b" * 40
+
+
+class FakeNowPlaying(FakeProvider):
+    """now_playing stand-in: `covers` maps an artwork id to its bytes (what artwork_bytes gives)."""
+
+    def __init__(self, snap=None, covers=None):
+        super().__init__(snap if snap is not None else {
+            "available": True, "app": "Spotify", "title": "UN BESO", "artist": "M4GN", "album": "UN BESO",
+            "playing": True, "artwork": ID_A})
+        self.covers = dict(covers) if covers is not None else {ID_A: COVER_A}
+        self.artwork_requests = []
+        self.artwork_threads = []
+
+    def artwork_bytes(self, artwork_id):
+        self.artwork_requests.append(artwork_id)
+        self.artwork_threads.append(threading.get_ident())
+        return self.covers.get(artwork_id)
+
+
 class FakeClock:
     def __init__(self, t=100.0):
         self.t = t
@@ -56,6 +79,7 @@ def make_providers():
         "bt_info": FakeProvider({"available": True, "connected": ["Casque"]}),
         "usb": FakeProvider({"available": True, "drives": [
             {"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2}]}),
+        "now_playing": FakeNowPlaying(),
     }
 
 
@@ -67,7 +91,18 @@ class Harness:
         self.clock = FakeClock()
         self.sent = []
         self.logs = []
-        self.hub = ActionsHub(self.providers, self.sent.append, clock=self.clock, log=self.logs.append, **kw)
+        self.artworks = []
+        self.events = []  # ("artwork", id) / ("state", now_playing artwork id), in sending order
+        kw.setdefault("send_artwork", self._send_artwork)
+        self.hub = ActionsHub(self.providers, self._send, clock=self.clock, log=self.logs.append, **kw)
+
+    def _send(self, state):
+        self.sent.append(state)
+        self.events.append(("state", state.get("now_playing", {}).get("artwork")))
+
+    def _send_artwork(self, artwork_id, image):
+        self.artworks.append((artwork_id, image))
+        self.events.append(("artwork", artwork_id))
 
     def tick(self, advance=0.0):
         self.clock.t += advance
@@ -90,6 +125,8 @@ class StateTest(unittest.TestCase):
             "bluetooth": {"available": True, "on": True, "connected": ["Casque"]},
             "airplane": {"available": True, "on": False},
             "usb": [{"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2}],
+            "now_playing": {"available": True, "app": "Spotify", "title": "UN BESO", "artist": "M4GN",
+                            "album": "UN BESO", "playing": True, "artwork": ID_A},
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -129,7 +166,8 @@ class StateTest(unittest.TestCase):
         del providers["brightness"]
         h = Harness(providers)
         h.tick()
-        for key in ("clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane"):
+        for key in ("clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
+                    "now_playing"):
             self.assertIn("available", h.sent[0][key], key)
         self.assertEqual(h.sent[0]["brightness"], {"available": False})
         self.assertEqual(h.sent[0]["battery"], {"available": False})
@@ -170,6 +208,7 @@ class PollingTest(unittest.TestCase):
         self.assertEqual(h.providers["battery"].snapshots, 2)
         self.assertEqual(h.providers["usb"].snapshots, 2)
         self.assertEqual(h.providers["radios"].snapshots, 2)
+        self.assertEqual(h.providers["now_playing"].snapshots, 2)
 
     def test_tick_before_deadline_polls_nothing(self):
         h = Harness()
@@ -474,6 +513,213 @@ class FailureTest(unittest.TestCase):
         self.assertEqual(h.sent[0]["battery"], {"available": False})
 
 
+class ArtworkTest(unittest.TestCase):
+    def test_artwork_sent_before_the_first_state_that_references_it(self):
+        h = Harness()
+        h.tick()
+        self.assertEqual(h.events, [("artwork", ID_A), ("state", ID_A)])
+        self.assertEqual(h.artworks, [(ID_A, COVER_A)])
+
+    def test_artwork_sent_once_per_cover(self):
+        h = Harness()
+        h.tick()
+        for _ in range(10):
+            h.tick(1.0)
+        h.tick(30.0)  # periodic refresh: the state again, not the cover
+        self.assertEqual(h.artworks, [(ID_A, COVER_A)])
+        self.assertEqual(h.events[-1], ("state", ID_A))
+        self.assertEqual(len(h.sent), 2)
+
+    def test_new_cover_sent_before_the_state_that_switches_to_it(self):
+        h = Harness()
+        h.tick()
+        h.providers["now_playing"].snap["artwork"] = ID_B
+        h.providers["now_playing"].covers[ID_B] = COVER_B
+        h.tick(1.0)
+        self.assertEqual(h.events, [("artwork", ID_A), ("state", ID_A), ("artwork", ID_B), ("state", ID_B)])
+        self.assertEqual(h.artworks[-1], (ID_B, COVER_B))
+
+    def test_back_to_a_previous_cover_sends_it_again(self):
+        # the device keeps only the last cover received
+        h = Harness()
+        h.providers["now_playing"].covers[ID_B] = COVER_B
+        h.tick()
+        h.providers["now_playing"].snap["artwork"] = ID_B
+        h.tick(1.0)
+        h.providers["now_playing"].snap["artwork"] = ID_A
+        h.tick(1.0)
+        self.assertEqual([a for a, _ in h.artworks], [ID_A, ID_B, ID_A])
+        self.assertEqual(h.events[-2:], [("artwork", ID_A), ("state", ID_A)])
+
+    def test_no_cover_sends_no_artwork(self):
+        h = Harness()
+        h.providers["now_playing"].snap["artwork"] = None
+        h.tick()
+        self.assertEqual(h.artworks, [])
+        self.assertIsNone(h.sent[0]["now_playing"]["artwork"])
+
+    def test_cover_then_none_then_same_cover_resends_only_the_state(self):
+        h = Harness()
+        h.tick()
+        h.providers["now_playing"].snap["artwork"] = None
+        h.tick(1.0)
+        self.assertEqual(h.events[-1], ("state", None))
+        h.providers["now_playing"].snap["artwork"] = ID_A
+        h.tick(1.0)
+        # the device still caches ID_A (nothing replaced it): no need to send it again
+        self.assertEqual(h.artworks, [(ID_A, COVER_A)])
+        self.assertEqual(h.events[-1], ("state", ID_A))
+
+    def test_now_playing_unavailable(self):
+        h = Harness()
+        h.providers["now_playing"].snap = {"available": False}
+        h.tick()
+        self.assertEqual(h.sent[0]["now_playing"], {"available": False})
+        self.assertEqual(h.artworks, [])
+
+    def test_now_playing_missing_or_failing_is_unavailable(self):
+        providers = make_providers()
+        del providers["now_playing"]
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["now_playing"], {"available": False})
+        h2 = Harness()
+        h2.providers["now_playing"].raises = RuntimeError("winrt")
+        h2.tick()
+        self.assertEqual(h2.sent[0]["now_playing"], {"available": False})
+        self.assertEqual(h2.artworks, [])
+
+    def test_without_send_artwork_the_state_never_references_a_cover(self):
+        h = Harness(send_artwork=None)
+        h.tick()
+        self.assertIsNone(h.sent[0]["now_playing"]["artwork"])
+        self.assertEqual(h.sent[0]["now_playing"]["title"], "UN BESO")
+        self.assertEqual(h.providers["now_playing"].artwork_requests, [])
+
+    def test_constructor_send_artwork_is_optional(self):
+        sent = []
+        hub = ActionsHub(make_providers(), sent.append, clock=FakeClock(), log=lambda _l: None)
+        hub._tick(100.0)
+        self.assertIsNone(sent[0]["now_playing"]["artwork"])
+
+    def test_missing_bytes_nulls_the_artwork_without_resending_every_tick(self):
+        h = Harness()
+        h.providers["now_playing"].covers = {}
+        h.tick()
+        self.assertEqual(h.artworks, [])
+        self.assertIsNone(h.sent[0]["now_playing"]["artwork"])
+        h.tick(0.25)
+        h.tick(0.25)
+        h.tick(0.5)
+        self.assertEqual(len(h.sent), 1)
+
+    def test_bytes_appearing_later_for_a_new_cover_are_sent(self):
+        h = Harness()
+        h.providers["now_playing"].covers = {}
+        h.tick()
+        h.providers["now_playing"].snap["artwork"] = ID_B
+        h.providers["now_playing"].covers = {ID_B: COVER_B}
+        h.tick(1.0)
+        self.assertEqual(h.events[-2:], [("artwork", ID_B), ("state", ID_B)])
+
+    def test_provider_without_artwork_bytes_nulls_the_artwork(self):
+        providers = make_providers()
+        providers["now_playing"] = FakeProvider(dict(FakeNowPlaying().snap))
+        h = Harness(providers)
+        h.tick()
+        self.assertIsNone(h.sent[0]["now_playing"]["artwork"])
+        self.assertEqual(h.artworks, [])
+
+    def test_artwork_bytes_raising_nulls_the_artwork(self):
+        h = Harness()
+
+        def boom(_id):
+            raise RuntimeError("gone")
+        h.providers["now_playing"].artwork_bytes = boom
+        h.tick()
+        self.assertIsNone(h.sent[0]["now_playing"]["artwork"])
+        self.assertEqual(len(h.sent), 1)
+        self.assertEqual(h.artworks, [])
+
+    def test_unencodable_cover_is_dropped_and_logged_once(self):
+        calls = []
+
+        def send_artwork(artwork_id, image):
+            calls.append(artwork_id)
+            raise ValueError("MEDIA_ARTWORK too large")
+        h = Harness(send_artwork=send_artwork)
+        h.tick()
+        self.assertIsNone(h.sent[0]["now_playing"]["artwork"])
+        self.assertEqual(h.sent[0]["now_playing"]["title"], "UN BESO")
+        for _ in range(5):
+            h.tick(1.0)
+        self.assertEqual(calls, [ID_A])
+        self.assertEqual(len(h.sent), 1)
+        self.assertEqual(len([line for line in h.logs if "artwork" in line]), 1)
+
+    def test_socket_error_on_artwork_holds_the_state_and_retries(self):
+        fail = [True]
+        h = Harness()
+        real = h._send_artwork
+
+        def send_artwork(artwork_id, image):
+            if fail[0]:
+                raise OSError("connection reset")
+            real(artwork_id, image)
+        h.hub._send_artwork = send_artwork
+        h.tick()
+        self.assertEqual(h.sent, [])  # never a state that references a cover the device did not get
+        h.tick(0.25)
+        self.assertEqual(h.sent, [])
+        self.assertEqual(len([line for line in h.logs if "send failed" in line]), 1)
+        fail[0] = False
+        h.tick(0.25)
+        self.assertEqual(h.events, [("artwork", ID_A), ("state", ID_A)])
+
+    def test_state_send_failure_after_the_artwork_does_not_resend_the_cover(self):
+        h = Harness()
+        fail = [True]
+        real = h.hub._send
+
+        def send(state):
+            if fail[0]:
+                raise OSError("connection reset")
+            real(state)
+        h.hub._send = send
+        h.tick()
+        self.assertEqual(h.artworks, [(ID_A, COVER_A)])
+        fail[0] = False
+        h.tick(0.25)
+        self.assertEqual(h.artworks, [(ID_A, COVER_A)])
+        self.assertEqual(h.events, [("artwork", ID_A), ("state", ID_A)])
+
+    def test_artwork_with_a_notice(self):
+        h = Harness()
+        h.tick()
+        h.providers["usb"].result = "usb_busy"
+        h.providers["now_playing"].snap["artwork"] = ID_B
+        h.providers["now_playing"].covers[ID_B] = COVER_B
+        h.hub.handle({"id": "usb.eject", "drive": "E:"})
+        h.tick()
+        self.assertEqual(h.events[-2:], [("artwork", ID_B), ("state", ID_B)])
+        self.assertEqual(h.sent[-1]["notice"], {"code": "usb_busy", "drive": "E:"})
+
+    def test_artwork_change_alone_triggers_a_broadcast(self):
+        h = Harness()
+        h.tick()
+        h.providers["now_playing"].snap["artwork"] = ID_B
+        h.providers["now_playing"].covers[ID_B] = COVER_B
+        h.tick(1.0)
+        self.assertEqual(len(h.sent), 2)
+
+    def test_the_state_passed_to_send_is_not_the_hubs_own(self):
+        h = Harness()
+        h.tick()
+        h.sent[0]["now_playing"]["artwork"] = "mutated"
+        h.tick(1.0)
+        self.assertEqual(len(h.sent), 1)
+
+
 class ThreadTest(unittest.TestCase):
     def make(self, **kw):
         providers = make_providers()
@@ -514,7 +760,7 @@ class ThreadTest(unittest.TestCase):
         self.assertEqual(sent[0]["v"], 1)
 
     def test_com_initialised_on_hub_thread_and_released_at_stop(self):
-        hub, providers, sent, events = self.make()
+        hub, providers, sent, events = self.make(send_artwork=lambda _id, _data: None)
         hub.start()
         self.assertTrue(self.wait_for(lambda: len(sent) >= 1))
         hub.stop()
@@ -524,6 +770,7 @@ class ThreadTest(unittest.TestCase):
         self.assertNotEqual(hub_thread, threading.get_ident())
         self.assertEqual(set(providers["audio"].snapshot_threads), {hub_thread})
         self.assertEqual(set(providers["brightness"].snapshot_threads), {hub_thread})
+        self.assertEqual(set(providers["now_playing"].artwork_threads), {hub_thread})
 
     def test_handle_from_another_thread_runs_on_the_hub_thread(self):
         hub, providers, sent, events = self.make()
@@ -602,7 +849,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb"})
+                                           "wifi_info", "bt_info", "usb", "now_playing"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 
