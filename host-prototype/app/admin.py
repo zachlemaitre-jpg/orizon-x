@@ -3,7 +3,9 @@
     --cleanup                 turn the virtual screen off (its display path), like the app does at start-up
     --configure-vdd [--restart]
                               write the VDD XML: GPU of the primary display, one monitor, common tablet resolutions;
-                              with --restart, also restart an existing VDD device so it reads them (admin)
+                              give the Users group Modify rights on the XML's folder (icacls), so the app can edit
+                              it without admin rights; with --restart, also restart an existing VDD device so it
+                              reads them (admin)
     --install-driver <inf>    create the Root\\MttVDD device and install its driver (admin)
     --remove-driver           remove the device and its driver package (admin)
     --add-resolution WxH      add WxH at 60 Hz to the XML, then restart the device (admin, "Add exact resolution")
@@ -17,14 +19,20 @@ from __future__ import annotations
 import argparse
 import ctypes
 import logging
+import os
 import re
+import subprocess
 from ctypes import wintypes
+from pathlib import Path
 from typing import Any, Callable
 
+import tools
 import vdd
 
 DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4
 VDD_HARDWARE_ID = "root\\mttvdd"
+USERS_MODIFY_GRANT = "*S-1-5-32-545:(OI)(CI)M"   # BUILTIN\Users (SID, so any Windows language): Modify, inherited
+ICACLS_TIMEOUT_S = 60
 MIN_SIDE, MAX_SIDE = 320, 16384
 _SIZE = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
 
@@ -93,6 +101,29 @@ def primary_gpu_name(adapters: Callable[[], list[Adapter]] = enum_display_adapte
 
 # --- commandes ---
 
+def system_command(args: list[str]) -> tuple[int, str]:
+    """Runs a command without a window, without stdin; (exit code, its output). Raises OSError / TimeoutExpired."""
+    result = subprocess.run(args, capture_output=True, creationflags=tools.NO_WINDOW, stdin=subprocess.DEVNULL,
+                            timeout=ICACLS_TIMEOUT_S)
+    return result.returncode, (result.stdout + result.stderr).decode("oem", errors="replace").strip()
+
+
+def grant_users_modify(folder: str, *, run_command: Callable[[list[str]], tuple[int, str]],
+                       log: logging.Logger) -> None:
+    """``icacls <folder> /grant *S-1-5-32-545:(OI)(CI)M``. Never raises: the XML is written either way, only the
+    app's own later edits without admin rights depend on this, so a failure is logged and the command goes on."""
+    icacls = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "icacls.exe")
+    try:
+        code, output = run_command([icacls, folder, "/grant", USERS_MODIFY_GRANT])
+    except Exception as e:  # noqa: BLE001 - OSError (introuvable), TimeoutExpired...
+        log.warning("Configure VDD: cannot give Users modify rights on %s: %s", folder, e)
+        return
+    if code == 0:
+        log.info("Configure VDD: Users have modify rights on %s (%s)", folder, output)
+    else:
+        log.warning("Configure VDD: icacls on %s failed (exit code %d): %s", folder, code, output)
+
+
 def _default_display_factory(controller: Any, log: Callable[[str], None]) -> Any:
     from virtual_display import VirtualDisplay  # import tardif : display_layout/injector ne servent qu'ici
     return VirtualDisplay(controller, log=log)
@@ -109,17 +140,22 @@ def cleanup(*, vdd_factory: Callable[[], Any], display_factory: Callable[..., An
 
 
 def configure_vdd(*, controller: Any, device: Any, gpu_name: Callable[[], str | None], restart: bool,
-                  log: logging.Logger) -> int:
+                  log: logging.Logger, run_command: Callable[[list[str]], tuple[int, str]] = system_command) -> int:
     log.info("VDD settings file: %s", controller.settings_path)
-    gpu = gpu_name()
-    if gpu is None:
-        log.warning("Configure VDD: GPU of the primary display not found, the XML keeps its GPU setting")
-    else:
-        changed = controller.set_gpu_in_xml(gpu)
-        log.info("Configure VDD: GPU %r%s", gpu, "" if changed else " (unchanged)")
-    controller.ensure_single_monitor()
-    changed = controller.add_resolutions(vdd.COMMON_RESOLUTIONS)
-    log.info("Configure VDD: common tablet resolutions %s", "added" if changed else "already present")
+    try:
+        gpu = gpu_name()
+        if gpu is None:
+            log.warning("Configure VDD: GPU of the primary display not found, the XML keeps its GPU setting")
+        else:
+            changed = controller.set_gpu_in_xml(gpu)
+            log.info("Configure VDD: GPU %r%s", gpu, "" if changed else " (unchanged)")
+        controller.ensure_single_monitor()
+        changed = controller.add_resolutions(vdd.COMMON_RESOLUTIONS)
+        log.info("Configure VDD: common tablet resolutions %s", "added" if changed else "already present")
+    finally:
+        # The folder is the resolved settings path's (VDDPATH included), not a fixed one. Tried even when an XML
+        # step failed (the exception still propagates: exit code 1); a grant failure alone never fails the command.
+        grant_users_modify(str(Path(controller.settings_path).parent), run_command=run_command, log=log)
     if restart:
         if device.find_device() is None:
             log.info("Configure VDD: no virtual display device yet, nothing to restart")
@@ -159,7 +195,8 @@ def add_resolution(size: tuple[int, int], *, controller: Any, device: Any, log: 
 
 def run(args: argparse.Namespace, *, log: logging.Logger, vdd_factory: Callable[[], Any] | None = None,
         device: Any = None, display_factory: Callable[..., Any] | None = None,
-        gpu_name: Callable[[], str | None] = primary_gpu_name) -> int:
+        gpu_name: Callable[[], str | None] = primary_gpu_name,
+        run_command: Callable[[list[str]], tuple[int, str]] | None = None) -> int:
     """Runs the admin command of `args`; 0 on success, 1 on any failure (logged with its traceback)."""
     vdd_factory = vdd_factory or vdd.VddController  # fichier du pilote, VDDPATH compris
     if args.restart and not args.configure_vdd:
@@ -174,7 +211,7 @@ def run(args: argparse.Namespace, *, log: logging.Logger, vdd_factory: Callable[
         if args.configure_vdd:
             log.info("Admin command: --configure-vdd%s", " --restart" if args.restart else "")
             return configure_vdd(controller=vdd_factory(), device=device, gpu_name=gpu_name, restart=args.restart,
-                                 log=log)
+                                 log=log, run_command=run_command or system_command)
         if args.install_driver:
             log.info("Admin command: --install-driver %s", args.install_driver)
             return install_driver(args.install_driver, device=device, log=log)

@@ -68,6 +68,21 @@ class FakeDevice:
         self._call("restart")
 
 
+class FakeCommands:
+    """admin.run_command stand-in: records the command lines, never starts a process (no real icacls)."""
+
+    def __init__(self, result=(0, "Successfully processed 1 files; Failed processing 0 files"), error=None):
+        self.calls = []
+        self.result = result
+        self.error = error
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
 class FakeDisplay:
     def __init__(self, vdd, log):
         self.vdd = vdd
@@ -145,11 +160,12 @@ class RunTest(unittest.TestCase):
         FakeDisplay.made = []
         self.vdd = FakeVdd()
         self.device = FakeDevice()
+        self.commands = FakeCommands()
 
     def run_admin(self, *argv, gpu="AMD Radeon(TM) 890M Graphics"):
         with self.assertLogs(LOG, "INFO") as logs:
             code = admin.run(parse(*argv), log=LOG, vdd_factory=lambda: self.vdd, device=self.device,
-                             display_factory=FakeDisplay, gpu_name=lambda: gpu)
+                             display_factory=FakeDisplay, gpu_name=lambda: gpu, run_command=self.commands)
         self.logs = "\n".join(logs.output)
         return code
 
@@ -185,6 +201,72 @@ class RunTest(unittest.TestCase):
         self.assertEqual(self.run_admin("--configure-vdd", "--restart"), 1)
         self.assertIn("access denied", self.logs)
         self.assertEqual(self.device.calls, [])  # pas de redémarrage après un échec
+
+    def test_configure_vdd_grants_users_modify_on_the_settings_folder(self):
+        self.assertEqual(self.run_admin("--configure-vdd"), 0)
+        self.assertEqual(len(self.commands.calls), 1)
+        exe, folder, grant, rights = self.commands.calls[0]
+        self.assertEqual(exe.lower().rsplit("\\", 1)[-1], "icacls.exe")
+        self.assertEqual((folder, grant, rights), (r"C:\VirtualDisplayDriver", "/grant", "*S-1-5-32-545:(OI)(CI)M"))
+        self.assertIn("Successfully processed", self.logs)
+
+    def test_configure_vdd_grant_follows_the_resolved_settings_path(self):
+        self.vdd.settings_path = r"D:\Custom Folder\vdd_settings.xml"   # VDDPATH
+        self.assertEqual(self.run_admin("--configure-vdd", "--restart"), 0)
+        self.assertEqual(self.commands.calls[0][1], r"D:\Custom Folder")
+
+    def test_configure_vdd_grant_comes_after_the_xml_and_before_the_restart(self):
+        order = []
+        self.vdd._call = lambda name, *args: order.append(name) or True
+        self.commands.result = (0, "")
+        real_call = self.commands.__call__
+
+        class Recording(FakeCommands):
+            def __call__(inner, args):
+                order.append("icacls")
+                return real_call(args)
+
+        self.device.restart_device = lambda: order.append("restart")
+        self.run_admin_with(Recording(), "--configure-vdd", "--restart")
+        self.assertEqual(order, ["gpu", "single", "resolutions", "icacls", "restart"])
+
+    def run_admin_with(self, commands, *argv):
+        with self.assertLogs(LOG, "INFO"):
+            return admin.run(parse(*argv), log=LOG, vdd_factory=lambda: self.vdd, device=self.device,
+                             display_factory=FakeDisplay, gpu_name=lambda: "GPU", run_command=commands)
+
+    def test_configure_vdd_grant_failure_is_logged_and_exit_stays_0(self):
+        self.commands.result = (5, "Access is denied.")
+        self.assertEqual(self.run_admin("--configure-vdd", "--restart"), 0)
+        self.assertIn("Access is denied.", self.logs)
+        self.assertIn("5", self.logs)
+        self.assertEqual(self.device.calls, [("find",), ("restart",)])   # la suite continue
+
+    def test_configure_vdd_grant_that_cannot_start_is_logged_and_exit_stays_0(self):
+        self.commands.error = OSError("icacls.exe not found")
+        self.assertEqual(self.run_admin("--configure-vdd"), 0)
+        self.assertIn("icacls.exe not found", self.logs)
+
+    def test_configure_vdd_xml_failure_is_still_exit_1_but_the_grant_is_tried(self):
+        self.vdd.fail["resolutions"] = VddError("access denied")
+        self.assertEqual(self.run_admin("--configure-vdd"), 1)
+        self.assertEqual(len(self.commands.calls), 1)
+
+    def test_other_commands_do_not_touch_the_acl(self):
+        for argv in (("--cleanup",), ("--install-driver", "MttVDD.inf"), ("--remove-driver",),
+                     ("--add-resolution", "2800x1752")):
+            self.run_admin(*argv)
+        self.assertEqual(self.commands.calls, [])
+
+    def test_default_command_runner_hides_the_window_and_returns_code_and_text(self):
+        import subprocess
+        from unittest import mock
+        done = subprocess.CompletedProcess(["x"], 0, stdout=b"ok", stderr=b"")
+        with mock.patch.object(admin.subprocess, "run", return_value=done) as run:
+            self.assertEqual(admin.system_command(["icacls.exe", r"C:\x"]), (0, "ok"))
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["creationflags"], admin.tools.NO_WINDOW)
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
 
     def test_install_driver(self):
         self.assertEqual(self.run_admin("--install-driver", r"C:\Program Files\Orizon X\vdd\MttVDD.inf"), 0)

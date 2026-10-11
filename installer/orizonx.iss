@@ -19,8 +19,6 @@
 #define AppExe "OrizonX.exe"
 ; Doit rester celui de app/autostart.py (VALUE_NAME) et la commande celle de command_for().
 #define RunValueName "OrizonX"
-; Dossier du XML de VDD utilisé par l'appli (vdd.DEFAULT_SETTINGS_PATH).
-#define VddConfigDir "C:\VirtualDisplayDriver"
 
 [Setup]
 ; Ne jamais changer l'AppId : c'est lui qui fait d'une nouvelle installation une mise à jour.
@@ -39,6 +37,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.19041
 ShowLanguageDialog=yes
+; English préselectionné quoi que soit la langue de Windows (pas de détection) ; l'utilisateur peut choisir Français.
+LanguageDetectionMethod=none
 LicenseFile=LICENSES.txt
 SetupIconFile=..\host-prototype\app\assets\orizonx.ico
 UninstallDisplayIcon={app}\{#AppExe}
@@ -55,7 +55,7 @@ UsedUserAreasWarning=no
 SetupLogging=yes
 
 [Languages]
-; English first = default; the dialog preselects the Windows display language when it is one of these.
+; English first = default; LanguageDetectionMethod=none keeps it preselected whatever the Windows language.
 Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
 
@@ -252,12 +252,8 @@ begin
       SuppressibleMsgBox(CustomMessage('VddInstallFailed'), mbError, MB_OK, IDOK);
     end;
   end;
-  { Droits « Modifier » pour Utilisateurs : l'appli écrit le XML sans droits admin (« Add exact resolution »
-    passe par une élévation, mais la position/échelle et les futurs réglages non). }
-  if DirExists('{#VddConfigDir}') then
-    RunHidden(ExpandConstant('{sys}\icacls.exe'), '"{#VddConfigDir}" /grant *S-1-5-32-545:(OI)(CI)M')
-  else
-    Log('{#VddConfigDir} does not exist, no ACL to set');
+  { Les droits « Modifier » du groupe Utilisateurs sur le dossier du XML sont donnés par OrizonX.exe
+    --configure-vdd (app/admin.py), qui connaît le vrai dossier (VDDPATH compris). }
   { Écran virtuel éteint tant qu'aucune tablette n'est connectée (Windows l'allume à l'apparition du pilote ou
     après le redémarrage du périphérique). L'appli refait ce nettoyage à chaque lancement. }
   RunApp('--cleanup');
