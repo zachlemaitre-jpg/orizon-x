@@ -31,6 +31,8 @@ def encode_vector(vector: dict) -> bytes:
         return protocol.encode_pong(f["t_tab_us"], f["t_pc_us"])
     if vector["type"] == "ACTIONS_STATE":
         return protocol.encode_actions_state(f["state"])
+    if vector["type"] == "MEDIA_ARTWORK":
+        return protocol.encode_media_artwork(f["id"], bytes.fromhex(f["data"]))
     raise AssertionError(f"type inattendu : {vector['type']}")
 
 
@@ -233,6 +235,78 @@ class EncodeActionsStateTest(unittest.TestCase):
     def test_rejects_non_finite_floats(self):
         with self.assertRaises(ValueError):
             protocol.encode_actions_state({"v": 1, "x": float("nan")})
+
+
+class EncodeMediaArtworkTest(unittest.TestCase):
+    ID = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"
+
+    def test_constants(self):
+        self.assertEqual(protocol.MEDIA_ARTWORK, 0x05)
+        self.assertEqual(protocol.MAX_ARTWORK, 512 * 1024)
+
+    def test_layout_is_id_length_then_ascii_id_then_image(self):
+        image = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+        frame = protocol.encode_media_artwork(self.ID, image)
+        payload = bytes([40]) + self.ID.encode("ascii") + image
+        self.assertEqual(frame, bytes([0x05, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload)
+
+    def test_header_matches_payload_length(self):
+        frame = protocol.encode_media_artwork("x", b"\xff\xd8\xff")
+        self.assertEqual(protocol.HEADER.unpack_from(frame), (0x05, 0, 0, 1 + 1 + 3))
+        self.assertEqual(frame[8:], b"\x01x\xff\xd8\xff")
+
+    def test_accepts_a_whole_payload_of_exactly_512_kib(self):
+        image = b"\x00" * (protocol.MAX_ARTWORK - 1 - 40)
+        frame = protocol.encode_media_artwork(self.ID, image)
+        self.assertEqual(len(frame) - 8, protocol.MAX_ARTWORK)
+
+    def test_rejects_a_whole_payload_over_512_kib(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_media_artwork(self.ID, b"\x00" * (protocol.MAX_ARTWORK - 1 - 40 + 1))
+
+    def test_max_image_size_helper(self):
+        self.assertEqual(protocol.max_artwork_image(self.ID), protocol.MAX_ARTWORK - 41)
+
+    def test_rejects_an_empty_image(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_media_artwork(self.ID, b"")
+
+    def test_accepts_a_255_byte_id(self):
+        frame = protocol.encode_media_artwork("i" * 255, b"img")
+        self.assertEqual(frame[8], 255)
+        self.assertEqual(frame[9:9 + 255], b"i" * 255)
+        self.assertEqual(frame[9 + 255:], b"img")
+
+    def test_rejects_an_id_over_255_bytes(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_media_artwork("i" * 256, b"img")
+
+    def test_rejects_an_empty_id(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_media_artwork("", b"img")
+
+    def test_rejects_a_non_ascii_id(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_media_artwork("café", b"img")
+
+    def test_rejects_a_non_str_id(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_media_artwork(b"abc", b"img")
+
+    def test_accepts_bytearray_and_memoryview_images(self):
+        expected = protocol.encode_media_artwork("id", b"abc")
+        self.assertEqual(protocol.encode_media_artwork("id", bytearray(b"abc")), expected)
+        self.assertEqual(protocol.encode_media_artwork("id", memoryview(b"abc")), expected)
+
+    def test_vector_media_artwork_small_is_present(self):
+        names = [v["name"] for v in VECTORS["pc_to_tablet"] if v["type"] == "MEDIA_ARTWORK"]
+        self.assertIn("media_artwork_small", names)
+
+    def test_pc_side_reader_skips_it_as_an_unknown_type(self):
+        # 0x05 is PC -> device: the PC-side reader of tablet messages ignores it like any unknown type.
+        stream = io.BytesIO(protocol.encode_media_artwork(self.ID, b"img") + protocol.HEADER.pack(0x82, 0, 0, 8)
+                            + (7).to_bytes(8, "big"))
+        self.assertEqual(protocol.read_message(stream), protocol.Ping(7))
 
 
 if __name__ == "__main__":

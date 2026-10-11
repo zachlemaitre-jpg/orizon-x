@@ -11,6 +11,8 @@ PORT = 27183
 MAGIC = b"TABX"
 MAX_PAYLOAD = 16 * 1024 * 1024
 MAX_JSON = 64 * 1024  # largest JSON payload (DEVICE_INFO, ACTION, ACTIONS_STATE)
+MAX_ARTWORK = 512 * 1024  # largest MEDIA_ARTWORK payload (id length byte + id + image)
+MAX_ARTWORK_ID = 255
 HEADER = struct.Struct(">BBHI")
 
 # PC -> tablet
@@ -18,6 +20,7 @@ CONFIG = 0x01
 VIDEO = 0x02
 PONG = 0x03
 ACTIONS_STATE = 0x04
+MEDIA_ARTWORK = 0x05
 # tablet -> PC
 HELLO = 0x81
 PING = 0x82
@@ -138,6 +141,37 @@ def encode_actions_state(state: dict) -> bytes:
     if len(payload) > MAX_JSON:
         raise ValueError(f"ACTIONS_STATE too large: {len(payload)} bytes (max {MAX_JSON})")
     return _frame(ACTIONS_STATE, 0, payload)
+
+
+def _artwork_id_bytes(artwork_id: str) -> bytes:
+    if not isinstance(artwork_id, str):
+        raise ValueError(f"MEDIA_ARTWORK id must be a str, not {type(artwork_id).__name__}")
+    try:
+        raw = artwork_id.encode("ascii")
+    except UnicodeEncodeError as e:
+        raise ValueError(f"MEDIA_ARTWORK id is not ASCII: {artwork_id!r}") from e
+    if not 1 <= len(raw) <= MAX_ARTWORK_ID:
+        raise ValueError(f"MEDIA_ARTWORK id is {len(raw)} bytes (1..{MAX_ARTWORK_ID})")
+    return raw
+
+
+def max_artwork_image(artwork_id: str) -> int:
+    """The largest image that fits in a MEDIA_ARTWORK with this id (ValueError for an invalid id)."""
+    return MAX_ARTWORK - 1 - len(_artwork_id_bytes(artwork_id))
+
+
+def encode_media_artwork(artwork_id: str, image: bytes) -> bytes:
+    """Frames a cover image: payload = u8 len(id), the ASCII id, the raw image (JPEG/PNG as Windows gives it).
+
+    ValueError for an id that is not 1..255 ASCII characters, an empty image, or a whole payload over MAX_ARTWORK."""
+    raw_id = _artwork_id_bytes(artwork_id)
+    image = bytes(image)
+    if not image:
+        raise ValueError("MEDIA_ARTWORK with an empty image")
+    size = 1 + len(raw_id) + len(image)
+    if size > MAX_ARTWORK:
+        raise ValueError(f"MEDIA_ARTWORK too large: {size} bytes (max {MAX_ARTWORK})")
+    return _frame(MEDIA_ARTWORK, 0, bytes([len(raw_id)]) + raw_id + image)
 
 
 def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:
