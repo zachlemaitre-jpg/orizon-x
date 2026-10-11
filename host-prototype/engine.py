@@ -5,8 +5,14 @@ session, a tablet reader and an ffmpeg stderr pump.
 
 Session order: HELLO → tablet reader (answers PING from then on) → screen choice → ffmpeg. In Extend mode with a
 virtual display (the app), the screen choice is PREPARING_DISPLAY: display.prepare() turns the virtual screen on
-at the tablet's size, then ddagrab is probed to find it. Duplicate mode captures the main screen. Without a
-display (CLI, tests), Config.output picks the screen as before.
+at the tablet's size, then its ddagrab index is read from DXGI by its GDI name (dxgi_outputs, instant), or found
+by probing ddagrab once per output (seconds) when DXGI cannot tell. Duplicate mode captures the main screen, found
+the same way. Without a display (CLI, tests), Config.output picks the screen as before.
+
+ffmpeg exiting on its own while the tablet stays (ddagrab loses its duplication when the screen moves or the mode
+changes: DXGI_ERROR_ACCESS_LOST) restarts the capture within the session: the index is found again and a new
+ffmpeg starts, the tablet stays connected. After MAX_FFMPEG_FAILURES runs in a row without video, the engine stops
+in ERROR. A relayout that moves the virtual screen restarts the capture right away.
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ from enum import Enum
 from typing import Any, BinaryIO, Callable, Protocol
 
 import annexb
+import dxgi_outputs
 import injector
 import protocol
 import tools
@@ -125,8 +132,8 @@ ENCODER_NAMES = {"nvenc": "NVENC", "amf": "AMF"}
 ENCODER_CHOICES = ("auto", "nvenc", "amf")
 AUTO_ORDER = ("nvenc", "amf")  # NVENC d'abord (sur secteur), AMF sinon (sur batterie, ou pilote NVIDIA trop ancien)
 
-MAX_FFMPEG_FAILURES = 3
-RETRY_DELAY_S = 2.0
+MAX_FFMPEG_FAILURES = 3  # captures de suite sans vidéo avant l'état ERROR
+RETRY_DELAY_S = 2.0  # entre deux relances sans vidéo (la 1re relance après un arrêt est immédiate)
 STOP_TIMEOUT_S = 3.0
 ENCODER_PROBE_TIMEOUT_S = 10
 ADB_TIMEOUT_S = 10
@@ -348,6 +355,7 @@ class Deps:
     # (width, height, log, rect=<captured screen or None>) ; rect None : l'écran est cherché par la taille du flux
     create_injector: Callable[..., Any] = injector.create_for_stream
     monitors: Callable[[], list[injector.Monitor]] = injector.monitors
+    list_outputs: Callable[[], list[dxgi_outputs.Output]] = dxgi_outputs.enumerate_outputs
     poll_s: float = 1.0
     retry_delay_s: float = RETRY_DELAY_S
 
@@ -357,14 +365,17 @@ class _DisplaySession:
     """The session whose virtual screen is on and captured (changed under RelayEngine._relayout_lock)."""
     dpi: int
     retarget: Callable[[Rect], None]  # le tactile suit l'écran à son nouvel emplacement
+    restart_capture: Callable[[], None]  # l'écran a bougé : ddagrab perd l'accès, la capture repart
     layout: tuple[str, str]  # (position, échelle) que l'écran a maintenant
+    rect: Rect  # où l'écran est maintenant
 
 
 @dataclass(frozen=True)
 class SessionResult:
-    ffmpeg_died: bool  # ffmpeg s'est arrêté seul (ni la tablette ni stop())
+    ffmpeg_died: bool  # ffmpeg s'est arrêté seul MAX_FFMPEG_FAILURES fois de suite sans vidéo
     sent_video: bool
-    stderr_tail: list[str]
+    stderr_tail: list[str]  # de la dernière capture
+    failures: int = 0  # captures de suite sans vidéo à la fin de la session
 
 
 class RelayEngine:
@@ -461,7 +472,8 @@ class RelayEngine:
         """The user changed Position or Scale. Thread-safe; blocks while Windows applies it (about a second).
 
         While a session shows the virtual screen, it is moved and/or scaled now and touch follows it to its new
-        place (ffmpeg keeps capturing the same output: no restart). Calls are coalesced: one applies at a time,
+        place; when the screen actually moved, the capture restarts right away (a move makes ddagrab lose its
+        duplication), on the same tablet connection. Calls are coalesced: one applies at a time,
         with the latest values (a call that finds the screen already there does nothing), so quick changes never
         end on an older one. Returns False when there is no such session or the layout could not be applied:
         the values are then kept for the next prepare (applied if first_time, or right after it otherwise).
@@ -494,6 +506,9 @@ class RelayEngine:
             session.layout = (position, scale)
             self._layout_applied(position, scale)
             session.retarget(rect)
+            if rect != session.rect:
+                session.rect = rect
+                session.restart_capture()
             return True
 
     def _layout_applied(self, position: str, scale: str) -> None:
@@ -545,17 +560,17 @@ class RelayEngine:
 
     def _loop(self) -> None:
         self._set_state(State.WAITING_DEVICE, PREPARING_DETAIL)  # les sondages prennent jusqu'à plusieurs secondes
-        failures = 0
         while not self._stop_event.is_set():
             should_stop = self._stop_event.is_set
             try:
                 encoder = self._pick_encoder(should_stop)
             except _Stopped:
                 return
-            # Sondage avant la connexion quand c'est possible (moins d'attente pour la tablette). L'écran virtuel, lui,
-            # n'existe qu'après sa préparation : il est sondé pendant la session, le lecteur répondant déjà aux PING.
-            outputs = (probe_outputs(self._ffmpeg, run=self._deps.run, should_stop=should_stop)
-                       if self._config.output == "auto" and not self._uses_display() else [])
+            # Choix par la taille de la tablette (sans écran virtuel, ni Duplicate) : sondage avant la connexion (moins
+            # d'attente pour la tablette). L'écran virtuel n'existe qu'après sa préparation, et l'écran principal
+            # (Duplicate) se lit dans DXGI : cherchés pendant la session, le lecteur répondant déjà aux PING.
+            by_size = self._config.output == "auto" and not self._uses_display() and self._config.mode != "duplicate"
+            outputs = probe_outputs(self._ffmpeg, run=self._deps.run, should_stop=should_stop) if by_size else []
             if self._stop_event.is_set():
                 return
             connection = self._connect()
@@ -566,15 +581,9 @@ class RelayEngine:
             result = self._session(sock, rfile, hello, encoder, outputs)
             if self._stop_event.is_set():
                 return
-            if result.ffmpeg_died:
-                self._log("ffmpeg stopped on its own. Last lines:\n  " + "\n  ".join(result.stderr_tail))
-                failures = 0 if result.sent_video else failures + 1
-                if failures >= MAX_FFMPEG_FAILURES:
-                    last = result.stderr_tail[-1] if result.stderr_tail else msg("error.no_message")
-                    raise FatalError(msg("error.ffmpeg_keeps_stopping", count=failures, last=last))
-                self._stop_event.wait(self._deps.retry_delay_s)
-            else:
-                failures = 0
+            if result.ffmpeg_died:  # déjà relancé dans la session jusqu'à MAX_FFMPEG_FAILURES fois sans vidéo
+                last = result.stderr_tail[-1] if result.stderr_tail else msg("error.no_message")
+                raise FatalError(msg("error.ffmpeg_keeps_stopping", count=result.failures, last=last))
             self._log("Trying to connect again…")
 
     def _pick_encoder(self, should_stop: Callable[[], bool]) -> str:
@@ -639,7 +648,7 @@ class RelayEngine:
         if self._uses_display():
             return self._prepare_display(hello, should_stop)
         if self._config.mode == "duplicate" and self._config.output == "auto":
-            return self._main_screen_output(outputs)
+            return self._main_screen_output(should_stop)
         output = pick_output(self._config.output, outputs, hello.width, hello.height)
         if self._config.output == "auto":
             self._log(f"Captured screen: #{output} ({hello.width}x{hello.height}, picked automatically)")
@@ -669,26 +678,68 @@ class RelayEngine:
         on_display = getattr(self._listener, "on_display", None)
         if on_display is not None:
             self._notify(on_display, DisplayInfo((hello.width, hello.height), mode, prepared.exact, prepared.rect))
-        outputs = probe_outputs(self._ffmpeg, run=self._deps.run, should_stop=should_stop)
+        listed = self._list_monitors()
+        output, outputs = self._find_output(prepared.rect, self._name_of(prepared.rect, listed), listed, should_stop)
         if should_stop():
             return None
-        output = output_for_rect(outputs, prepared.rect, self._list_monitors())
         if output is None:
             raise FatalError(msg("display.not_capturable", width=prepared.rect.width, height=prepared.rect.height,
                                  outputs=describe_outputs(outputs)))
         self._log(f"Captured screen: #{output} (virtual screen {prepared.rect.width}x{prepared.rect.height})")
         return output, prepared.rect
 
-    def _main_screen_output(self, outputs: Outputs) -> tuple[int, Rect | None]:
+    def _main_screen_output(self, should_stop: Callable[[], bool]) -> tuple[int, Rect | None]:
         """Duplicate mode: the ddagrab output of the main Windows screen, else #0."""
         listed = self._list_monitors()
-        primary = next((rect for rect, is_primary, _name in listed if is_primary), None)
-        output = output_for_rect(outputs, primary, listed) if primary is not None else None
+        primary = next(((rect, name) for rect, is_primary, name in listed if is_primary), None)
+        output = self._find_output(primary[0], primary[1], listed, should_stop)[0] if primary is not None else None
         if primary is None or output is None:
             self._log("Main screen not found among the capturable screens: capturing screen #0")
             return 0, None
-        self._log(f"Captured screen: #{output} (main screen {primary.width}x{primary.height})")
-        return output, primary
+        rect = primary[0]
+        self._log(f"Captured screen: #{output} (main screen {rect.width}x{rect.height})")
+        return output, rect
+
+    def _find_output(self, rect: Rect, name: str, listed: list[injector.Monitor],
+                     should_stop: Callable[[], bool]) -> tuple[int | None, Outputs]:
+        """(ddagrab index of the Windows screen `rect` named `name`, or None; the probed outputs, if probed).
+
+        From the DXGI output list by the screen's GDI name (instant); when DXGI cannot tell, by probing ddagrab once
+        per output (about a second each).
+        """
+        try:
+            index, reason = dxgi_outputs.ddagrab_output(name, self._deps.list_outputs())
+        except Exception as e:  # noqa: BLE001 — sans la liste DXGI, on sonde ddagrab comme avant
+            index, reason = None, f"DXGI list unavailable: {e}"
+        if index is not None:
+            self._log(f"ddagrab output of {name}: #{index} (from DXGI)")
+            return index, []
+        self._log(f"ddagrab output not known from DXGI ({reason}): probing each output")
+        outputs = probe_outputs(self._ffmpeg, run=self._deps.run, should_stop=should_stop)
+        return output_for_rect(outputs, rect, listed), outputs
+
+    @staticmethod
+    def _name_of(rect: Rect, listed: list[injector.Monitor]) -> str:
+        """GDI name of the only Windows screen at `rect`, or ""."""
+        names = [name for found, _primary, name in listed if found == rect]
+        return names[0] if len(names) == 1 else ""
+
+    def _capture_output_again(self, output: int, rect: Rect | None, should_stop: Callable[[], bool]) -> int:
+        """ddagrab index of the captured screen now (it may have moved, or the outputs changed); else `output`."""
+        if self._uses_display() and rect is not None:
+            listed = self._list_monitors()
+            found = self._find_output(rect, self._name_of(rect, listed), listed, should_stop)[0]
+        elif self._config.mode == "duplicate" and self._config.output == "auto":
+            found = self._main_screen_output(should_stop)[0]
+        else:
+            return output  # index choisi (--output) ou écran trouvé par sa taille : on garde le même
+        if found is None:
+            if not should_stop():
+                self._log(f"Captured screen not found again: keeping #{output}")
+            return output
+        if found != output:
+            self._log(f"Captured screen: now #{found}")
+        return found
 
     def _list_monitors(self) -> list[injector.Monitor]:
         try:
@@ -709,14 +760,21 @@ class RelayEngine:
     def _session(self, sock: socket.socket, rfile: SocketReader, hello: protocol.Hello, encoder: str,
                  outputs: Outputs) -> SessionResult:
         """Starts the tablet reader (PING, stats, input), chooses the screen to capture (preparing the virtual
-        screen if any), then streams until the tablet leaves, stop() is called, or ffmpeg exits on its own."""
+        screen if any), then streams until the tablet leaves or stop() is called.
+
+        ffmpeg exiting on its own, or killed by restart_capture (the screen moved), starts a new capture on the same
+        connection, its output found again; after MAX_FFMPEG_FAILURES captures in a row without video, the session
+        ends with ffmpeg_died. Restarts after a capture without video wait retry_delay_s, except the first.
+        """
         send_lock = threading.Lock()
         sent_video = threading.Event()
+        run_video = threading.Event()  # remplacé à chaque capture : celle-ci a envoyé de la vidéo
 
         def send(data: bytes) -> None:
             with send_lock:
                 sock.sendall(data)
             sent_video.set()  # stream() n'envoie rien avant la première IDR : tout envoi est de la vidéo
+            run_video.set()  # appelé par stream(), sur le thread du moteur, qui seul remplace run_video
 
         def send_pong(t_tab_us: int) -> None:
             with send_lock:  # l'horodatage est pris sous le verrou : pas d'attente entre la mesure et l'envoi
@@ -725,7 +783,7 @@ class RelayEngine:
         if self._stop_event.is_set():  # stop() pendant la connexion : ne pas lancer ffmpeg pour rien
             self._close_socket(sock)
             return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
-        stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
+        stderr_tail: collections.deque[str] = collections.deque(maxlen=20)  # de la capture en cours
         disconnected = threading.Event()
         closing = threading.Event()  # posé quand le relais ferme lui-même le socket : pas de message d'erreur parasite
         keyframe_requests = 0  # la tablette en envoie une juste après chaque CONFIG (normal) : on ne journalise que les suivantes
@@ -733,12 +791,24 @@ class RelayEngine:
         stream_size: tuple[int, int] | None = None
         pointer_injector: Any = None
         injector_lock = threading.Lock()
-        ffmpeg: Any = None  # lancé après le choix de l'écran ; le lecteur le tue s'il existe quand la tablette part
+        ffmpeg: Any = None  # capture en cours (changée sous capture_lock) ; le lecteur la tue quand la tablette part
+        capture_lock = threading.Lock()
+        restart_pending = False  # posé sous capture_lock par restart_capture : l'écran a bougé, capture à relancer
         target_rect: Rect | None = None  # écran Windows capturé, s'il est connu : le tactile le vise directement
         session_over = False  # posé sous injector_lock à la fin : un retarget tardif ne crée plus d'injecteur
 
+        def restart_capture() -> None:
+            """The virtual screen moved (relayout): ddagrab loses its duplication, so the capture starts again."""
+            nonlocal restart_pending
+            with capture_lock:
+                restart_pending = True
+                process = ffmpeg
+            if process is not None:  # sa fin fait relancer la capture par le thread du moteur
+                with contextlib.suppress(OSError):
+                    process.kill()
+
         def retarget(rect: Rect) -> None:
-            """The virtual screen moved (relayout): touch follows it; the video is untouched."""
+            """The virtual screen moved (relayout): touch follows it (restart_capture handles the video)."""
             nonlocal pointer_injector, target_rect
             with injector_lock:
                 if session_over or rect == target_rect:
@@ -768,11 +838,11 @@ class RelayEngine:
                     self._log(f"Touch disabled: {e}. Video continues.")
                     pointer_injector = None
 
-        def pump_stderr() -> None:
+        def pump_stderr(process: Any, tail: collections.deque[str]) -> None:
             try:
-                for line in ffmpeg.stderr:
+                for line in process.stderr:
                     text = line.decode(errors="replace").rstrip()
-                    stderr_tail.append(text)
+                    tail.append(text)
                     self._log(f"[ffmpeg] {text}")
             except (OSError, ValueError):
                 pass  # le thread ne doit jamais mourir tant que ffmpeg écrit
@@ -821,36 +891,86 @@ class RelayEngine:
 
         # Le lecteur d'abord : la tablette coupe après 5 s sans PONG, et préparer l'écran peut prendre jusqu'à 10 s.
         threading.Thread(target=read_tablet, name="tablet-reader", daemon=True).start()
-        stderr_thread: threading.Thread | None = None
         send_failed = False
+        died = False  # MAX_FFMPEG_FAILURES captures de suite sans vidéo
+        failures = 0
         try:
             capture = self._choose_capture(hello, outputs, should_stop)
             if capture is None or should_stop():
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
             with injector_lock:
                 output, target_rect = capture
-            if self._uses_display() and self._prepared_layout is not None:
+            if self._uses_display() and self._prepared_layout is not None and target_rect is not None:
                 with self._relayout_lock, self._lock:
-                    self._display_session = _DisplaySession(hello.dpi, retarget, self._prepared_layout)
+                    self._display_session = _DisplaySession(hello.dpi, retarget, restart_capture,
+                                                            self._prepared_layout, target_rect)
                 # Position/échelle changées pendant la préparation (relayout a renvoyé False) : appliquées maintenant.
                 self._apply_latest_layout()
-            command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
-            ffmpeg = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
-            with self._lock:
-                self._active_ffmpeg = ffmpeg
-                if self._stop_event.is_set():
-                    ffmpeg.kill()
-            if disconnected.is_set():  # la tablette est partie pendant le lancement : le lecteur n'a pas vu ffmpeg
-                with contextlib.suppress(OSError):
-                    ffmpeg.kill()
-            self._set_state(State.STREAMING, msg("state.starting_stream"))
-            stderr_thread = threading.Thread(target=pump_stderr, name="ffmpeg-stderr", daemon=True)
-            stderr_thread.start()
-            try:
-                stream(ffmpeg.stdout, send, self._config.fps, disconnected, on_stream_size, self._log)
-            except OSError:
-                send_failed = True  # sendall a échoué : la tablette est partie
+            restart_reason: str | None = None  # None : 1re capture de la session
+            while True:
+                with capture_lock:
+                    moved, restart_pending = restart_pending, False
+                if restart_reason is not None:
+                    self._log(f"Restarting the capture ({restart_reason})")
+                if restart_reason is not None or moved:  # l'écran a pu bouger, ou les sorties DXGI changer
+                    with injector_lock:
+                        rect = target_rect
+                    output = self._capture_output_again(output, rect, should_stop)
+                    if should_stop():
+                        break
+                stderr_tail = collections.deque(maxlen=20)
+                run_video = threading.Event()
+                command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
+                process = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
+                with capture_lock:
+                    ffmpeg = process
+                    moved_meanwhile = restart_pending
+                with self._lock:
+                    self._active_ffmpeg = process
+                    if self._stop_event.is_set():
+                        process.kill()
+                # La tablette est partie pendant le lancement (le lecteur n'a pas vu ce ffmpeg), ou l'écran a bougé.
+                if disconnected.is_set() or moved_meanwhile:
+                    with contextlib.suppress(OSError):
+                        process.kill()
+                if restart_reason is None:
+                    self._set_state(State.STREAMING, msg("state.starting_stream"))
+                else:
+                    keyframe_requests = 0  # la tablette en redemande une après le nouveau CONFIG : normal
+                stderr_thread = threading.Thread(target=pump_stderr, args=(process, stderr_tail),
+                                                 name="ffmpeg-stderr", daemon=True)
+                stderr_thread.start()
+                try:
+                    stream(process.stdout, send, self._config.fps, disconnected, on_stream_size, self._log)
+                except OSError:
+                    send_failed = True  # sendall a échoué : la tablette est partie
+                if send_failed or should_stop():
+                    break
+                # ffmpeg s'est arrêté seul, ou restart_capture l'a tué : la tablette est toujours là.
+                with capture_lock:
+                    requested = restart_pending
+                self._end_capture(process, stderr_thread)
+                with capture_lock:
+                    ffmpeg = None
+                with self._lock:
+                    self._active_ffmpeg = None
+                if run_video.is_set():
+                    failures = 0
+                if requested:
+                    restart_reason = "screen moved"
+                    continue
+                self._log("ffmpeg stopped on its own. Last lines:\n  " + "\n  ".join(stderr_tail))
+                if not run_video.is_set():
+                    failures += 1
+                if failures >= MAX_FFMPEG_FAILURES:
+                    died = True
+                    break
+                if failures > 1:  # deux captures de suite sans vidéo : on laisse Windows se remettre
+                    disconnected.wait(self._deps.retry_delay_s)  # stop() ferme le socket : le lecteur le pose
+                    if should_stop():
+                        break
+                restart_reason = "ffmpeg stopped on its own"
         finally:
             with self._lock:
                 self._display_session = None
@@ -859,12 +979,13 @@ class RelayEngine:
                 if pointer_injector is not None:
                     self._close_injector(pointer_injector)  # lève tous les contacts : rien ne reste « posé » dans Windows
                     pointer_injector = None
-            tablet_gone = send_failed or disconnected.is_set()
-            if ffmpeg is not None:
+            with capture_lock:
+                process, ffmpeg = ffmpeg, None
+            if process is not None:
                 with contextlib.suppress(OSError):
-                    ffmpeg.kill()
+                    process.kill()
                 with contextlib.suppress(subprocess.TimeoutExpired):
-                    ffmpeg.wait(timeout=FFMPEG_WAIT_S)
+                    process.wait(timeout=FFMPEG_WAIT_S)
             closing.set()
             self._close_socket(sock)
             with self._lock:
@@ -878,10 +999,15 @@ class RelayEngine:
                     self._immediate_release_done = True
                 else:
                     self._release_display(immediate=False)
-        died = not tablet_gone and not self._stop_event.is_set()
-        if died and stderr_thread is not None:
-            stderr_thread.join(timeout=0.5)  # laisse le pump finir de lire avant de rendre la fin du stderr
-        return SessionResult(died, sent_video.is_set(), list(stderr_tail))
+        return SessionResult(died, sent_video.is_set(), list(stderr_tail), failures)
+
+    def _end_capture(self, process: Any, stderr_thread: threading.Thread) -> None:
+        """A capture that ended while the tablet stays: reaped before the next one, its stderr read to the end."""
+        with contextlib.suppress(OSError):
+            process.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=FFMPEG_WAIT_S)
+        stderr_thread.join(timeout=0.5)  # laisse le pump finir de lire avant de journaliser la fin du stderr
 
     # --- utilitaires ---
 

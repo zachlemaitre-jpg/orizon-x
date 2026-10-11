@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import dxgi_outputs
 import engine
 import protocol
 import tools
@@ -428,9 +429,22 @@ def video_then_dead():
     return FakeFfmpeg(SAMPLE, hold_open=False, stderr_lines=["fin"])
 
 
+def no_dxgi():
+    raise dxgi_outputs.DxgiError("CreateDXGIFactory1", 0x887A0004)
+
+
+def dxgi_list(*names, adapter=0):
+    """DXGI stand-in listing these GDI names as outputs 0, 1, … of one adapter."""
+    return [dxgi_outputs.Output(adapter, f"GPU {adapter}", i, name, Rect(0, 0, 1, 1), True)
+            for i, name in enumerate(names)]
+
+
 def make_engine(test, run=None, popen=None, connect=None, injectors=None, config=engine.Config(encoder="amf"),
-                recorder=None, monitors=None, **engine_args):
-    """engine_args: display, first_time, on_layout_applied (RelayEngine keywords)."""
+                recorder=None, monitors=None, dxgi=no_dxgi, retry_delay_s=0.0, **engine_args):
+    """engine_args: display, first_time, on_layout_applied (RelayEngine keywords).
+
+    dxgi: Deps.list_outputs; the default fails, so the screen is found by probing ddagrab (FakeRun.outputs).
+    """
     recorder = recorder or Recorder()
     listed = [(PRIMARY, True, r"\\.\DISPLAY1"), (VDD_RECT, False, r"\\.\DISPLAY9")] if monitors is None else monitors
     deps = engine.Deps(
@@ -439,12 +453,18 @@ def make_engine(test, run=None, popen=None, connect=None, injectors=None, config
         create_connection=connect or FakeConnect(),
         create_injector=injectors or FakeInjectors(),
         monitors=lambda: list(listed),
+        list_outputs=dxgi,
         poll_s=0.01,
-        retry_delay_s=0.0,
+        retry_delay_s=retry_delay_s,
     )
     relay = engine.RelayEngine(config, recorder, ffmpeg="ffmpeg.exe", adb="adb.exe", deps=deps, **engine_args)
     test.addCleanup(relay.stop)
     return relay, recorder
+
+
+def ddagrab_probes(run):
+    """The one-frame ddagrab runs of probe_outputs (not the capture, which goes through popen)."""
+    return [cmd for cmd, _kwargs in run.calls if "-frames:v" in cmd and any("ddagrab" in str(c) for c in cmd)]
 
 
 def output_index(popen_call):
@@ -727,19 +747,22 @@ class FatalTest(unittest.TestCase):
         self.assertEqual(self.assert_fatal(rec, relay, "error.no_encoder"), msg("error.no_encoder"))
 
     def test_ffmpeg_dying_three_times_without_video(self):
-        popen = FakePopen(dead)
-        relay, rec = make_engine(self, popen=popen)
+        popen, connect = FakePopen(dead), FakeConnect()
+        relay, rec = make_engine(self, popen=popen, connect=connect)
         relay.start()
         self.assertEqual(self.assert_fatal(rec, relay, "error.ffmpeg_keeps_stopping"),
                          msg("error.ffmpeg_keeps_stopping", count=engine.MAX_FFMPEG_FAILURES, last="boom"))
         self.assertEqual(len(popen.calls), engine.MAX_FFMPEG_FAILURES)
+        self.assertEqual(len(connect.tablets), 1)  # relancé dans la session, sans reconnecter la tablette
+        connect.tablets[0].wait_closed()
 
     def test_session_with_video_resets_the_failure_count(self):
-        popen = FakePopen(dead, video_then_dead, dead)
-        relay, rec = make_engine(self, popen=popen)
+        popen, connect = FakePopen(dead, video_then_dead, dead), FakeConnect()
+        relay, rec = make_engine(self, popen=popen, connect=connect)
         relay.start()
         self.assertEqual(self.assert_fatal(rec, relay, "error.ffmpeg_keeps_stopping").args["last"], "boom")
         self.assertEqual(len(popen.calls), 5)
+        self.assertEqual(len(connect.tablets), 1)
 
     def test_unexpected_exception_becomes_an_error_state(self):
         def explode(cmd, **kwargs):
@@ -1032,26 +1055,38 @@ class DisplayTest(unittest.TestCase):
         self.assertEqual(applied, [("left", "150")])  # la paire appliquée, gardée par l'appli
         self.assertEqual(display.layouts(), [])
 
-    def test_relayout_while_streaming_moves_the_screen_and_touch_follows_without_restarting_ffmpeg(self):
+    def test_relayout_while_streaming_moves_the_screen_touch_follows_and_the_capture_restarts(self):
         moved = Rect(-160, 1600, 2880, 1800)
         applied = []
         display = FakeDisplay()
         display.layout_result = moved
         popen, injectors = FakePopen(live), FakeInjectors()
         relay, rec, connect, tablet = self.streaming_engine(display, popen=popen, injectors=injectors,
-                                                            on_layout_applied=lambda *layout: applied.append(layout))
+                                                            on_layout_applied=lambda *layout: applied.append(layout),
+                                                            retry_delay_s=30)
         wait_until(lambda: injectors.created)
         self.assertTrue(relay.relayout("below", "200"))
         self.assertEqual(display.layouts(), [("apply_layout", "below", "200", 274)])
         self.assertEqual(display.layout_flags, [{"move": True, "rescale": True}])
-        self.assertEqual(injectors.rects, [VDD_RECT, moved])
+        self.assertEqual(injectors.rects[:2], [VDD_RECT, moved])
         self.assertTrue(injectors.created[0].closed)  # contacts levés à l'ancien emplacement
         self.assertEqual(applied, [("below", "200")])
+        # Déplacer l'écran coupe ddagrab (DXGI_ERROR_ACCESS_LOST) : la capture est relancée tout de suite,
+        # sur la même connexion.
+        tablet.next_message(protocol.CONFIG)
+        self.assertEqual(len(popen.calls), 2)
+        self.assertTrue(popen.procs[0].killed.is_set())
+        self.assertEqual(output_index(popen.calls[1]), 1)
+        self.assertEqual(len(connect.tablets), 1)
+        self.assertIn("Restarting the capture (screen moved)", rec.logs)
+        wait_until(lambda: len(injectors.created) == 3)
+        self.assertEqual(injectors.rects, [VDD_RECT, moved, moved])
         tablet.send(touch_frame((0, 1, 100, 100, 0, 0, 0)))
-        wait_until(lambda: injectors.created[1].handled)
+        wait_until(lambda: injectors.created[2].handled)
         self.assertEqual(injectors.created[0].handled, [])
-        self.assertEqual(len(popen.calls), 1)  # le flux continue : ffmpeg n'est pas relancé
+        self.assertEqual(len(display.prepares()), 1)
         self.assertEqual(display.releases(), [])
+        self.assertIs(rec.last_state(), State.STREAMING)
 
     def test_relayout_during_prepare_is_not_applied_then_works_once_streaming(self):
         moved = Rect(0, -1800, 2880, 1800)
@@ -1157,14 +1192,16 @@ class DisplayTest(unittest.TestCase):
                 self.assertEqual(injectors.rects, [moved])  # le tactile vise directement le nouvel emplacement
                 relay.stop()
 
-    def test_scale_only_relayout_keeps_the_position_and_the_touch_contacts(self):
-        display, injectors = FakeDisplay(), FakeInjectors()
-        relay, rec, _connect, _tablet = self.streaming_engine(display, injectors=injectors)
+    def test_scale_only_relayout_keeps_the_position_the_touch_contacts_and_the_capture(self):
+        display, injectors, popen = FakeDisplay(), FakeInjectors(), FakePopen(live)
+        relay, rec, _connect, _tablet = self.streaming_engine(display, injectors=injectors, popen=popen)
         wait_until(lambda: injectors.created)
         self.assertTrue(relay.relayout("left", "200"))  # même côté : seule l'échelle change
         self.assertEqual(display.layout_flags, [{"move": False, "rescale": True}])
         self.assertEqual(len(injectors.created), 1)  # même rectangle : pas de nouvel injecteur
         self.assertFalse(injectors.created[0].closed)  # aucun contact levé
+        self.assertEqual(len(popen.calls), 1)  # l'écran n'a pas bougé : la capture continue
+        self.assertFalse(popen.procs[0].killed.is_set())
 
     def test_layout_not_applied_is_not_saved(self):
         for result in (None, OSError("SetDisplayConfig failed")):
@@ -1231,6 +1268,199 @@ class DisplayTest(unittest.TestCase):
         relay.start()
         rec.wait_state(State.STREAMING)
         self.assertEqual(output_index(popen.calls[0]), 3)
+
+
+def fed_ffmpeg(stdout, stderr_lines=()):
+    """A factory for a capture whose output the test feeds (feed(b"") = ffmpeg exits on its own)."""
+    def factory():
+        ffmpeg = FakeFfmpeg(stderr_lines=stderr_lines)
+        ffmpeg.stdout = stdout
+        return ffmpeg
+    return factory
+
+
+class CaptureRestartTest(unittest.TestCase):
+    """ffmpeg exiting on its own while the tablet stays: a new capture in the same session, no reconnection."""
+
+    EXTEND = DisplayTest.EXTEND
+
+    def test_ffmpeg_dying_mid_session_restarts_the_capture_on_the_same_connection(self):
+        connect, popen, injectors = FakeConnect(), FakePopen(video_then_dead, live), FakeInjectors()
+        relay, rec = make_engine(self, connect=connect, popen=popen, injectors=injectors, retry_delay_s=30)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        tablet.next_message(protocol.CONFIG)  # 2e capture, sans le délai de reconnexion (30 s ici)
+        self.assertEqual(len(popen.calls), 2)
+        self.assertEqual(output_index(popen.calls[1]), 0)
+        self.assertTrue(popen.procs[0].killed.is_set())
+        self.assertEqual(len(connect.tablets), 1)  # une seule connexion : la tablette n'a envoyé qu'un HELLO
+        tablet.send(ping_frame(77))  # le même socket est toujours ouvert et servi
+        _type, _flags, payload = tablet.next_message(protocol.PONG)
+        self.assertEqual(protocol._PONG.unpack(payload)[0], 77)
+        self.assertIn("ffmpeg stopped on its own. Last lines:\n  fin", rec.logs)
+        self.assertIn("Restarting the capture (ffmpeg stopped on its own)", rec.logs)
+        self.assertNotIn("Trying to connect again…", rec.logs)
+        self.assertFalse(any(line.startswith("Tablet disconnected") for line in rec.logs))
+        self.assertIs(rec.last_state(), State.STREAMING)
+        self.assertNotIn(State.WAITING_APP, [s for s, _ in rec.states])
+        wait_until(lambda: len(injectors.created) == 2)
+        self.assertTrue(injectors.created[0].closed)
+
+    def test_restart_finds_the_virtual_screen_output_again(self):
+        stdout = FedStdout()
+        names = [r"\\.\DISPLAY1", r"\\.\DISPLAY9"]
+        run, connect = FakeRun(outputs=((0, (2560, 1600)),)), FakeConnect()  # sonder ne trouverait pas l'écran
+        popen = FakePopen(fed_ffmpeg(stdout, ["AcquireNextFrame failed: 887a0026"]), live)
+        display = FakeDisplay(on_prepare=lambda: None)
+        relay, rec = make_engine(self, run=run, popen=popen, connect=connect, config=self.EXTEND, display=display,
+                                 dxgi=lambda: dxgi_list(*names))
+        relay.start()
+        stdout.feed(SAMPLE)
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        names.insert(1, r"\\.\DISPLAY5")  # l'écran virtuel est maintenant la sortie #2
+        stdout.feed(b"")  # ddagrab a perdu l'accès : ffmpeg s'arrête
+        tablet.next_message(protocol.CONFIG)
+        self.assertEqual(output_index(popen.calls[1]), 2)
+        self.assertEqual(ddagrab_probes(run), [])
+        self.assertEqual(len(connect.tablets), 1)
+        self.assertEqual(len(display.prepares()), 1)
+        self.assertEqual(display.releases(), [])
+        self.assertIn("ffmpeg stopped on its own. Last lines:\n  AcquireNextFrame failed: 887a0026", rec.logs)
+        self.assertIn(r"ddagrab output of \\.\DISPLAY9: #2 (from DXGI)", rec.logs)
+
+    def test_repeated_deaths_without_video_end_in_error_without_reconnecting(self):
+        popen, connect = FakePopen(dead), FakeConnect()
+        relay, rec = make_engine(self, popen=popen, connect=connect)
+        relay.start()
+        rec.wait_state(State.ERROR)
+        self.assertEqual(rec.states[-1], (State.ERROR, msg("error.ffmpeg_keeps_stopping",
+                                                            count=engine.MAX_FFMPEG_FAILURES, last="boom")))
+        self.assertEqual(len(popen.calls), engine.MAX_FFMPEG_FAILURES)
+        self.assertEqual(len(connect.tablets), 1)
+        self.assertEqual(rec.logs.count("Restarting the capture (ffmpeg stopped on its own)"),
+                         engine.MAX_FFMPEG_FAILURES - 1)
+        connect.tablets[0].wait_closed()
+
+    def test_restarts_without_video_wait_between_tries(self):
+        starts = []
+
+        def timed():
+            starts.append(time.monotonic())
+            return dead()
+
+        relay, rec = make_engine(self, popen=FakePopen(timed), retry_delay_s=0.3)
+        relay.start()
+        rec.wait_state(State.ERROR)
+        self.assertEqual(len(starts), engine.MAX_FFMPEG_FAILURES)
+        self.assertGreaterEqual(starts[2] - starts[1], 0.29)
+
+    def test_tablet_leaving_while_waiting_to_restart_ends_the_session(self):
+        popen, connect = FakePopen(dead), FakeConnect()
+        relay, rec = make_engine(self, popen=popen, connect=connect, retry_delay_s=30)
+        relay.start()
+        wait_until(lambda: len(popen.calls) == 2)  # la 2e capture est morte : attente avant la 3e
+        connect.refuse = True
+        connect.tablets[0].leave()
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertEqual(len(popen.calls), 2)
+        self.assertNotIn(State.ERROR, [s for s, _ in rec.states])
+
+    def test_stop_while_waiting_to_restart(self):
+        popen = FakePopen(dead)
+        relay, rec = make_engine(self, popen=popen, retry_delay_s=30)
+        relay.start()
+        wait_until(lambda: len(popen.calls) == 2)
+        started = time.monotonic()
+        relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
+        self.assertFalse(relay.is_running())
+        self.assertEqual(rec.states[-1], (State.STOPPED, msg("state.stopped")))
+        self.assertEqual(len(popen.calls), 2)
+
+    def test_move_during_session_start_captures_the_moved_screen_once(self):
+        moved = Rect(0, -1800, 2880, 1800)
+        display = FakeDisplay(block=True, on_prepare=lambda: None)
+        display.layout_result = moved
+        names = [r"\\.\DISPLAY1", r"\\.\DISPLAY9"]
+        popen, connect, injectors = FakePopen(live), FakeConnect(), FakeInjectors()
+        relay, rec = make_engine(self, popen=popen, connect=connect, injectors=injectors, config=self.EXTEND,
+                                 display=display, dxgi=lambda: dxgi_list(*names),
+                                 monitors=[(PRIMARY, True, r"\\.\DISPLAY1"), (moved, False, r"\\.\DISPLAY9")])
+        relay.start()
+        self.assertTrue(display.entered.wait(5))
+        self.assertFalse(relay.relayout("above", "150"))  # appliqué dès que la session est en place
+        display.proceed.set()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        self.assertEqual(display.layouts(), [("apply_layout", "above", "150", 274)])
+        self.assertEqual(len(popen.calls), 1)  # pas de capture lancée puis tuée pour rien
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertEqual(injectors.rects, [moved])
+
+
+class DxgiOutputChoiceTest(unittest.TestCase):
+    """The captured screen's ddagrab index comes from the DXGI list (instant); probing ddagrab is the fallback."""
+
+    EXTEND = DisplayTest.EXTEND
+
+    def start(self, run, dxgi, display=None, config=None, monitors=None):
+        connect, popen, injectors = FakeConnect(), FakePopen(live), FakeInjectors()
+        relay, rec = make_engine(self, run=run, popen=popen, connect=connect, injectors=injectors, dxgi=dxgi,
+                                 config=config or self.EXTEND, display=display, monitors=monitors)
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        return popen, rec, injectors
+
+    def test_virtual_screen_output_comes_from_dxgi_without_probing(self):
+        run = FakeRun(outputs=((0, (2560, 1600)),))  # sonder ne trouverait pas l'écran virtuel
+        popen, rec, injectors = self.start(run, lambda: dxgi_list(r"\\.\DISPLAY1", r"\\.\DISPLAY9"),
+                                           display=FakeDisplay(on_prepare=lambda: None))
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertEqual(ddagrab_probes(run), [])
+        self.assertIn(r"ddagrab output of \\.\DISPLAY9: #1 (from DXGI)", rec.logs)
+        self.assertIn("Captured screen: #1 (virtual screen 2880x1800)", rec.logs)
+        self.assertEqual(injectors.rects, [VDD_RECT])
+
+    def test_dxgi_failure_falls_back_to_probing(self):
+        run = FakeRun(outputs=((0, (2560, 1600)), (1, (2880, 1800))))
+        popen, rec, _injectors = self.start(run, no_dxgi, display=FakeDisplay(on_prepare=lambda: None))
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertEqual(len(ddagrab_probes(run)), 3)  # #0, #1, puis #2 qui marque la fin
+        self.assertIn("ddagrab output not known from DXGI (DXGI list unavailable: "
+                      "CreateDXGIFactory1 failed (HRESULT 0x887A0004)): probing each output", rec.logs)
+
+    def test_virtual_screen_on_another_adapter_is_found_by_probing(self):
+        run = FakeRun(outputs=((0, (2560, 1600)), (1, (2880, 1800))))
+        dxgi = lambda: dxgi_list(r"\\.\DISPLAY1") + dxgi_list(r"\\.\DISPLAY9", adapter=1)  # noqa: E731
+        popen, rec, _injectors = self.start(run, dxgi, display=FakeDisplay(on_prepare=lambda: None))
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertTrue(ddagrab_probes(run))
+        self.assertIn(r"ddagrab output not known from DXGI (\\.\DISPLAY9 is on adapter #1 (GPU 1), "
+                      "not ddagrab's default adapter (GPU 0)): probing each output", rec.logs)
+
+    def test_virtual_screen_not_listed_yet_is_found_by_probing(self):
+        run = FakeRun(outputs=((0, (2560, 1600)), (1, (2880, 1800))))
+        popen, rec, _injectors = self.start(run, lambda: dxgi_list(r"\\.\DISPLAY1"),
+                                            display=FakeDisplay(on_prepare=lambda: None))
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertIn(r"ddagrab output not known from DXGI (\\.\DISPLAY9 is not listed by DXGI): probing each output",
+                      rec.logs)
+
+    def test_duplicate_mode_finds_the_main_screen_from_dxgi_without_any_probe(self):
+        left = Rect(-1920, 0, 1920, 1080)
+        run = FakeRun(outputs=())
+        popen, rec, injectors = self.start(run, lambda: dxgi_list(r"\\.\DISPLAY2", r"\\.\DISPLAY1"),
+                                           config=engine.Config(encoder="amf", mode="duplicate"),
+                                           display=FakeDisplay(),
+                                           monitors=[(left, False, r"\\.\DISPLAY2"), (PRIMARY, True, r"\\.\DISPLAY1")])
+        self.assertEqual(output_index(popen.calls[0]), 1)
+        self.assertEqual(ddagrab_probes(run), [])  # ni avant la connexion, ni pendant la session
+        self.assertIn("Captured screen: #1 (main screen 2560x1600)", rec.logs)
+        self.assertEqual(injectors.rects, [PRIMARY])
 
 
 if __name__ == "__main__":
