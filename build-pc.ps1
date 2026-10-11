@@ -38,6 +38,11 @@ try {
     & $venvPython -m PyInstaller --noconfirm --clean --onedir --windowed --name OrizonX `
         --icon (Join-Path $hostDir "app\assets\orizonx.ico") `
         --add-data "$(Join-Path $hostDir 'app\assets');app\assets" `
+        --collect-submodules winrt `
+        --collect-submodules pycaw `
+        --collect-submodules comtypes `
+        --exclude-module comtypes.test `
+        --hidden-import psutil `
         --distpath $staging `
         --workpath (Join-Path $root "build\pyinstaller-work") `
         --specpath (Join-Path $root "build") `

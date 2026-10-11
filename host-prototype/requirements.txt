@@ -1,0 +1,10 @@
+# Dépendances d'exécution de l'appli PC (mode Actions). Le relais CLI (relay.py) fonctionne sans elles.
+pycaw==20260927
+comtypes==1.4.17
+psutil==7.2.2
+typing_extensions==4.16.0
+winrt-runtime==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Devices.Radios==3.2.1
+winrt-Windows.Devices.Enumeration==3.2.1
