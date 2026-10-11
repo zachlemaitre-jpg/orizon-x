@@ -115,6 +115,35 @@ class ProviderTest(unittest.TestCase):
         p = self.make()
         self.assertEqual(p.handle({"id": "brightness.set", "value": 0.5}), "action_failed")
 
+    def test_set_exception_logged_once_per_failure_streak(self):
+        wmi = FakeBackend(0.7)
+        p = self.make(wmi)
+        p.snapshot()
+        wmi.error = NameError("Name WmiSetBrightness not found")
+        action = {"id": "brightness.set", "value": 0.5}
+        with self.assertLogs("orizonx.actions.brightness", level="WARNING") as cm:
+            for _ in range(5):
+                self.assertEqual(p.handle(action), "action_failed")
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("brightness.set failed", cm.output[0])
+
+    def test_set_failure_log_rearms_after_success(self):
+        wmi = FakeBackend(0.7)
+        p = self.make(wmi)
+        p.snapshot()
+        action = {"id": "brightness.set", "value": 0.5}
+        with self.assertLogs("orizonx.actions.brightness", level="WARNING") as cm:
+            wmi.error = OSError("first")
+            p.handle(action)
+            p.handle(action)
+            wmi.error = None
+            self.clock.now += 20  # past the probe retry delay
+            self.assertIsNone(p.handle(action))  # recovered: streak over
+            wmi.error = OSError("second")
+            p.handle(action)
+            p.handle(action)
+        self.assertEqual(len(cm.output), 2)
+
     def test_set_failure_reported(self):
         wmi = FakeBackend(0.7)
         wmi.write_ok = False
@@ -122,20 +151,47 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(p.handle({"id": "brightness.set", "value": 0.5}), "action_failed")
 
 
+class _Prop:
+    def __init__(self, value=None):
+        self.Value = value
+
+
+class FakeInParams:
+    """SWbem object for the in-parameters of a method (also the spawned instance)."""
+
+    def __init__(self):
+        self.props = {"Brightness": _Prop(), "Timeout": _Prop()}
+
+    def SpawnInstance_(self):
+        return FakeInParams()
+
+    def Properties_(self, name):
+        return self.props[name]
+
+
+class FakeMethod:
+    def __init__(self):
+        self.InParameters = FakeInParams()
+
+
 class FakeWmiInstance:
     def __init__(self, props=None):
         self._props = props or {}
-        self.set_calls = []
-
-    class _Prop:
-        def __init__(self, value):
-            self.Value = value
+        self.set_calls = []  # (method name, {property: value})
+        self.methods_asked = []
 
     def Properties_(self, name):
-        return self._Prop(self._props[name])
+        return _Prop(self._props[name])
 
-    def WmiSetBrightness(self, timeout, level):
-        self.set_calls.append((timeout, level))
+    def Methods_(self, name):
+        self.methods_asked.append(name)
+        return FakeMethod()
+
+    def ExecMethod_(self, name, params):
+        self.set_calls.append((name, {k: p.Value for k, p in params.props.items()}))
+
+    def WmiSetBrightness(self, *args):  # what dynamic dispatch really lacks
+        raise NameError("Name WmiSetBrightness not found")
 
 
 class FakeWmiServices:
@@ -159,11 +215,22 @@ class WmiBackendTest(unittest.TestCase):
         backend = WmiBackend(connect=lambda: FakeWmiServices({}))
         self.assertIsNone(backend.read())
 
-    def test_write_calls_wmi_set_brightness_with_timeout_1(self):
+    def test_write_executes_wmi_set_brightness_with_timeout_1(self):
         inst = FakeWmiInstance()
         backend = WmiBackend(connect=lambda: FakeWmiServices({"WmiMonitorBrightnessMethods": [inst]}))
         self.assertTrue(backend.write(0.376))
-        self.assertEqual(inst.set_calls, [(1, 38)])
+        self.assertEqual(inst.methods_asked, ["WmiSetBrightness"])
+        self.assertEqual(
+            inst.set_calls, [("WmiSetBrightness", {"Timeout": 1, "Brightness": 38})]
+        )
+
+    def test_write_clamps_brightness_to_0_100(self):
+        inst = FakeWmiInstance()
+        backend = WmiBackend(connect=lambda: FakeWmiServices({"WmiMonitorBrightnessMethods": [inst]}))
+        backend.write(7)
+        backend.write(-3)
+        self.assertEqual([c[1]["Brightness"] for c in inst.set_calls], [100, 0])
+        self.assertTrue(all(isinstance(c[1]["Brightness"], int) for c in inst.set_calls))
 
     def test_write_without_instances_is_false(self):
         backend = WmiBackend(connect=lambda: FakeWmiServices({}))

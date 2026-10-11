@@ -80,7 +80,12 @@ class WmiBackend:
         level = int(round(max(0.0, min(1.0, value)) * 100))
         applied = False
         for inst in self._query("WmiMonitorBrightnessMethods"):
-            inst.WmiSetBrightness(1, level)
+            # Dynamic dispatch does not expose WMI methods as attributes
+            # (``inst.WmiSetBrightness`` raises NameError): go through SWbem.
+            params = inst.Methods_("WmiSetBrightness").InParameters.SpawnInstance_()
+            params.Properties_("Timeout").Value = 1
+            params.Properties_("Brightness").Value = level
+            inst.ExecMethod_("WmiSetBrightness", params)
             applied = True
         return applied
 
@@ -272,6 +277,7 @@ class BrightnessProvider:
         self._lock = threading.Lock()
         self._active: Optional[BrightnessBackend] = None
         self._last_probe_failed_at: Optional[float] = None
+        self._set_failing = False  # inside a streak of failed brightness.set
 
     def _read_backend(self, backend: BrightnessBackend) -> Optional[float]:
         try:
@@ -322,8 +328,11 @@ class BrightnessProvider:
             backend = self._active
             try:
                 if backend is not None and backend.write(value):
+                    self._set_failing = False
                     return None
             except Exception as exc:
-                _log.warning("brightness.set failed: %r", exc)
+                if not self._set_failing:  # once per failure streak, not per slider step
+                    _log.warning("brightness.set failed: %r", exc)
                 self._active = None
+            self._set_failing = True
         return ACTION_FAILED
