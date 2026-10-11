@@ -159,3 +159,35 @@ class Provider(Protocol):
   - Des tests de fumée en lecture seule sur ce PC : batterie, volume lu, liste USB, radios listées. **Aucun changement réel** en test automatique.
 - **Kotlin** : parsing de l'état (champs manquants, `available` false), limitation à 20 Hz, rôle par défaut selon la taille, `DEVICE_INFO` encodé.
 - **Essai réel**, avec l'accord de l'utilisateur : chaque contrôle sur sa tablette, et sur un téléphone s'il en a un. Le volume clavier du PC doit se refléter sur l'appareil en moins d'une demi-seconde.
+
+## 7. Ajout : bloc « En cours de lecture » (validé le 2026-10-11)
+
+Le bloc couvre **toute source** qui publie ses infos dans les contrôles multimédia de Windows (Spotify, navigateur, Deezer, VLC…), et affiche le nom de l'app.
+
+**État** : nouvelle section `now_playing` dans `ACTIONS_STATE`.
+
+```json
+"now_playing":{"available":true,"app":"Spotify","title":"…","artist":"…","album":"…","playing":true,"artwork":"<sha1 hex>"}
+```
+
+- `available: false` quand aucune session média n'existe.
+- `artwork` vaut null s'il n'y a pas de pochette.
+
+**Nouveau message `MEDIA_ARTWORK` (0x05, PC → appareil)** :
+- payload : un octet `n` (longueur de l'id), puis l'id (sha1 hex ASCII, 40 octets), puis l'image brute (JPEG ou PNG telle que fournie par Windows), au maximum 512 Kio ;
+- il est envoyé **une fois par pochette**, juste **avant** le premier `ACTIONS_STATE` qui la référence ;
+- l'appareil garde en cache la dernière pochette reçue.
+
+**PC** : le fournisseur `actions/now_playing.py` s'appuie sur WinRT `Windows.Media.Control` :
+1. `GlobalSystemMediaTransportControlsSessionManager.request_async()`, puis `get_current_session()` ;
+2. `try_get_media_properties_async()` pour le titre, l'artiste, l'album et la pochette ;
+3. `get_playback_info().playback_status` pour savoir si un morceau joue ;
+4. lecture de la pochette par `open_read_async` et `DataReader` (`Windows.Storage.Streams`), sur le worker WinRT existant (`winrt_call`).
+
+Le nom de l'app vient de `source_app_user_model_id`, traduit en nom lisible (Spotify, Chrome, Edge, Firefox, Deezer, VLC… ; sinon le nom de l'exécutable sans `.exe`). Le hub calcule le sha1 de la pochette, envoie `MEDIA_ARTWORK` si elle a changé, puis l'état.
+
+**Appareil** : nouvelle carte « En cours de lecture », affichée seulement si `now_playing.available` :
+- la pochette (environ 120 dp, coins arrondis ; une note de musique à défaut) ;
+- le titre, l'artiste, l'album et l'app ;
+- les boutons précédent / lecture-pause / suivant, qui passent de la carte Son à ce bloc ; le bouton lecture-pause reflète `playing`.
+- Quand le bloc est absent, les boutons médias restent dans la carte Son.
