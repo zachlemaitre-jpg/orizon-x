@@ -1,3 +1,4 @@
+import hashlib
 import json
 import queue
 import re
@@ -287,8 +288,9 @@ class FakeInjectors:
 class FakeHub:
     """actions.hub.ActionsHub stand-in: records start/stop and the actions; the test calls `send` itself."""
 
-    def __init__(self, send, log, handle_error=None):
+    def __init__(self, send, log, handle_error=None, send_artwork=None):
         self.send = send
+        self.send_artwork = send_artwork
         self.log = log
         self.handle_error = handle_error
         self.handled = []
@@ -314,8 +316,8 @@ class FakeHubs:
         self.handle_error = handle_error
         self.created = []
 
-    def __call__(self, send, log):
-        hub = FakeHub(send, log, self.handle_error)
+    def __call__(self, send, log, send_artwork=None):
+        hub = FakeHub(send, log, self.handle_error, send_artwork)
         self.created.append(hub)
         return hub
 
@@ -1570,12 +1572,94 @@ class DeviceRoleTest(unittest.TestCase):
 
     def test_default_hub_factory_builds_the_actions_hub_with_the_default_providers(self):
         send, log = (lambda state: None), (lambda line: None)
+        send_artwork = lambda artwork_id, image: None  # noqa: E731
         with mock.patch("actions.hub.default_providers", return_value={"clock": "c"}) as providers, \
                 mock.patch("actions.hub.ActionsHub") as hub_class:
-            hub = engine.Deps().actions_hub_factory(send, log)
+            hub = engine.Deps().actions_hub_factory(send, log, send_artwork)
         providers.assert_called_once_with(log)
-        hub_class.assert_called_once_with({"clock": "c"}, send, log=log)
+        hub_class.assert_called_once_with({"clock": "c"}, send, send_artwork=send_artwork, log=log)
         self.assertIs(hub, hub_class.return_value)
+
+    def test_default_hub_factory_send_artwork_is_optional(self):
+        send, log = (lambda state: None), (lambda line: None)
+        with mock.patch("actions.hub.default_providers", return_value={"clock": "c"}), \
+                mock.patch("actions.hub.ActionsHub") as hub_class:
+            engine.Deps().actions_hub_factory(send, log)
+        hub_class.assert_called_once_with({"clock": "c"}, send, send_artwork=None, log=log)
+
+    def test_hub_gets_a_send_artwork_that_frames_media_artwork(self):
+        relay, rec, connect, hubs, *_ = self.actions_engine()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        self.assertTrue(callable(hub.send_artwork))
+        artwork_id, image = "c" * 40, b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4
+        hub.send_artwork(artwork_id, image)
+        _type, flags, payload = tablet.next_message(protocol.MEDIA_ARTWORK)
+        self.assertEqual(flags, 0)
+        self.assertEqual(payload, bytes([40]) + artwork_id.encode("ascii") + image)
+
+    def test_send_artwork_errors_go_back_to_the_hub(self):
+        relay, rec, connect, hubs, *_ = self.actions_engine()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        with self.assertRaises(ValueError):
+            hub.send_artwork("c" * 40, b"\x00" * protocol.MAX_ARTWORK)  # too big once the id is added
+        with self.assertRaises(ValueError):
+            hub.send_artwork("", b"img")
+        hub.send({"v": 1})  # the connection is still usable
+        tablet.next_message(protocol.ACTIONS_STATE)
+        self.assertIs(rec.last_state(), State.ACTIONS)
+
+    def test_real_hub_sends_the_cover_frame_before_the_state_that_references_it(self):
+        from actions.hub import ActionsHub
+
+        cover = b"\xff\xd8\xff\xe0" + b"jpeg" * 1000
+        cover_id = hashlib.sha1(cover).hexdigest()
+
+        class NowPlaying:
+            def snapshot(self):
+                return {"available": True, "app": "Spotify", "title": "T", "artist": "A", "album": "L",
+                        "playing": True, "artwork": cover_id}
+
+            def artwork_bytes(self, artwork_id):
+                return cover if artwork_id == cover_id else None
+
+            def handle(self, action):
+                return None
+
+        hubs = []
+
+        def factory(send, log, send_artwork=None):
+            hub = ActionsHub({"now_playing": NowPlaying()}, send, send_artwork=send_artwork, log=log,
+                             com_init=lambda: None, poll_fast_s=0.05, poll_slow_s=0.05)
+            hubs.append(hub)
+            return hub
+
+        relay, rec, connect, *_ = self.actions_engine(hubs=factory)
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        seen = []
+        deadline = time.monotonic() + 5.0
+        while not any(t == protocol.ACTIONS_STATE for t, _ in seen):
+            frame = tablet.frames.get(timeout=max(0.01, deadline - time.monotonic()))
+            self.assertIsNotNone(frame, "connexion fermée par le PC")
+            if frame[0] in (protocol.MEDIA_ARTWORK, protocol.ACTIONS_STATE):
+                seen.append((frame[0], frame[2]))
+        self.assertEqual([t for t, _ in seen], [protocol.MEDIA_ARTWORK, protocol.ACTIONS_STATE])
+        self.assertEqual(seen[0][1], bytes([40]) + cover_id.encode("ascii") + cover)
+        state = json.loads(seen[1][1].decode("utf-8"))
+        self.assertEqual(state["now_playing"]["artwork"], cover_id)
+        # the cover goes once: the following states reference it without a new MEDIA_ARTWORK
+        relay.stop()
+        rest = []
+        while True:
+            frame = tablet.frames.get(timeout=5.0)
+            if frame is None:
+                break
+            rest.append(frame[0])
+        self.assertNotIn(protocol.MEDIA_ARTWORK, rest)
 
     def test_actions_role_never_touches_display_ffmpeg_or_injector(self):
         relay, rec, connect, hubs, display, popen, injectors, run = self.actions_engine()

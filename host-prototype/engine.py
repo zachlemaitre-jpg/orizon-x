@@ -6,8 +6,8 @@ session, a tablet reader and an ffmpeg stderr pump.
 Session order: HELLO → tablet reader (answers PING from then on) → DEVICE_INFO (waited for at most
 Deps.device_info_timeout_s, 1 s; none means role "screen") → by role:
 - "actions": an Actions session. The hub (Deps.actions_hub_factory, actions.hub.ActionsHub) polls the PC and sends
-  ACTIONS_STATE; the reader passes every ACTION to it. No virtual screen, no ffmpeg, no injector. State ACTIONS until
-  the device leaves or stop(), then the hub stops.
+  ACTIONS_STATE (preceded by MEDIA_ARTWORK when the cover changes); the reader passes every ACTION to it. No virtual
+  screen, no ffmpeg, no injector. State ACTIONS until the device leaves or stop(), then the hub stops.
 - anything else: the screen session below.
 
 Screen session: screen choice → ffmpeg. In Extend mode with a
@@ -368,13 +368,15 @@ class ActionsHub(Protocol):
     def handle(self, action: dict) -> None: ...  # depuis le lecteur de la tablette : ne doit pas bloquer
 
 
-def default_actions_hub(send: Callable[[dict], None], log: Callable[[str], None]) -> ActionsHub:
+def default_actions_hub(send: Callable[[dict], None], log: Callable[[str], None],
+                        send_artwork: Callable[[str, bytes], None] | None = None) -> ActionsHub:
     """The real hub over the real providers (a provider whose library is missing is reported unavailable).
 
+    send_artwork(id, image) sends a MEDIA_ARTWORK; the hub calls it before the state that references the cover.
     Imported here, not at module level: the screen role (and the CLI) never loads pycaw, comtypes or winrt.
     """
     from actions.hub import ActionsHub as _ActionsHub, default_providers
-    return _ActionsHub(default_providers(log), send, log=log)
+    return _ActionsHub(default_providers(log), send, send_artwork=send_artwork, log=log)
 
 
 @dataclass
@@ -387,8 +389,9 @@ class Deps:
     create_injector: Callable[..., Any] = injector.create_for_stream
     monitors: Callable[[], list[injector.Monitor]] = injector.monitors
     list_outputs: Callable[[], list[dxgi_outputs.Output]] = dxgi_outputs.enumerate_outputs
-    # (send(state dict), log) -> hub d'une session Actions ; send encode et envoie un ACTIONS_STATE
-    actions_hub_factory: Callable[[Callable[[dict], None], Callable[[str], None]], ActionsHub] = default_actions_hub
+    # (send(state dict), log, send_artwork(id, image)) -> hub d'une session Actions ; send encode et envoie un
+    # ACTIONS_STATE, send_artwork un MEDIA_ARTWORK (sous le même verrou d'envoi)
+    actions_hub_factory: Callable[..., ActionsHub] = default_actions_hub
     poll_s: float = 1.0
     retry_delay_s: float = RETRY_DELAY_S
     device_info_timeout_s: float = DEVICE_INFO_TIMEOUT_S
@@ -823,6 +826,12 @@ class RelayEngine:
             with send_lock:
                 sock.sendall(data)
 
+        def send_media_artwork(artwork_id: str, image: bytes) -> None:
+            """Called by the hub just before the state that references the cover; errors go back to the hub."""
+            data = protocol.encode_media_artwork(artwork_id, image)
+            with send_lock:
+                sock.sendall(data)
+
         if self._stop_event.is_set():  # stop() pendant la connexion : ne pas lancer ffmpeg pour rien
             self._close_socket(sock)
             return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
@@ -995,7 +1004,7 @@ class RelayEngine:
                 self._log(f"Device role: {info.role} ({info.name}, {info.kind}): unknown, screen role used")
             if info is not None and info.role == ROLE_ACTIONS:
                 actions_session = True
-                hub = self._deps.actions_hub_factory(send_actions_state, self._log)
+                hub = self._deps.actions_hub_factory(send_actions_state, self._log, send_media_artwork)
                 try:
                     actions_hub = hub
                     hub.start()
