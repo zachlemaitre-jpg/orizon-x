@@ -33,6 +33,11 @@ class Receiver(
         session?.sendInput(message)
     }
 
+    /** Forwards an ACTION to the running session, if any. */
+    fun sendAction(json: org.json.JSONObject) {
+        session?.sendAction(json)
+    }
+
     /** Drops the open PC connection (role change); the loop then listens again and the PC reconnects with the new role. */
     fun closeConnection() {
         if (session == null) return

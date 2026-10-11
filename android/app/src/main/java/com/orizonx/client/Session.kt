@@ -45,9 +45,16 @@ class Session(
 
     @Volatile private var inputSink: ((TabletMessage.Input) -> Unit)? = null
 
+    @Volatile private var actionSink: ((org.json.JSONObject) -> Unit)? = null
+
     /** Queues an INPUT frame on the net-writer thread (never blocks the caller); no-op outside [run]. */
     fun sendInput(message: TabletMessage.Input) {
         inputSink?.invoke(message)
+    }
+
+    /** Queues an ACTION frame on the net-writer thread (never blocks the caller); no-op outside [run]. */
+    fun sendAction(json: org.json.JSONObject) {
+        actionSink?.invoke(json)
     }
 
     fun run() {
@@ -57,6 +64,7 @@ class Session(
         val writer = FrameWriter(socket.getOutputStream())
         val timers = Executors.newSingleThreadScheduledExecutor { Thread(it, "net-writer") }
         inputSink = { message -> runCatching { timers.execute { runCatching { writer.write(message) } } } }
+        actionSink = { json -> runCatching { timers.execute { runCatching { writer.action(json) } } } }
         var decoder: VideoDecoder? = null
         var config: PcMessage.Config? = null
         try {
@@ -64,7 +72,10 @@ class Session(
             writer.write(deviceInfo) // immediately after HELLO: the PC waits at most 1 s for it, then assumes "screen"
             listener.onConnected(DeviceRole.fromWire(deviceInfo.role) ?: DeviceRole.SCREEN)
             timers.every(PING_INTERVAL_MS, initialDelayMs = 0) { writer.write(TabletMessage.Ping(nowUs())) }
-            timers.every(STATS_INTERVAL_MS, initialDelayMs = STATS_INTERVAL_MS) { sendStats(writer) }
+            // The Actions remote has no video, so there is nothing to measure: no STATS.
+            if (deviceInfo.role != DeviceRole.ACTIONS.wire) {
+                timers.every(STATS_INTERVAL_MS, initialDelayMs = STATS_INTERVAL_MS) { sendStats(writer) }
+            }
             try {
                 while (true) {
                     when (val message = reader.read()) {
@@ -112,6 +123,7 @@ class Session(
             }
         } finally {
             inputSink = null
+            actionSink = null
             timers.shutdownNow()
             runCatching { timers.awaitTermination(TIMER_STOP_MS, TimeUnit.MILLISECONDS) }
             try {

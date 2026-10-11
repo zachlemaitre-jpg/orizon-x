@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val screen = screenInfo()
-        setContent { OrizonXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed, ::onRoleChosen) }
+        setContent { OrizonXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed, ::onRoleChosen, ::onAction) }
     }
 
     override fun onResume() {
@@ -71,6 +71,10 @@ class MainActivity : ComponentActivity() {
         model.chooseRole(role)
         applyOrientation(role)
         receiver?.closeConnection()
+    }
+
+    private fun onAction(json: org.json.JSONObject) {
+        receiver?.sendAction(json)
     }
 
     /** Physical screen size in landscape orientation. */

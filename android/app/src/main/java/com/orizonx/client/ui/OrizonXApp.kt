@@ -39,8 +39,10 @@ fun OrizonXApp(
     onSurfaceCreated: (Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onRoleChosen: (DeviceRole) -> Unit,
+    onAction: (org.json.JSONObject) -> Unit,
 ) {
     val streaming = model.state is ConnectionState.Streaming
+    val actionsActive = model.role == DeviceRole.ACTIONS && model.connectedRole == DeviceRole.ACTIONS
     Box(
         Modifier
             .fillMaxSize()
@@ -57,8 +59,13 @@ fun OrizonXApp(
         }
         VideoSurface(videoModifier, onVideoView, onSurfaceCreated, onSurfaceDestroyed)
 
-        AnimatedVisibility(visible = !streaming, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
+        AnimatedVisibility(visible = !streaming && !actionsActive, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
             WaitingScreen(model.waitingReason, screen, model.role, model.connectedRole, onRoleChosen)
+        }
+
+        // VideoSurface stays composed underneath: it owns the Receiver's lifecycle (Surface created/destroyed).
+        AnimatedVisibility(visible = actionsActive, enter = fadeIn(tween(300)), exit = fadeOut(tween(300))) {
+            ActionsScreen(model.actionsState, onAction, onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) })
         }
 
         if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))

@@ -114,7 +114,7 @@ fun WaitingScreen(
 
 /** Dark background with three slowly drifting colour blobs, blurred (real blur, API 31+). */
 @Composable
-private fun BlobBackground() {
+fun BlobBackground() {
     val transition = rememberInfiniteTransition(label = "blobs")
     val drift by transition.animateFloat(
         initialValue = 0f,
