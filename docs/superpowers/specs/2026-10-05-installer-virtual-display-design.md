@@ -67,11 +67,11 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
 **Au HELLO de la tablette** (largeur, hauteur, dpi), en mode *Extend* :
 1. `ensure_resolution(w, h, 60)`, puis `set_display_count(1)`.
 2. Attente de l'écran Windows de taille `w×h`, avec `injector.monitors()` interrogé toutes les 200 ms et un **délai maximal de 10 s**.
-3. **Première apparition seulement** (la paire `applied_position`/`applied_scale` déjà appliquée est gardée dans les réglages ; l'ancien drapeau `layout_applied` est encore lu) : application de la **position** et de l'**échelle** réglées quand elles diffèrent de cette paire. Les fois suivantes, Windows restaure la disposition, car le moniteur VDD garde la même identité. Une position ou une échelle changée pendant la préparation est appliquée dès que l'écran est allumé.
+3. **À chaque allumage du chemin** (révision après le test sur le vrai PC : Windows ne restaurait pas la position choisie, l'écran revenait à droite après `Position = À gauche`) : la **position** réglée est calculée avec `display_layout.place` (écran principal, autres écrans actifs) et passée à `set_path_active(..., mode=..., position=...)` ; dans le repli en deux temps, elle est donnée à la seconde étape (avec le mode). Une fois l'écran allumé, l'**échelle** lue (`get_scale`) est corrigée par `set_scale` si elle diffère de celle réglée (Auto : `auto_scale(dpi)`), sans appel sinon. Un écran trouvé déjà allumé à la bonne taille (gardé par la grâce) n'est pas touché. La paire `applied_position`/`applied_scale` (l'ancien drapeau `layout_applied` est encore lu) reste utile pour ce dernier cas : quand elle diffère des réglages, la position et l'échelle sont appliquées aussi à un écran déjà allumé. Une position ou une échelle changée pendant la préparation est appliquée dès que l'écran est allumé.
 4. Repérage de l'écran ddagrab de même taille (`probe_outputs`), puis démarrage de la capture.
 5. **Pendant les étapes 1 à 4**, le moteur répond déjà aux PING de la tablette (le lecteur de session démarre avant la préparation de l'écran). Sinon la tablette coupe après 5 s de silence.
 
-**Au départ de la tablette, sur Stop ou sur Quit** : `set_display_count(0)` après **5 s de grâce**, annulées si la tablette revient entre-temps. Quit ne garde pas cette grâce : il retire l'écran immédiatement.
+**Au départ de la tablette, sur Stop ou sur Quit** : `set_display_count(0)` après **15 s de grâce** (un débranchement/rebranchement du câble a pris ~5,5 s sur le vrai PC : 5 s expiraient 1 s trop tôt), annulées si la tablette revient entre-temps. Quit ne garde pas cette grâce : il retire l'écran immédiatement.
 
 **Au lancement de l'appli** : `set_display_count(0)`, pour nettoyer après un plantage. **À la désinstallation** : pareil, via l'appli lancée avec `--cleanup`.
 
@@ -130,7 +130,7 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
 - **Fichiers** :
   - `installer/orizonx.iss`, plus les fichiers VDD dans `installer/vdd/` : `MttVDD.inf`, `MttVDD.dll`, `mttvdd.cat`, `devcon.exe`, `LICENSE` (MIT) ;
   - la version x64 seulement ; ARM64 est hors périmètre.
-- **Langues** : `ShowLanguageDialog=yes`, English (par défaut) puis Français. Le choix est écrit dans `HKCU\Software\OrizonX\Language`.
+- **Langues** : `ShowLanguageDialog=yes` et `LanguageDetectionMethod=none` (English toujours présélectionné, quelle que soit la langue de Windows), English puis Français. Le choix est écrit dans `HKCU\Software\OrizonX\Language`.
 - **Droits** : `PrivilegesRequired=admin`. L'installation par défaut va dans `{autopf}\Orizon X`.
 - **Étapes** :
   1. Accueil ;
@@ -146,7 +146,7 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
 - **Config VDD** :
   - création de `C:\VirtualDisplayDriver` si besoin, puis sauvegarde du XML existant ;
   - écriture d'un XML minimal : `count` = 0, le GPU qui affiche l'écran principal (détecté par l'appli lancée avec `--configure-vdd`, en admin pendant l'installation), une résolution 1920×1080 à 60 ;
-  - droits « Modify » pour le groupe Users (`icacls`, SID `*S-1-5-32-545`) sur le dossier, pour que l'appli écrive sans droits admin.
+  - droits « Modify » pour le groupe Users (`icacls <dossier> /grant *S-1-5-32-545:(OI)(CI)M`) sur le dossier, pour que l'appli écrive sans droits admin : donnés par `OrizonX.exe --configure-vdd` (`app/admin.py`) et non plus par l'installateur, sur le dossier du XML résolu (`VDDPATH` compris) ; un échec est journalisé et ne change pas le code de sortie (0, sauf échec d'une étape du XML).
 - **Démarrage auto** : si la tâche est cochée, une valeur `Run` dans HKCU, compatible avec `app/autostart.py`.
 - **Désinstallation** :
   1. `OrizonX.exe --cleanup` (count 0) ;
@@ -162,7 +162,7 @@ L'écran virtuel n'existe **que quand la tablette est connectée**.
 - **Unitaires, sans Windows réel** :
   - `vdd.py` : faux canal (serveur de pipe nommé de test, ou transport injecté), XML aller-retour qui préserve les sections inconnues, sauvegarde unique ;
   - `display_layout` : positions (4 côtés, écrans de tailles différentes, origine négative) et paliers d'échelle ;
-  - `virtual_display` : apparition, délai de 10 s, grâce de 5 s annulée par un retour, nettoyage au démarrage, Quit immédiat ;
+  - `virtual_display` : apparition, délai de 10 s, grâce de 15 s annulée par un retour, nettoyage au démarrage, Quit immédiat ;
   - moteur : PING servi pendant la préparation, état `PREPARING_DISPLAY`, mode duplicate ;
   - `i18n` : complétude des clés et arguments ;
   - fenêtre : bouton Quit, champs grisés en Duplicate, changement de langue.
@@ -183,7 +183,7 @@ Validée par l'utilisateur le 2026-10-05, après l'exploration `docs/notes/vdd-c
   - VDD garde `count` = 1 : avec 0, il crée quand même un écran.
   - Les commandes de rechargement du pipe plantent l'hôte du pilote (bug upstream #351).
   - L'appli **active ou désactive le chemin d'affichage** du moniteur VDD via `SetDisplayConfig`, comme « Déconnecter cet écran » dans Windows. Ça ne demande pas les droits admin et ne redémarre pas le pilote.
-  - Activation au HELLO, désactivation après la grâce de 5 s, désactivation au lancement de l'appli et par `--cleanup`.
+  - Activation au HELLO, désactivation après la grâce de 15 s, désactivation au lancement de l'appli et par `--cleanup`.
   - Le pipe ne sert qu'à `PING` (détection du pilote).
 - **Résolutions.**
   - L'installateur écrit dans le XML une liste de résolutions de tablettes courantes, puis redémarre le périphérique une fois (`pnputil /restart-device`, il est déjà élevé).

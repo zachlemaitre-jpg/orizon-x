@@ -23,6 +23,9 @@ from display_layout import MonitorKey, Rect
 from messages import msg
 
 POLL_S = 0.2
+# Pause before the screen goes off after the tablet leaves. An unplug/replug of the cable took ~5.5 s on the real PC
+# (the screen went off 1 s before the tablet was back), so 15 s leaves a comfortable margin.
+GRACE_S = 15.0
 
 
 class PrepareResult(NamedTuple):
@@ -49,7 +52,7 @@ class VirtualDisplay:
     def __init__(self, vdd: Any, layout: Any = display_layout, monitors: Callable[[], list] = injector.monitors,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
                  timer_factory: Callable[[float, Callable[[], None]], Any] = daemon_timer,
-                 grace_s: float = 5.0, appear_timeout_s: float = 10.0,
+                 grace_s: float = GRACE_S, appear_timeout_s: float = 10.0,
                  log: Callable[[str], None] = _no_log) -> None:
         self._vdd = vdd
         self._layout = layout
@@ -77,8 +80,15 @@ class VirtualDisplay:
 
         Returns None when ``should_stop()`` becomes true (the screen may be left on: the caller
         releases it as after any session). Raises engine.FatalError with display.vdd_missing,
-        display.no_mode, display.activate_failed or display.timeout. On ``first_time`` the position
-        and the scale are applied; their failures are only logged.
+        display.no_mode, display.activate_failed or display.timeout.
+
+        Position and scale: Windows restores whatever it remembers when a path is switched on (the screen came
+        back on the right after the user chose Left), so every activation passes the configured position
+        (``display_layout.place`` against the other active monitors) to ``set_path_active``, and the scale is
+        read once the screen is on and corrected when it differs from the setting. A screen found already on
+        at the right size (kept by the grace delay) is not touched. ``first_time`` (the app's applied
+        position/scale pair differs from the settings) still applies both, which also covers that
+        already-on case. Layout failures are only logged.
         """
         self.cancel_release()
         if not self._vdd.is_installed():
@@ -88,8 +98,8 @@ class VirtualDisplay:
         monitor = self._wait_for(self._find_monitor, deadline, should_stop)
         if monitor is None:
             return None
-        mode = self._pick_mode(monitor, width, height)
-        if not self._activate(mode, should_stop):
+        mode, turned_on = self._pick_mode(monitor, width, height)
+        if not self._activate(mode, position, turned_on, should_stop):
             return None
 
         rect = self._wait_for(lambda: self._locate(mode), deadline, should_stop)
@@ -101,6 +111,8 @@ class VirtualDisplay:
             with self._lock:
                 self._apply_layout(position, scale, dpi)
             rect = self._locate(mode) or rect
+        else:
+            self._ensure_scale(scale, dpi)
         return PrepareResult(rect, mode == (width, height), mode)
 
     def release(self, immediate: bool = False) -> None:
@@ -161,22 +173,31 @@ class VirtualDisplay:
             self._log(f"Virtual screen: cannot read its modes: {e}")
             return []
 
-    def _pick_mode(self, monitor: Any, width: int, height: int) -> tuple[int, int]:
+    def _pick_mode(self, monitor: Any, width: int, height: int) -> tuple[tuple[int, int], bool]:
+        """(mode, turned_on): ``turned_on`` is True when the path had to be switched on (at Windows' remembered
+        mode and position) to read the modes."""
         modes = self._modes(monitor.key)
+        turned_on = False
         if not modes and not monitor.active:
             # Une source sans écran allumé peut ne lister aucun mode : on allume, puis on relit.
             self._log("Virtual screen: no modes while off, turning it on to read them")
             self._set_path(monitor.key, None)
+            turned_on = True
             monitor = self._find_monitor() or monitor
             modes = self._modes(monitor.key)
         mode = self._layout.pick_mode(modes, width, height)
         if mode is None:
             self._log(f"Virtual screen: no mode fits {width}x{height} among {modes}")
             raise engine.FatalError(msg("display.no_mode", width=width, height=height))
-        return mode
+        return mode, turned_on
 
-    def _activate(self, mode: tuple[int, int], should_stop: Callable[[], bool]) -> bool:
-        """Turn the path on at ``mode``, or resize it in place; nothing if it already is at ``mode``.
+    def _activate(self, mode: tuple[int, int], position: str, turned_on: bool,
+                  should_stop: Callable[[], bool]) -> bool:
+        """Turn the path on at ``mode`` and ``position``, or resize it in place; nothing if it already is at ``mode``.
+
+        ``turned_on``: the path was switched on moments ago to read its modes, so it sits wherever Windows put it
+        and still gets the position even at the right size. A path that was already on at the right size (kept
+        by the grace delay) is left alone.
 
         False (nothing done) when ``should_stop()`` is true once the lock is held: Quit sets the stop flag, then
         turns the screen off under this lock (release(immediate=True)); checking outside the lock could turn it on
@@ -189,26 +210,42 @@ class VirtualDisplay:
             monitor = self._find_monitor()
             if monitor is None:
                 raise engine.FatalError(msg("display.timeout"))
+            target = self._target_position(monitor, mode, position)
             if monitor.active and monitor.rect is not None and (monitor.rect.width, monitor.rect.height) == mode:
+                if turned_on and target is not None and (monitor.rect.left, monitor.rect.top) != target:
+                    self._set_path(monitor.key, mode, target)
                 return True
             if monitor.active:
-                self._set_path(monitor.key, mode)
+                self._set_path(monitor.key, mode, target)
                 return True
             try:
-                self._layout.set_path_active(monitor.key, True, mode=mode)
+                self._layout.set_path_active(monitor.key, True, mode=mode, position=target)
                 return True
             except Exception as e:  # noqa: BLE001
                 # Windows peut refuser d'allumer et de changer de mode d'un coup : en deux temps.
                 self._log(f"Virtual screen: activation with mode {mode[0]}x{mode[1]} refused ({e}), "
                           "trying in two steps")
             self._set_path(monitor.key, None)
-            self._set_path(monitor.key, mode)
+            self._set_path(monitor.key, mode, target)
             return True
 
-    def _set_path(self, key: MonitorKey, mode: tuple[int, int] | None) -> None:
+    def _target_position(self, monitor: Any, mode: tuple[int, int], position: str) -> tuple[int, int] | None:
+        """Where a ``mode``-sized virtual screen goes on ``position`` of the main screen, past every other active
+        monitor; None (Windows' default) if it cannot be worked out, which is only logged. Lock held."""
+        try:
+            listed = self._monitors()
+            primary = next(rect for rect, is_primary, _name in listed if is_primary)
+            others = [rect for rect, _primary, _name in listed if rect != monitor.rect]
+            return self._layout.place(primary, mode, position, others)
+        except Exception as e:  # noqa: BLE001 - la disposition n'est jamais fatale
+            self._log(f"Virtual screen: cannot work out the {position!r} position, Windows decides: {e!r}")
+            return None
+
+    def _set_path(self, key: MonitorKey, mode: tuple[int, int] | None,
+                  position: tuple[int, int] | None = None) -> None:
         with self._lock:
             try:
-                self._layout.set_path_active(key, True, mode=mode)
+                self._layout.set_path_active(key, True, mode=mode, position=position)
             except Exception as e:  # noqa: BLE001
                 self._log(f"Virtual screen: cannot turn it on: {e}")
                 raise engine.FatalError(msg("display.activate_failed", error=str(e))) from e
@@ -228,6 +265,21 @@ class VirtualDisplay:
         if monitor is not None and monitor.rect in matches:
             return monitor.rect
         return None
+
+    def _ensure_scale(self, scale: str | int, dpi: int) -> None:
+        """Set the scale of the active virtual screen if it is not the wanted one (nothing otherwise). Never raises."""
+        with self._lock:
+            try:
+                monitor = self._find_monitor()
+                if monitor is None or not monitor.active:
+                    return
+                wanted = self._layout.auto_scale(dpi) if scale == "auto" else int(scale)
+                current, _recommended = self._layout.get_scale(monitor.key)
+                if current != wanted:
+                    applied = self._layout.set_scale(monitor.key, wanted)
+                    self._log(f"Virtual screen scale: {current} % -> {applied} %")
+            except Exception as e:  # noqa: BLE001
+                self._log(f"Virtual screen: cannot check the scale {scale!r}: {e!r}")
 
     def _apply_layout(self, position: str, scale: str | int, dpi: int, move: bool = True,
                       rescale: bool = True) -> tuple[int, int] | None:

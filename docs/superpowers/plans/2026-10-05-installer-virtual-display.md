@@ -4,7 +4,7 @@
 
 **Goal:** One `OrizonX-Setup.exe` (English by default, French selectable) that installs the app plus the VDD virtual display driver; the app creates the virtual screen only while a tablet is connected, places it and scales it, and is fully bilingual with an explicit Quit button.
 
-**Architecture:** New Qt-free modules in `host-prototype/`: `vdd.py` (VDD named-pipe + XML control), `display_layout.py` (position/scale maths + Windows CCD API via ctypes), `virtual_display.py` (screen lifecycle: appear on HELLO, 5 s grace on leave, cleanup on start). The engine gains a display hook and a `PREPARING_DISPLAY` state, answering PINGs while the screen is being prepared. `app/i18n.py` makes every visible string bilingual. Inno Setup 6 builds the installer from `installer/orizonx.iss`.
+**Architecture:** New Qt-free modules in `host-prototype/`: `vdd.py` (VDD named-pipe + XML control), `display_layout.py` (position/scale maths + Windows CCD API via ctypes), `virtual_display.py` (screen lifecycle: appear on HELLO, 15 s grace on leave, cleanup on start). The engine gains a display hook and a `PREPARING_DISPLAY` state, answering PINGs while the screen is being prepared. `app/i18n.py` makes every visible string bilingual. Inno Setup 6 builds the installer from `installer/orizonx.iss`.
 
 **Tech Stack:** Python 3.13 stdlib + ctypes (user32 CCD API, named pipes), PySide6 6.11, PyInstaller 6.22, Inno Setup 6, devcon (from the VDD package), unittest.
 
@@ -120,7 +120,7 @@ def relative_scale_index(target: int, recommended: int) -> int   # per Task 1 se
 ```python
 class VirtualDisplay:
     def __init__(self, vdd: VddController, layout=display_layout, monitors=injector.monitors,
-                 clock=time.monotonic, sleep=time.sleep, grace_s=5.0, appear_timeout_s=10.0) -> None
+                 clock=time.monotonic, sleep=time.sleep, grace_s=15.0, appear_timeout_s=10.0) -> None
     def cleanup_on_start(self) -> None                       # count 0, ignore errors when VDD absent
     def prepare(self, width, height, dpi, position, scale, first_time: bool, should_stop) -> None
         # ensure_resolution + count 1, wait for a w×h monitor (≤ appear_timeout_s, polling 200 ms,
