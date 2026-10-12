@@ -2,6 +2,7 @@ package com.orizonx.client
 
 import android.content.SharedPreferences
 import com.orizonx.client.protocol.TabletMessage
+import com.orizonx.client.protocol.VideoCaps
 
 /** What this device does for the PC: second screen or Actions remote. */
 enum class DeviceRole(val wire: String) {
@@ -26,8 +27,14 @@ enum class DeviceRole(val wire: String) {
 }
 
 /** Builds the DEVICE_INFO announced right after HELLO. */
-fun deviceInfoFor(role: DeviceRole, smallestWidthDp: Int, model: String, appVersion: String) =
-    TabletMessage.DeviceInfo(role.wire, DeviceRole.kindFor(smallestWidthDp), model, appVersion)
+fun deviceInfoFor(role: DeviceRole, smallestWidthDp: Int, model: String, appVersion: String, video: VideoCaps? = null) =
+    TabletMessage.DeviceInfo(
+        role.wire,
+        DeviceRole.kindFor(smallestWidthDp),
+        model,
+        appVersion,
+        video.takeIf { role == DeviceRole.SCREEN }, // decoder limits only matter for the second-screen role
+    )
 
 /** Persists the chosen [DeviceRole]; falls back to the width-based default until the user picks one. */
 class RoleStore(private val prefs: SharedPreferences, private val smallestWidthDp: Int) {

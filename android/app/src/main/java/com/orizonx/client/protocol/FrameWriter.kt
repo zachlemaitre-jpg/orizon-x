@@ -17,17 +17,21 @@ class FrameWriter(output: OutputStream) {
         stream.flush()
     }
 
-    fun deviceInfo(role: String, kind: String, name: String, app: String) =
-        write(TabletMessage.DeviceInfo(role, kind, name, app))
+    fun deviceInfo(role: String, kind: String, name: String, app: String, video: VideoCaps? = null) =
+        write(TabletMessage.DeviceInfo(role, kind, name, app, video))
 
     fun action(json: JSONObject) = write(TabletMessage.Action(json))
 
     companion object {
+        private class RawJson(val text: String)
+
         private fun u32(value: Long): Int = value.coerceIn(0, 0xFFFF_FFFFL).toInt()
 
         /** Compact UTF-8 JSON object with the keys in the given order (org.json's own key order is not stable). */
         private fun jsonBytes(name: String, entries: List<Pair<String, Any?>>): ByteArray {
             val text = entries.joinToString(prefix = "{", postfix = "}", separator = ",") { (key, value) ->
+                // A pre-rendered nested object (fixed key order) goes in as is.
+                if (value is RawJson) return@joinToString JSONObject.quote(key) + ":" + value.text
                 val single = JSONObject().put(key, value).toString()
                 single.substring(1, single.length - 1)
             }
@@ -81,11 +85,14 @@ class FrameWriter(output: OutputStream) {
                     out.write(
                         jsonBytes(
                             "DEVICE_INFO",
-                            listOf(
+                            listOfNotNull(
                                 "role" to message.role,
                                 "kind" to message.kind,
                                 "name" to message.name,
                                 "app" to message.app,
+                                message.video?.let {
+                                    "video" to RawJson("{\"width\":${it.width},\"height\":${it.height},\"fps\":${it.fps}}")
+                                },
                             ),
                         ),
                     )

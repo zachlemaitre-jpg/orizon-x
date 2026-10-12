@@ -42,6 +42,23 @@ class FrameWriterTest {
     }
 
     @Test
+    fun deviceInfoWithVideoAppendsItAfterAppInFixedOrder() {
+        val bytes = FrameWriter.encode(
+            TabletMessage.DeviceInfo("screen", "tablet", "Tab", "0.6.0", VideoCaps(2104, 1312, 60)),
+        )
+        val json = """{"role":"screen","kind":"tablet","name":"Tab","app":"0.6.0","video":{"width":2104,"height":1312,"fps":60}}"""
+        assertEquals(json, String(bytes, 8, bytes.size - 8, Charsets.UTF_8))
+    }
+
+    @Test
+    fun writerDeviceInfoCarriesVideo() {
+        val sink = java.io.ByteArrayOutputStream()
+        FrameWriter(sink).deviceInfo("screen", "tablet", "Tab", "0.6.0", VideoCaps(1920, 1200, 30))
+        val expected = FrameWriter.encode(TabletMessage.DeviceInfo("screen", "tablet", "Tab", "0.6.0", VideoCaps(1920, 1200, 30)))
+        assertEquals(expected.toHex(), sink.toByteArray().toHex())
+    }
+
+    @Test
     fun writerHelpersSendDeviceInfoAndAction() {
         val sink = java.io.ByteArrayOutputStream()
         val writer = FrameWriter(sink)

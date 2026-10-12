@@ -13,6 +13,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.orizonx.client.input.TouchForwarder
+import com.orizonx.client.video.DecoderCaps
 import com.orizonx.client.ui.OrizonXApp
 
 class MainActivity : ComponentActivity() {
@@ -56,7 +57,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun currentDeviceInfo() = deviceInfoFor(model.role, smallestWidthDp(), Build.MODEL, appVersion())
+    /** Hardware decoder limits for the native screen size; computed once (MediaCodecList queries are not free). */
+    private val videoCaps by lazy {
+        val screen = screenInfo()
+        DecoderCaps.best(screen.width, screen.height, DecoderCaps.system())
+    }
+
+    private fun currentDeviceInfo() = deviceInfoFor(model.role, smallestWidthDp(), Build.MODEL, appVersion(), videoCaps)
 
     private fun appVersion(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"

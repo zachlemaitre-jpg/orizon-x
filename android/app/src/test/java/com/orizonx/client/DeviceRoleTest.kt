@@ -42,4 +42,12 @@ class DeviceRoleTest {
             String(tablet, 8, tablet.size - 8, Charsets.UTF_8),
         )
     }
+
+    @Test
+    fun deviceInfoForCarriesVideoOnlyForTheScreenRole() {
+        val video = com.orizonx.client.protocol.VideoCaps(2104, 1312, 60)
+        assertEquals(video, deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.6.0", video).video)
+        assertNull(deviceInfoFor(DeviceRole.ACTIONS, 800, "Tab", "0.6.0", video).video)
+        assertNull(deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.6.0").video)
+    }
 }

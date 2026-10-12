@@ -106,8 +106,20 @@ sealed interface TabletMessage {
     data class Input(val device: Int, val contacts: List<InputContact>) : TabletMessage
 
     /** Role and identity of this device, sent right after Hello. [role] is "screen" or "actions"; [kind] "phone" or "tablet". */
-    data class DeviceInfo(val role: String, val kind: String, val name: String, val app: String) : TabletMessage
+    data class DeviceInfo(
+        val role: String,
+        val kind: String,
+        val name: String,
+        val app: String,
+        /** Best size/rate the hardware decoder handles (screen role); null = unknown, the PC keeps its defaults. */
+        val video: VideoCaps? = null,
+    ) : TabletMessage
 
     /** One user action for the PC; [json] must carry a string "id" (spec actions-mode §2.2). */
     class Action(val json: JSONObject) : TabletMessage
+}
+
+/** Announced in DEVICE_INFO: the largest landscape size the device decodes at [fps] (60 or 30). */
+data class VideoCaps(val width: Int, val height: Int, val fps: Int) {
+    data class Size(val width: Int, val height: Int)
 }

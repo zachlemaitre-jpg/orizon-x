@@ -36,7 +36,7 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x83 | KEYFRAME_REQ | vide |
 | 0x84 | STATS | fps u16, latency_avg_us u32, latency_max_us u32, dropped u32, rtt_us u32 (chaque seconde) |
 | 0x85 | INPUT | device u8 (1 tactile, 2 stylet), count u8 (≤ 10 tactile, ≤ 1 stylet), puis count × contact de 10 octets (voir ci-dessous) |
-| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"}`. Au plus 65 536 octets |
+| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"[,"video":{"width":<int>,"height":<int>,"fps":60\|30}]}`. Au plus 65 536 octets |
 | 0x87 | ACTION | JSON UTF-8 : `{"id":"<action>", …}` ; `id` est une chaîne obligatoire. Au plus 65 536 octets |
 
 ## INPUT (phase 4)
@@ -59,6 +59,10 @@ Les messages 0x04, 0x86 et 0x87 portent un **objet JSON encodé en UTF-8**, de 6
 2. Le PC attend `DEVICE_INFO` **1 s au plus** après le `HELLO`. Sans réponse (ancienne application), ou si `role` n'est pas `actions`, le rôle vaut `screen` : le comportement est celui de la version précédente (`CONFIG`, `VIDEO`, `INPUT`).
 3. En rôle `actions`, le PC n'envoie ni `CONFIG` ni `VIDEO` : il envoie un `ACTIONS_STATE` complet, puis un nouveau à chaque changement (l'état complet, pas de diff) et au moins toutes les 30 s. La tablette envoie des `ACTION`. `PING`/`PONG` ne changent pas.
 4. Pour changer de rôle, la tablette ferme la connexion et se reconnecte avec le nouveau `DEVICE_INFO`.
+
+### Capacités vidéo (`video`, facultatif)
+
+En rôle `screen`, `DEVICE_INFO` peut porter `"video":{"width":W,"height":H,"fps":F}` en dernière clé : la plus grande taille (paysage, format de l'écran) que le décodeur AVC matériel de la tablette sait décoder à 60 i/s, sinon à 30 i/s (`fps` vaut 60 ou 30). Le champ est omis quand la tablette ne peut pas le déterminer ; il n'est pas envoyé en rôle `actions`. Le PC s'en sert pour choisir la taille de l'écran virtuel, les i/s et le débit ; sans lui, il garde la taille native et 60 i/s. Un ancien PC ignore ce champ (les champs inconnus sont ignorés).
 
 ### Pochette (`MEDIA_ARTWORK`, 0x05)
 
