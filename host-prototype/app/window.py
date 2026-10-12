@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontInfo, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
@@ -15,6 +15,10 @@ from messages import Msg
 MODE_KEYS = {"extend": "window.mode_extend", "duplicate": "window.mode_duplicate"}
 POSITION_KEYS = {"right": "window.position_right", "left": "window.position_left",
                  "above": "window.position_above", "below": "window.position_below"}
+MODE_ICONS = {"extend": "etendre_affichage", "duplicate": "dupliquer_affichage"}
+STOP_ICON = "stop"
+COMBO_ICON_PX = 18
+BUTTON_ICON_PX = 18
 ENCODER_NAMES = {"amf": "AMF (AMD)", "nvenc": "NVENC (NVIDIA)"}  # noms de produits : jamais traduits
 ENCODER_VALUES = ("auto", "amf", "nvenc")
 LANGUAGE_ITEMS = (("English", "en"), ("Français", "fr"))  # chaque langue dans sa propre langue : jamais traduits
@@ -77,12 +81,25 @@ def _encoder_label(value: str, lang: str) -> str:
 class ChoiceCombo(QComboBox):
     """A list of setting values whose labels follow the language; activated = the user's choice."""
 
-    def __init__(self, values: tuple[str, ...], label: Callable[[str, str], str], parent: QWidget | None = None) -> None:
+    def __init__(self, values: tuple[str, ...], label: Callable[[str, str], str], parent: QWidget | None = None,
+                 icons: dict[str, str] | None = None) -> None:
         super().__init__(parent)
         self._label = label
+        self._icons = icons or {}  # value -> icon name (assets/icons)
         for value in values:
             self.addItem("", value)
+        if self._icons:
+            self.setIconSize(QSize(COMBO_ICON_PX, COMBO_ICON_PX))
         self.retranslate()
+        self.refresh_icons()
+
+    def refresh_icons(self) -> None:
+        """(Re)renders the item icons at the current screen's pixel ratio."""
+        dpr = self.devicePixelRatioF()
+        for i in range(self.count()):
+            name = self._icons.get(self.itemData(i))
+            if name is not None:
+                self.setItemIcon(i, brand.icon(name, COMBO_ICON_PX, dpr))
 
     def retranslate(self) -> None:
         """Relabels the items in place: neither the selection nor an open list moves."""
@@ -196,7 +213,7 @@ class MainWindow(QWidget):
         self._add_resolution.hide()
 
         self._combos: dict[str, ChoiceCombo] = {
-            "mode": ChoiceCombo(settings.MODES, _keyed(MODE_KEYS), self),
+            "mode": ChoiceCombo(settings.MODES, _keyed(MODE_KEYS), self, MODE_ICONS),
             "position": ChoiceCombo(settings.POSITIONS, _keyed(POSITION_KEYS), self),
             "scale": ChoiceCombo(settings.SCALES, _scale_label, self),
             "encoder": ChoiceCombo(ENCODER_VALUES, _encoder_label, self),
@@ -328,6 +345,15 @@ class MainWindow(QWidget):
         else:
             self._detail.setText(status.detail_for(self._state, self._detail_msg, lang))
         self._primary.setText(status.primary_label(self._state, lang))
+        self._refresh_primary_icon()
+
+    def _refresh_primary_icon(self) -> None:
+        """The stop icon sits left of the text while the button means Stop; Start/Retry have none."""
+        if status.is_active(self._state):
+            self._primary.setIconSize(QSize(BUTTON_ICON_PX, BUTTON_ICON_PX))
+            self._primary.setIcon(brand.icon(STOP_ICON, BUTTON_ICON_PX, self.devicePixelRatioF()))
+        else:
+            self._primary.setIcon(QIcon())
 
     def _update_actions(self) -> None:
         vdd_missing = (self._state is State.ERROR and self._detail_msg is not None
@@ -404,6 +430,13 @@ class MainWindow(QWidget):
     def primary_text(self) -> str:
         return self._primary.text()
 
+    def primary_has_icon(self) -> bool:
+        return not self._primary.icon().isNull()
+
+    def combo_item_has_icon(self, name: str, value: str) -> bool:
+        combo = self._combos[name]
+        return not combo.itemIcon(combo.findData(value)).isNull()
+
     def quit_text(self) -> str:
         return self._quit.text()
 
@@ -473,6 +506,9 @@ class MainWindow(QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._refresh_logo()  # la fenêtre a pu s'ouvrir sur un écran d'une autre échelle
+        for combo in self._combos.values():
+            combo.refresh_icons()
+        self._refresh_primary_icon()
 
     def closeEvent(self, event) -> None:
         if self._quitting:

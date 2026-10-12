@@ -65,6 +65,23 @@ class WindowTest(unittest.TestCase):
         self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
                          ("Actions device", "Pixel 8 connected", "Stop"))
 
+    def test_mode_items_have_icons_other_combos_none(self):
+        self.assertTrue(self.window.combo_item_has_icon("mode", "extend"))
+        self.assertTrue(self.window.combo_item_has_icon("mode", "duplicate"))
+        self.assertFalse(self.window.combo_item_has_icon("position", "right"))
+        i18n.set_language("en")  # relabelling keeps the icons
+        self.assertTrue(self.window.combo_item_has_icon("mode", "extend"))
+
+    def test_stop_icon_only_when_the_button_means_stop(self):
+        self.assertFalse(self.window.primary_has_icon())  # Start
+        self.window.set_state(State.ERROR, msg("error.unexpected", error="boom"))
+        self.assertFalse(self.window.primary_has_icon())  # Retry
+        for state in (State.WAITING_APP, State.STREAMING, State.ACTIONS):
+            self.window.set_state(state, None)
+            self.assertTrue(self.window.primary_has_icon(), state)
+        self.window.set_state(State.STOPPED, None)
+        self.assertFalse(self.window.primary_has_icon())
+
     def test_stats_only_shown_while_streaming(self):
         stats = StreamStats(2880, 1800, 60, 18.0, 30.0, 0, 0.4)
         self.window.set_state(State.WAITING_APP, msg("state.waiting_app"))

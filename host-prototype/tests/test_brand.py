@@ -37,6 +37,22 @@ class BrandTest(unittest.TestCase):
         self.assertTrue(family)
         self.assertNotEqual(family, "MAZAGLA")
 
+    def test_icons_render_at_dpr_2(self):
+        for name in ("etendre_affichage", "dupliquer_affichage", "stop"):
+            pixmap = brand.icon_pixmap(name, 18, 2.0)
+            self.assertFalse(pixmap.isNull(), name)
+            self.assertEqual((pixmap.width(), pixmap.height()), (36, 36))
+            self.assertEqual(pixmap.devicePixelRatio(), 2.0)
+            self.assertFalse(brand.icon(name, 18, 2.0).isNull())
+
+    def test_icon_is_white_by_default_and_tintable(self):
+        def opaque_colors(color):
+            image = brand.icon_pixmap("stop", 48, 1.0, color).toImage()
+            return {image.pixelColor(x, y).name() for x in range(48) for y in range(48)
+                    if image.pixelColor(x, y).alpha() == 255}
+        self.assertEqual(opaque_colors("#FFFFFF"), {"#ffffff"})
+        self.assertEqual(opaque_colors("#FF0000"), {"#ff0000"})
+
 
 if __name__ == "__main__":
     unittest.main()
