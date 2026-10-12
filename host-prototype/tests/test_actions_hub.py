@@ -75,10 +75,10 @@ def make_providers():
                                 "wifi": {"available": True, "on": True},
                                 "bluetooth": {"available": True, "on": True},
                                 "airplane": {"available": True, "on": False}}),
-        "wifi_info": FakeProvider({"available": True, "ssid": "Maison"}),
+        "wifi_info": FakeProvider({"available": True, "ssid": "Maison", "signal": 64}),
         "bt_info": FakeProvider({"available": True, "connected": ["Casque"]}),
         "usb": FakeProvider({"available": True, "drives": [
-            {"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2}]}),
+            {"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2, "kind": "stick"}]}),
         "now_playing": FakeNowPlaying(),
     }
 
@@ -121,10 +121,10 @@ class StateTest(unittest.TestCase):
             "audio": {"available": True, "volume": 0.42, "muted": False},
             "media": {"available": True},
             "brightness": {"available": True, "value": 0.7},
-            "wifi": {"available": True, "on": True, "ssid": "Maison"},
+            "wifi": {"available": True, "on": True, "ssid": "Maison", "signal": 64},
             "bluetooth": {"available": True, "on": True, "connected": ["Casque"]},
             "airplane": {"available": True, "on": False},
-            "usb": [{"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2}],
+            "usb": [{"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2, "kind": "stick"}],
             "now_playing": {"available": True, "app": "Spotify", "title": "UN BESO", "artist": "M4GN",
                             "album": "UN BESO", "playing": True, "artwork": ID_A},
         })
@@ -141,7 +141,7 @@ class StateTest(unittest.TestCase):
         h.providers["radios"].snap["wifi"]["on"] = False
         h.providers["radios"].snap["bluetooth"]["on"] = False
         h.tick()
-        self.assertEqual(h.sent[0]["wifi"], {"available": True, "on": False, "ssid": ""})
+        self.assertEqual(h.sent[0]["wifi"], {"available": True, "on": False, "ssid": "", "signal": None})
         self.assertEqual(h.sent[0]["bluetooth"], {"available": True, "on": False, "connected": []})
 
     def test_radio_merge_with_info_providers_missing(self):
@@ -149,7 +149,7 @@ class StateTest(unittest.TestCase):
         del providers["wifi_info"], providers["bt_info"]
         h = Harness(providers)
         h.tick()
-        self.assertEqual(h.sent[0]["wifi"], {"available": True, "on": True, "ssid": ""})
+        self.assertEqual(h.sent[0]["wifi"], {"available": True, "on": True, "ssid": "", "signal": None})
         self.assertEqual(h.sent[0]["bluetooth"], {"available": True, "on": True, "connected": []})
 
     def test_radios_unavailable_makes_the_three_sections_unavailable(self):
@@ -497,7 +497,7 @@ class FailureTest(unittest.TestCase):
         h = Harness()
         h.providers["wifi_info"].raises = OSError("wlan")
         h.tick()
-        self.assertEqual(h.sent[0]["wifi"], {"available": True, "on": True, "ssid": ""})
+        self.assertEqual(h.sent[0]["wifi"], {"available": True, "on": True, "ssid": "", "signal": None})
 
     def test_failing_clock_does_not_stop_the_others(self):
         h = Harness()

@@ -258,9 +258,9 @@ class MergeTest(unittest.TestCase):
               "bluetooth": {"available": True, "on": True}, "airplane": {"available": True, "on": False}}
 
     def test_full_merge_matches_the_spec_shape(self):
-        merged = merge_radio_state(self.RADIOS, {"available": True, "ssid": "Maison"},
+        merged = merge_radio_state(self.RADIOS, {"available": True, "ssid": "Maison", "signal": 72},
                                    {"available": True, "connected": ["Casque"]})
-        self.assertEqual(merged, {"wifi": {"available": True, "on": True, "ssid": "Maison"},
+        self.assertEqual(merged, {"wifi": {"available": True, "on": True, "ssid": "Maison", "signal": 72},
                                   "bluetooth": {"available": True, "on": True, "connected": ["Casque"]},
                                   "airplane": {"available": True, "on": False}})
 
@@ -270,6 +270,7 @@ class MergeTest(unittest.TestCase):
         merged = merge_radio_state(radios, {"available": True, "ssid": "Maison"},
                                    {"available": True, "connected": ["Casque"]})
         self.assertEqual(merged["wifi"]["ssid"], "")
+        self.assertIsNone(merged["wifi"]["signal"])
         self.assertEqual(merged["bluetooth"]["connected"], [])
 
     def test_unavailable_radios_make_the_three_tiles_unavailable(self):
@@ -281,8 +282,24 @@ class MergeTest(unittest.TestCase):
     def test_unavailable_or_missing_info_gives_empty_values(self):
         for wifi_info, bt_info in (({"available": False}, {"available": False}), (None, None)):
             merged = merge_radio_state(self.RADIOS, wifi_info, bt_info)
-            self.assertEqual(merged["wifi"], {"available": True, "on": True, "ssid": ""})
+            self.assertEqual(merged["wifi"], {"available": True, "on": True, "ssid": "", "signal": None})
             self.assertEqual(merged["bluetooth"], {"available": True, "on": True, "connected": []})
+
+    def test_signal_none_when_not_connected_or_missing(self):
+        for info in ({"available": True, "ssid": "", "signal": None}, {"available": True, "ssid": ""}):
+            self.assertIsNone(merge_radio_state(self.RADIOS, info, None)["wifi"]["signal"])
+
+    def test_signal_is_an_int_in_range(self):
+        for raw, expected in ((0, 0), (100, 100), (140, 100), (-3, 0), (55.9, 55), ("80", None), (True, None),
+                              (float("nan"), None)):
+            merged = merge_radio_state(self.RADIOS, {"available": True, "ssid": "x", "signal": raw}, None)
+            self.assertEqual(merged["wifi"]["signal"], expected, raw)
+            self.assertIsInstance(merged["wifi"]["signal"], (int, type(None)))
+
+    def test_wifi_without_radio_has_no_signal(self):
+        radios = dict(self.RADIOS, wifi={"available": False})
+        self.assertEqual(merge_radio_state(radios, {"available": True, "ssid": "x", "signal": 9}, None)["wifi"],
+                         {"available": False})
 
     def test_missing_radio_kind_stays_unavailable(self):
         radios = dict(self.RADIOS, bluetooth={"available": False})

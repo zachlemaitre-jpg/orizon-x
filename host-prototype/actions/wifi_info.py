@@ -1,10 +1,13 @@
-"""Wi-Fi SSID provider (spec Actions mode §3 `wifi_info`): the SSID of the connected wireless interface.
+"""Wi-Fi SSID and signal provider (spec Actions mode §3 `wifi_info`): the SSID and signal quality of the connected
+wireless interface.
 
 wlanapi.dll through ctypes: WlanOpenHandle, WlanEnumInterfaces, then WlanQueryInterface
 (wlan_intf_opcode_current_connection) on each interface whose state is connected; the first SSID wins, "" when
-none is connected. Read-only; the handle is closed and every WLAN buffer freed on each snapshot.
+none is connected. The same query gives wlanAssociationAttributes.wlanSignalQuality (0..100, the "bars"). Read-only;
+the handle is closed and every WLAN buffer freed on each snapshot.
 
-Snapshot: ``{"available": True, "ssid": str}``; ``{"available": False}`` without wlanapi.dll or when the WLAN
+Snapshot: ``{"available": True, "ssid": str, "signal": int | None}`` (signal 0..100, None when no interface is
+connected or the query is refused); ``{"available": False}`` without wlanapi.dll or when the WLAN
 AutoConfig service is not running (no Wi-Fi). Windows 11 24H2+ refuses the SSID (ERROR_ACCESS_DENIED) to apps that
 lack location permission: the SSID is then "". This provider has no action; the hub merges it with the radios
 provider (see actions.radios.merge_radio_state).
@@ -88,6 +91,11 @@ def ssid_bytes(attrs: WLAN_CONNECTION_ATTRIBUTES) -> bytes:
     return bytes(ssid.ucSSID[:min(int(ssid.uSSIDLength), DOT11_SSID_MAX_LENGTH)])
 
 
+def signal_quality(attrs: WLAN_CONNECTION_ATTRIBUTES) -> int:
+    """wlanSignalQuality of a WLAN_CONNECTION_ATTRIBUTES, clamped to 0..100."""
+    return max(0, min(100, int(attrs.wlanAssociationAttributes.wlanSignalQuality)))
+
+
 # --- couche wlanapi (injectable) ---
 
 class WlanLayer(Protocol):
@@ -97,8 +105,8 @@ class WlanLayer(Protocol):
     def enum_interfaces(self, handle: Any) -> list[tuple[Any, int]]:
         """[(interface GUID, WLAN_INTERFACE_STATE)]."""
 
-    def current_ssid(self, handle: Any, guid: Any) -> bytes:
-        """Raw SSID of the interface's current connection; WlanError on failure."""
+    def current_connection(self, handle: Any, guid: Any) -> tuple[bytes, int]:
+        """(raw SSID, signal quality 0..100) of the interface's current connection; WlanError on failure."""
 
     def close(self, handle: Any) -> None: ...
 
@@ -149,7 +157,7 @@ class CtypesWlan:
         finally:
             self._free(listing)
 
-    def current_ssid(self, handle: wintypes.HANDLE, guid: GUID) -> bytes:
+    def current_connection(self, handle: wintypes.HANDLE, guid: GUID) -> tuple[bytes, int]:
         size = wintypes.DWORD()
         data = ctypes.c_void_p()
         value_type = ctypes.c_int()
@@ -160,7 +168,8 @@ class CtypesWlan:
         try:
             if size.value < ctypes.sizeof(WLAN_CONNECTION_ATTRIBUTES):
                 raise WlanError("WlanQueryInterface (short buffer)", 0)
-            return ssid_bytes(WLAN_CONNECTION_ATTRIBUTES.from_address(data.value))
+            attrs = WLAN_CONNECTION_ATTRIBUTES.from_address(data.value)
+            return ssid_bytes(attrs), signal_quality(attrs)
         finally:
             self._free(data)
 
@@ -182,7 +191,7 @@ _DEFAULT = object()
 
 
 class WifiInfoProvider:
-    """SSID of the connected Wi-Fi interface (see the module docstring)."""
+    """SSID and signal quality of the connected Wi-Fi interface (see the module docstring)."""
 
     def __init__(self, wlan: Any = _DEFAULT) -> None:
         self._wlan: Optional[WlanLayer] = _default_wlan() if wlan is _DEFAULT else wlan
@@ -197,16 +206,20 @@ class WifiInfoProvider:
                 return {"available": False}  # WLAN AutoConfig service stopped: no Wi-Fi
             raise
         try:
+            signal: Optional[int] = None
             for guid, state in self._wlan.enum_interfaces(handle):
                 if state != WLAN_INTERFACE_STATE_CONNECTED:
                     continue
                 try:
-                    raw = self._wlan.current_ssid(handle, guid)
+                    raw, quality = self._wlan.current_connection(handle, guid)
                 except WlanError:
                     continue  # ERROR_ACCESS_DENIED without location permission, or just disconnected
                 if raw:
-                    return {"available": True, "ssid": raw.decode("utf-8", errors="replace")}
-            return {"available": True, "ssid": ""}
+                    return {"available": True, "ssid": raw.decode("utf-8", errors="replace"),
+                            "signal": max(0, min(100, int(quality)))}
+                if signal is None:  # connected, SSID hidden from us: keep the signal of the first such interface
+                    signal = max(0, min(100, int(quality)))
+            return {"available": True, "ssid": "", "signal": signal}
         finally:
             self._wlan.close(handle)
 

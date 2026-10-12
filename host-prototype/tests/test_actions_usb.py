@@ -87,6 +87,10 @@ class FakeUsbApi:
             return self.eject_results.pop(0)
         return self.eject_results[0]
 
+    def removable_media(self, device_path):
+        self._call("removable_media", device_path)
+        return self.drives[device_path[4]].get("removable", False)
+
     def startfile(self, path):
         self._call("startfile", path)
         self.opened.append(path)
@@ -128,7 +132,8 @@ class SnapshotTests(unittest.TestCase):
     def test_lists_usb_drives_with_label_and_space(self):
         api = FakeUsbApi(drives=this_pc(E=kingston()))
         self.assertEqual(provider(api).snapshot(), {"available": True, "drives": [
-            {"drive": "E:", "label": "KINGSTON", "free_bytes": 12884901888, "total_bytes": 31914983424}]})
+            {"drive": "E:", "label": "KINGSTON", "free_bytes": 12884901888, "total_bytes": 31914983424,
+             "kind": "stick"}]})
 
     def test_non_usb_drives_are_excluded(self):
         api = FakeUsbApi(drives=this_pc(
@@ -143,7 +148,33 @@ class SnapshotTests(unittest.TestCase):
     def test_usb_fixed_disk_is_listed(self):
         api = FakeUsbApi(drives=this_pc(H=kingston(type=usb.DRIVE_FIXED, label="", free=5, total=9)))
         self.assertEqual(provider(api).snapshot()["drives"],
-                         [{"drive": "H:", "label": "", "free_bytes": 5, "total_bytes": 9}])
+                         [{"drive": "H:", "label": "", "free_bytes": 5, "total_bytes": 9, "kind": "disk"}])
+
+    def kinds(self, **drives):
+        return {d["drive"]: d["kind"] for d in provider(FakeUsbApi(drives=this_pc(**drives))).snapshot()["drives"]}
+
+    def test_kind_removable_drive_type_is_a_stick(self):
+        self.assertEqual(self.kinds(E=kingston()), {"E:": "stick"})
+
+    def test_kind_fixed_drive_reporting_removable_media_is_a_stick(self):
+        self.assertEqual(self.kinds(E=kingston(type=usb.DRIVE_FIXED, removable=True)), {"E:": "stick"})
+
+    def test_kind_fixed_drive_with_fixed_media_is_a_disk(self):
+        self.assertEqual(self.kinds(H=kingston(type=usb.DRIVE_FIXED, removable=False)), {"H:": "disk"})
+
+    def test_kind_removable_drive_type_wins_over_descriptor(self):
+        self.assertEqual(self.kinds(E=kingston(removable=False)), {"E:": "stick"})
+
+    def test_kind_mixed_drives(self):
+        self.assertEqual(self.kinds(E=kingston(), H=kingston(type=usb.DRIVE_FIXED), G=kingston(
+            type=usb.DRIVE_FIXED, removable=True)), {"E:": "stick", "G:": "stick", "H:": "disk"})
+
+    def test_kind_descriptor_failure_on_fixed_drive_falls_back_to_disk(self):
+        api = FakeUsbApi(drives=this_pc(H=kingston(type=usb.DRIVE_FIXED, removable=True)),
+                         fail={"removable_media": 1})
+        self.assertEqual(provider(api).snapshot()["drives"],
+                         [dict(drive="H:", label="KINGSTON", free_bytes=12884901888, total_bytes=31914983424,
+                               kind="disk")])
 
     def test_drives_sorted_by_letter(self):
         api = FakeUsbApi(drives=this_pc(G=kingston(label="B"), E=kingston(label="A")))
@@ -366,6 +397,34 @@ class StructTests(unittest.TestCase):
             usb.parse_bus_type(buffer, 20)  # too short to hold BusType
 
 
+class RemovableMediaDescriptorTests(unittest.TestCase):
+    def descriptor(self, removable):
+        descriptor = usb.STORAGE_DEVICE_DESCRIPTOR()
+        descriptor.Version = descriptor.Size = 40
+        descriptor.RemovableMedia = removable
+        descriptor.BusType = usb.BusTypeUsb
+        return bytes(descriptor) + b"\0" * 100
+
+    def test_offset(self):
+        self.assertEqual(usb.STORAGE_DEVICE_DESCRIPTOR.RemovableMedia.offset, 10)
+
+    def test_parse_removable_media(self):
+        for flag, expected in ((1, True), (0, False)):
+            buffer = self.descriptor(flag)
+            self.assertIs(usb.parse_removable_media(buffer, len(buffer)), expected)
+
+    def test_parse_removable_media_reads_the_byte_at_offset_10(self):
+        raw = bytearray(40)
+        raw[10] = 1
+        self.assertTrue(usb.parse_removable_media(bytes(raw), 40))
+        raw[10], raw[9], raw[11] = 0, 1, 1  # neighbours (DeviceTypeModifier, CommandQueueing) do not count
+        self.assertFalse(usb.parse_removable_media(bytes(raw), 40))
+
+    def test_parse_removable_media_too_short(self):
+        with self.assertRaises(UsbError):
+            usb.parse_removable_media(self.descriptor(1), 10)
+
+
 @unittest.skipUnless(os.name == "nt", "Windows only")
 class RealWindowsReadOnlyTests(unittest.TestCase):
     """Read-only: lists this PC's drives. Never opens, never ejects."""
@@ -377,6 +436,7 @@ class RealWindowsReadOnlyTests(unittest.TestCase):
             self.assertRegex(drive["drive"], r"^[A-Z]:$")
             self.assertIsInstance(drive["label"], str)
             self.assertLessEqual(drive["free_bytes"], drive["total_bytes"])
+            self.assertIn(drive["kind"], ("stick", "disk"))
 
     def test_system_drive_is_not_usb(self):
         system = os.environ.get("SystemDrive", "C:")

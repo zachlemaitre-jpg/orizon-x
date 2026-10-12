@@ -1,7 +1,9 @@
 """USB drives provider for the Actions mode: lists USB drives, opens one in Explorer, ejects one safely.
 
 Snapshot shape: `snapshot()` returns `{"available": True, "drives": [...]}`, one entry per drive sorted by letter:
-`{"drive": "E:", "label": "KINGSTON", "free_bytes": 12884901888, "total_bytes": 31914983424}`. The wire state
+`{"drive": "E:", "label": "KINGSTON", "free_bytes": 12884901888, "total_bytes": 31914983424, "kind": "stick"}`.
+"kind" is "stick" for removable media (GetDriveTypeW = DRIVE_REMOVABLE, or STORAGE_DEVICE_DESCRIPTOR.RemovableMedia
+set) and "disk" for a USB fixed disk (external HDD/SSD). The wire state
 (spec §2.1) carries the bare list under "usb", so the hub puts `snapshot()["drives"]` there (an empty list when the
 provider is unavailable or raised). `snapshot()` raises UsbError (a ProviderError) only when the drive list itself
 cannot be read.
@@ -144,6 +146,7 @@ class UsbApi(Protocol):
     def logical_drives(self) -> int: ...
     def drive_type(self, root: str) -> int: ...
     def bus_type(self, device_path: str) -> int: ...
+    def removable_media(self, device_path: str) -> bool: ...                # STORAGE_DEVICE_DESCRIPTOR.RemovableMedia
     def volume_label(self, root: str) -> str: ...
     def disk_space(self, root: str) -> tuple[int, int]: ...                 # (free for the caller, total)
     def device_number(self, path: str) -> tuple[int, int, int]: ...         # (device type, number, partition)
@@ -178,7 +181,8 @@ class UsbProvider:
                 label = self._api.volume_label(root)
             except (UsbError, OSError):
                 label = ""
-            drives.append({"drive": f"{letter}:", "label": label, "free_bytes": int(free), "total_bytes": int(total)})
+            drives.append({"drive": f"{letter}:", "label": label, "free_bytes": int(free), "total_bytes": int(total),
+                           "kind": self._kind(letter, root)})
         return {"available": True, "drives": drives}
 
     def handle(self, action: dict) -> str | None:
@@ -203,6 +207,15 @@ class UsbProvider:
             return self._api.bus_type(volume_path(letter)) == BusTypeUsb
         except (UsbError, OSError):
             return False
+
+    def _kind(self, letter: str, root: str) -> str:
+        """"stick" when the drive is removable media, "disk" for a USB fixed disk."""
+        try:
+            if self._api.drive_type(root) == DRIVE_REMOVABLE:
+                return "stick"
+            return "stick" if self._api.removable_media(volume_path(letter)) else "disk"
+        except (UsbError, OSError):
+            return "disk"  # unreadable descriptor on a fixed drive: the safer reading
 
     def _open(self, letter: str) -> str | None:
         try:
@@ -301,6 +314,14 @@ def parse_bus_type(data: bytes, length: int) -> int:
     if length < offset + 4 or len(data) < offset + 4:
         raise UsbError("IOCTL_STORAGE_QUERY_PROPERTY", None, f"descriptor too short ({length} bytes)")
     return struct.unpack_from("<I", data, offset)[0]
+
+
+def parse_removable_media(data: bytes, length: int) -> bool:
+    """RemovableMedia out of the STORAGE_DEVICE_DESCRIPTOR returned by IOCTL_STORAGE_QUERY_PROPERTY."""
+    offset = STORAGE_DEVICE_DESCRIPTOR.RemovableMedia.offset
+    if length < offset + 1 or len(data) < offset + 1:
+        raise UsbError("IOCTL_STORAGE_QUERY_PROPERTY", None, f"descriptor too short ({length} bytes)")
+    return data[offset] != 0
 
 
 StorageDeviceProperty = 0
@@ -409,6 +430,14 @@ class Win32UsbApi:
         return free.value, total.value
 
     def bus_type(self, device_path: str) -> int:
+        data, length = self._device_descriptor(device_path)
+        return parse_bus_type(data, length)
+
+    def removable_media(self, device_path: str) -> bool:
+        data, length = self._device_descriptor(device_path)
+        return parse_removable_media(data, length)
+
+    def _device_descriptor(self, device_path: str) -> tuple[bytes, int]:
         from ctypes import wintypes
 
         query = STORAGE_PROPERTY_QUERY(StorageDeviceProperty, PropertyStandardQuery)
@@ -417,7 +446,7 @@ class Win32UsbApi:
         with self._open(device_path) as h:
             self._ioctl(h, "IOCTL_STORAGE_QUERY_PROPERTY", IOCTL_STORAGE_QUERY_PROPERTY, ctypes.byref(query),
                         ctypes.sizeof(query), buffer, DESCRIPTOR_BUFFER, returned)
-        return parse_bus_type(buffer.raw, returned.value)
+        return buffer.raw, returned.value
 
     def device_number(self, path: str) -> tuple[int, int, int]:
         from ctypes import wintypes

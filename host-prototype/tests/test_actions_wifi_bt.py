@@ -16,7 +16,7 @@ GUID_B = "{00000000-0000-0000-0000-00000000000b}"
 
 
 class FakeWlan:
-    """wlanapi stand-in: interfaces = [(guid, state)], ssids = {guid: bytes | WlanError}."""
+    """wlanapi stand-in: interfaces = [(guid, state)], ssids = {guid: bytes | (bytes, quality) | WlanError}."""
 
     def __init__(self, interfaces=(), ssids=None, open_error=None):
         self.interfaces = list(interfaces)
@@ -36,13 +36,13 @@ class FakeWlan:
         assert handle == "H"
         return list(self.interfaces)
 
-    def current_ssid(self, handle, guid):
+    def current_connection(self, handle, guid):
         assert handle == "H"
         self.queried.append(guid)
         value = self.ssids[guid]
         if isinstance(value, Exception):
             raise value
-        return value
+        return value if isinstance(value, tuple) else (value, 50)
 
     def close(self, handle):
         assert handle == "H"
@@ -55,11 +55,11 @@ CONNECTED, DISCONNECTED = wifi_info.WLAN_INTERFACE_STATE_CONNECTED, 4
 class WifiInfoTest(unittest.TestCase):
     def test_ssid_of_the_connected_interface(self):
         wlan = FakeWlan([(GUID_A, CONNECTED)], {GUID_A: b"Maison"})
-        self.assertEqual(WifiInfoProvider(wlan).snapshot(), {"available": True, "ssid": "Maison"})
+        self.assertEqual(WifiInfoProvider(wlan).snapshot(), {"available": True, "ssid": "Maison", "signal": 50})
         self.assertEqual((wlan.opened, wlan.closed), (1, 1))
 
     def test_no_interface_gives_empty_ssid(self):
-        self.assertEqual(WifiInfoProvider(FakeWlan()).snapshot(), {"available": True, "ssid": ""})
+        self.assertEqual(WifiInfoProvider(FakeWlan()).snapshot(), {"available": True, "ssid": "", "signal": None})
 
     def test_disconnected_interface_is_not_queried(self):
         wlan = FakeWlan([(GUID_A, DISCONNECTED)], {GUID_A: b"Old"})
@@ -73,13 +73,35 @@ class WifiInfoTest(unittest.TestCase):
     def test_query_refused_gives_empty_ssid_and_still_closes(self):
         # Windows 11 24H2+ : sans l'autorisation de localisation, WlanQueryInterface renvoie ERROR_ACCESS_DENIED.
         wlan = FakeWlan([(GUID_A, CONNECTED)], {GUID_A: WlanError("WlanQueryInterface", 5)})
-        self.assertEqual(WifiInfoProvider(wlan).snapshot(), {"available": True, "ssid": ""})
+        self.assertEqual(WifiInfoProvider(wlan).snapshot(), {"available": True, "ssid": "", "signal": None})
         self.assertEqual(wlan.closed, 1)
 
     def test_query_refused_on_one_interface_tries_the_next(self):
         wlan = FakeWlan([(GUID_A, CONNECTED), (GUID_B, CONNECTED)],
                         {GUID_A: WlanError("WlanQueryInterface", 5), GUID_B: b"Bureau"})
         self.assertEqual(WifiInfoProvider(wlan).snapshot()["ssid"], "Bureau")
+
+    def test_signal_quality_of_the_connected_interface(self):
+        wlan = FakeWlan([(GUID_A, CONNECTED)], {GUID_A: (b"Maison", 83)})
+        self.assertEqual(WifiInfoProvider(wlan).snapshot(), {"available": True, "ssid": "Maison", "signal": 83})
+
+    def test_signal_extremes_and_out_of_range_are_clamped(self):
+        for quality, expected in ((0, 0), (100, 100), (250, 100), (-5, 0)):
+            wlan = FakeWlan([(GUID_A, CONNECTED)], {GUID_A: (b"Maison", quality)})
+            self.assertEqual(WifiInfoProvider(wlan).snapshot()["signal"], expected)
+
+    def test_signal_comes_from_the_interface_whose_ssid_is_used(self):
+        wlan = FakeWlan([(GUID_A, CONNECTED), (GUID_B, CONNECTED)],
+                        {GUID_A: WlanError("WlanQueryInterface", 5), GUID_B: (b"Bureau", 61)})
+        self.assertEqual(WifiInfoProvider(wlan).snapshot()["signal"], 61)
+
+    def test_hidden_ssid_keeps_the_signal(self):
+        wlan = FakeWlan([(GUID_A, CONNECTED)], {GUID_A: (b"", 40)})
+        self.assertEqual(WifiInfoProvider(wlan).snapshot(), {"available": True, "ssid": "", "signal": 40})
+
+    def test_disconnected_interface_has_no_signal(self):
+        wlan = FakeWlan([(GUID_A, DISCONNECTED)], {GUID_A: (b"Old", 90)})
+        self.assertIsNone(WifiInfoProvider(wlan).snapshot()["signal"])
 
     def test_utf8_ssid_and_invalid_bytes(self):
         wlan = FakeWlan([(GUID_A, CONNECTED)], {GUID_A: "Café".encode()})
@@ -132,6 +154,23 @@ class WlanStructTest(unittest.TestCase):
         self.assertEqual(ctypes.sizeof(assoc), 36 + 4 + 6 + 2 + 4 * 5)
         self.assertEqual(ctypes.sizeof(attrs), 520 + ctypes.sizeof(assoc) + 16)
         self.assertEqual(ctypes.sizeof(wifi_info.WLAN_INTERFACE_INFO), 16 + 512 + 4)
+
+    def test_signal_quality_offset_and_value(self):
+        # wlanSignalQuality: after dot11Ssid (36) + BssType (4) + Bssid (6, padded to 8) + PhyType (4) + PhyIndex (4)
+        assoc = wifi_info.WLAN_ASSOCIATION_ATTRIBUTES
+        self.assertEqual(assoc.wlanSignalQuality.offset, 36 + 4 + 8 + 4 + 4)
+        self.assertEqual(assoc.ulRxRate.offset, assoc.wlanSignalQuality.offset + 4)
+        attrs = wifi_info.WLAN_CONNECTION_ATTRIBUTES()
+        raw = bytearray(ctypes.sizeof(attrs))
+        raw[520 + 56:520 + 60] = (77).to_bytes(4, "little")
+        ctypes.memmove(ctypes.addressof(attrs), bytes(raw), len(raw))
+        self.assertEqual(attrs.wlanAssociationAttributes.wlanSignalQuality, 77)
+        self.assertEqual(wifi_info.signal_quality(attrs), 77)
+
+    def test_signal_quality_clamps(self):
+        attrs = wifi_info.WLAN_CONNECTION_ATTRIBUTES()
+        attrs.wlanAssociationAttributes.wlanSignalQuality = 4000
+        self.assertEqual(wifi_info.signal_quality(attrs), 100)
 
     def test_ssid_bytes_uses_the_length(self):
         attrs = wifi_info.WLAN_CONNECTION_ATTRIBUTES()

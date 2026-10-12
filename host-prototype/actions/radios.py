@@ -29,7 +29,7 @@ to a top-level key by itself, so the hub must NOT put their snapshots under "rad
           "airplane": {"available": bool, "on": bool}}    # {"available": False} when there is no radio at all
 
      or ``{"available": False}`` without WinRT.
-   * ``WifiInfoProvider().snapshot()`` (actions.wifi_info): ``{"available": True, "ssid": str}`` or
+   * ``WifiInfoProvider().snapshot()`` (actions.wifi_info): ``{"available": True, "ssid": str, "signal": int | None}`` or
      ``{"available": False}``.
    * ``BluetoothInfoProvider().snapshot()`` (actions.bt_info): ``{"available": True, "connected": [str]}`` or
      ``{"available": False}``.
@@ -38,13 +38,15 @@ to a top-level key by itself, so the hub must NOT put their snapshots under "rad
    a provider it does not have) and copies the three keys of the result into the state::
 
        state.update(merge_radio_state(radios_snap, wifi_snap, bt_snap))
-       # -> state["wifi"]      = {"available": True, "on": bool, "ssid": str}       or {"available": False}
+       # -> state["wifi"]      = {"available": True, "on": bool, "ssid": str, "signal": int | None}
+       #                         or {"available": False}
        #    state["bluetooth"] = {"available": True, "on": bool, "connected": [str]} or {"available": False}
        #    state["airplane"]  = {"available": True, "on": bool}                    or {"available": False}
 
    Every object always carries "available". Radios unavailable -> the three objects are ``{"available": False}``
-   whatever the two others say. wifi_info / bt_info unavailable or missing -> ``ssid`` "" / ``connected`` [].
-   ``ssid`` and ``connected`` are also "" / [] while their radio is off (stale values are not shown).
+   whatever the two others say. wifi_info / bt_info unavailable or missing -> ``ssid`` "" / ``signal`` None /
+   ``connected`` []. ``ssid``, ``signal`` and ``connected`` are also "" / None / [] while their radio is off (stale
+   values are not shown). ``signal`` is the Wi-Fi signal quality 0..100, None when not connected.
 
 3. Actions ``wifi.set``, ``bluetooth.set`` and ``airplane.set`` all go to this provider; wifi_info and bt_info have
    no action (they log and ignore any id). After any of them the hub re-polls the three snapshots.
@@ -259,16 +261,25 @@ class RadiosProvider:
         return None
 
 
+def _signal(value: Any) -> Optional[int]:
+    """A Wi-Fi signal quality as an int 0..100, None for anything that is not a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        return None
+    return max(0, min(100, int(value)))
+
+
 def merge_radio_state(radios: Optional[dict], wifi_info: Optional[dict], bt_info: Optional[dict]) -> dict:
     """The "wifi", "bluetooth" and "airplane" parts of ACTIONS_STATE from the three providers' snapshots.
 
-    ssid / connected are filled only while the radio is on (else "" / []); unavailable inputs are tolerated."""
+    ssid / signal / connected are filled only while the radio is on (else "" / None / []); unavailable inputs are
+    tolerated. signal is wifi_info's 0..100 signal quality, None when not connected."""
     if not radios or not radios.get("available"):
         return {"wifi": {"available": False}, "bluetooth": {"available": False}, "airplane": {"available": False}}
     wifi = dict(radios.get("wifi") or {"available": False})
     if wifi.get("available"):
         ok = bool(wifi_info and wifi_info.get("available") and wifi.get("on"))
         wifi["ssid"] = str(wifi_info.get("ssid", "")) if ok else ""
+        wifi["signal"] = _signal(wifi_info.get("signal")) if ok else None
     bluetooth = dict(radios.get("bluetooth") or {"available": False})
     if bluetooth.get("available"):
         ok = bool(bt_info and bt_info.get("available") and bluetooth.get("on"))

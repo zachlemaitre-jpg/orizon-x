@@ -55,14 +55,16 @@ Les ajouts sont **rétrocompatibles** : un ancien PC ignore les types inconnus, 
  "audio":{"available":true,"volume":0.42,"muted":false},
  "media":{"available":true},
  "brightness":{"available":true,"value":0.70},
- "wifi":{"available":true,"on":true,"ssid":"Maison"},
+ "wifi":{"available":true,"on":true,"ssid":"Maison","signal":72},
  "bluetooth":{"available":true,"on":true,"connected":["Casque"]},
  "airplane":{"available":true,"on":false},
- "usb":[{"drive":"E:","label":"KINGSTON","free_bytes":12884901888,"total_bytes":31914983424}],
+ "usb":[{"drive":"E:","label":"KINGSTON","free_bytes":12884901888,"total_bytes":31914983424,"kind":"stick"}],
  "notice":{"code":"usb_busy","drive":"E:"}}
 ```
 
 - `available: false` fait disparaître la tuile côté appareil.
+- `wifi.signal` : qualité du signal Wi-Fi, entier 0..100 (`wlanSignalQuality`), `null` quand le PC n'est pas connecté à un réseau ou que le Wi-Fi est coupé. Les anciens PC qui n'envoient pas la clé sont lus comme `null`.
+- `usb[].kind` : `"stick"` pour un support amovible (clé USB : `DRIVE_REMOVABLE` ou `RemovableMedia` vrai dans le descripteur de stockage), `"disk"` pour un disque USB fixe (HDD/SSD externe). Une valeur absente ou inconnue est lue comme `"stick"`.
 - `notice` est facultatif et n'est envoyé qu'**une fois** : c'est un message ponctuel. Codes possibles : `usb_busy`, `usb_failed`, `radio_denied`, `action_failed`.
 
 ### 2.2 `ACTION`
@@ -99,9 +101,9 @@ class Provider(Protocol):
 | `media` | `SendInput` avec `VK_MEDIA_PLAY_PAUSE` / `NEXT_TRACK` / `PREV_TRACK` (ctypes) |
 | `brightness` | WMI `root\wmi` `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods.WmiSetBrightness` via `comtypes`. Repli DDC/CI (`dxva2`, VCP 0x10) pour les écrans externes. Indisponible si aucun des deux ne répond |
 | `radios` | WinRT `Windows.Devices.Radios` (paquets `winrt-*`) : radios Wi-Fi et Bluetooth, `SetStateAsync`. Mode avion = toutes les radios. Statut ≠ Allowed → `radio_denied` |
-| `wifi_info` | `wlanapi.dll` (`WlanOpenHandle`, `WlanEnumInterfaces`, `WlanQueryInterface` `wlan_intf_opcode_current_connection`) pour le SSID |
+| `wifi_info` | `wlanapi.dll` (`WlanOpenHandle`, `WlanEnumInterfaces`, `WlanQueryInterface` `wlan_intf_opcode_current_connection`) pour le SSID et la qualité du signal (`wlanAssociationAttributes.wlanSignalQuality`, 0..100) |
 | `bt_info` | WinRT `Windows.Devices.Enumeration` : appareils Bluetooth et BLE connectés (propriété `System.Devices.Aep.IsConnected`) |
-| `usb` | `GetLogicalDrives` + type de bus USB (`IOCTL_STORAGE_QUERY_PROPERTY`), libellé et espace (`GetVolumeInformationW`, `GetDiskFreeSpaceExW`). Ouverture : `os.startfile`. Éjection : `CM_Request_Device_EjectW` sur le disque parent (cfgmgr32), avec `PNP_VetoType` pour détecter une clé occupée → `usb_busy` |
+| `usb` | `GetLogicalDrives` + type de bus USB (`IOCTL_STORAGE_QUERY_PROPERTY`), type de support : `kind` « stick » si `DRIVE_REMOVABLE` ou `RemovableMedia` du `STORAGE_DEVICE_DESCRIPTOR`, sinon « disk » ; libellé et espace (`GetVolumeInformationW`, `GetDiskFreeSpaceExW`). Ouverture : `os.startfile`. Éjection : `CM_Request_Device_EjectW` sur le disque parent (cfgmgr32), avec `PNP_VetoType` pour détecter une clé occupée → `usb_busy` |
 
 **`actions/hub.py` (`ActionsHub`)** :
 - un thread qui interroge les fournisseurs toutes les **250 ms** pour l'audio et toutes les **1 s** pour le reste ;
