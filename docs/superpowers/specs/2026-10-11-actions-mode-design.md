@@ -193,3 +193,7 @@ Le nom de l'app vient de `source_app_user_model_id`, traduit en nom lisible (Spo
 - le titre, l'artiste, l'album et l'app ;
 - les boutons précédent / lecture-pause / suivant, qui passent de la carte Son à ce bloc ; le bouton lecture-pause reflète `playing`.
 - Quand le bloc est absent, les boutons médias restent dans la carte Son.
+
+## 8. Écarté : éclairage nocturne et économiseur de batterie (2026-10-12)
+
+L'exploration `docs/notes/nightlight-batterysaver.md` a montré que Windows ne fournit aucune API publique pour basculer ces deux réglages sans droits admin. Les seules voies passent par des écritures non documentées, fragiles d'une version de Windows à l'autre. L'utilisateur a donc renoncé aux deux tuiles. Les icônes `affichage_nocturne` et `economie_batterie` restent dans `extended/icons/` sans être utilisées.
