@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -53,17 +54,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -83,16 +83,21 @@ import com.orizonx.client.R
 import com.orizonx.client.actions.ActionMessages
 import com.orizonx.client.actions.ActionThrottle
 import com.orizonx.client.actions.ActionsFormat
+import com.orizonx.client.actions.ActionsIcons
 import com.orizonx.client.actions.ActionsState
 import com.orizonx.client.actions.AirplaneState
 import com.orizonx.client.actions.AudioState
 import com.orizonx.client.actions.BatteryLevel
 import com.orizonx.client.actions.BatteryState
 import com.orizonx.client.actions.BluetoothState
+import com.orizonx.client.actions.BrightnessIcon
 import com.orizonx.client.actions.BrightnessState
 import com.orizonx.client.actions.ClockState
 import com.orizonx.client.actions.NowPlaying
 import com.orizonx.client.actions.UsbDrive
+import com.orizonx.client.actions.UsbKind
+import com.orizonx.client.actions.VolumeIcon
+import com.orizonx.client.actions.WifiIcon
 import com.orizonx.client.actions.WifiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -391,18 +396,46 @@ private fun ClockDigits(text: String, sizeSp: Float, color: Color, modifier: Mod
     }
 }
 
-/** White Material icon from [res], tinted; [alpha] dims it. */
+/** Orizon X pictogram from [res] (white vector), tinted with [tint]; [alpha] dims it. */
 @Composable
-private fun Picto(res: Int, size: Dp, alpha: Float = 1f, modifier: Modifier = Modifier) {
+private fun Picto(res: Int, size: Dp, alpha: Float = 1f, modifier: Modifier = Modifier, tint: Color = Color.White) {
     Image(
         painterResource(res),
         contentDescription = null,
         modifier = modifier.size(size),
-        colorFilter = ColorFilter.tint(Color.White.copy(alpha = alpha)),
+        colorFilter = ColorFilter.tint(tint.copy(alpha = tint.alpha * alpha)),
     )
 }
 
-/** Battery drawn with a Canvas: outline, terminal nub, proportional fill and the percentage inside; a bolt when charging. */
+private fun volumeRes(audio: AudioState): Int = when (ActionsIcons.volume(audio.volume, audio.muted)) {
+    VolumeIcon.MUTE -> R.drawable.ox_mute
+    VolumeIcon.LOW -> R.drawable.ox_son_1
+    VolumeIcon.MEDIUM -> R.drawable.ox_son_2
+    VolumeIcon.HIGH -> R.drawable.ox_son_3
+}
+
+private fun brightnessRes(brightness: BrightnessState): Int = when (ActionsIcons.brightness(brightness.value)) {
+    BrightnessIcon.NONE -> R.drawable.ox_no_lum
+    BrightnessIcon.LOW -> R.drawable.ox_lum_1
+    BrightnessIcon.MEDIUM -> R.drawable.ox_lum_2
+    BrightnessIcon.HIGH -> R.drawable.ox_lum_3
+}
+
+private fun wifiRes(wifi: WifiState): Int = when (ActionsIcons.wifi(wifi.on, wifi.signal)) {
+    WifiIcon.WEAK -> R.drawable.ox_wifi_1
+    WifiIcon.MEDIUM -> R.drawable.ox_wifi_2
+    WifiIcon.STRONG -> R.drawable.ox_wifi_3
+}
+
+private fun usbRes(kind: UsbKind): Int = when (kind) {
+    UsbKind.STICK -> R.drawable.ox_cle_usb
+    UsbKind.DISK -> R.drawable.ox_externe
+}
+
+/**
+ * Battery: the ox_batterie shape is the body; its left part is filled in green / amber / red in proportion to the charge
+ * (clipped to the shape), the rest stays dim. The percentage sits inside; ox_charge is the bolt when charging.
+ */
 @Composable
 private fun BatteryPicto(battery: BatteryState) {
     val fillColor = when (ActionsFormat.batteryLevel(battery.percent)) {
@@ -411,35 +444,31 @@ private fun BatteryPicto(battery: BatteryState) {
         BatteryLevel.CRITICAL -> BatteryRed
     }
     val fraction = ActionsFormat.batteryFill(battery.percent)
+    val shape = painterResource(R.drawable.ox_batterie)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(width = 76.dp, height = 32.dp), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.fillMaxSize()) {
-                val nubW = 4.dp.toPx()
-                val stroke = 2.dp.toPx()
-                val bodyW = size.width - nubW
-                val outline = Color.White.copy(alpha = 0.85f)
-                drawRoundRect(
-                    outline,
-                    topLeft = Offset(stroke / 2, stroke / 2),
-                    size = Size(bodyW - stroke, size.height - stroke),
-                    cornerRadius = CornerRadius(8.dp.toPx()),
-                    style = Stroke(stroke),
-                )
-                drawRoundRect(
-                    outline,
-                    topLeft = Offset(bodyW, size.height * 0.32f),
-                    size = Size(nubW, size.height * 0.36f),
-                    cornerRadius = CornerRadius(1.5.dp.toPx()),
-                )
-                val pad = stroke + 1.5.dp.toPx()
-                val innerW = bodyW - 2 * pad
-                val fillW = if (fraction > 0f) (innerW * fraction).coerceAtLeast(6.dp.toPx()) else 0f
-                if (fillW > 0f) {
-                    drawRoundRect(
-                        fillColor.copy(alpha = 0.9f),
-                        topLeft = Offset(pad, pad),
-                        size = Size(fillW, size.height - 2 * pad),
-                        cornerRadius = CornerRadius(5.dp.toPx()),
+        // The vector is a 48x48 square whose body spans x 2.46..45.55 and y 12.46..35.54: draw it larger than its box.
+        val bodyW = 68.dp
+        val bodyH = bodyW * (BATTERY_BODY_H / BATTERY_BODY_W)
+        Box(Modifier.size(width = bodyW, height = bodyH), contentAlignment = Alignment.Center) {
+            Canvas(
+                Modifier
+                    .requiredSize(bodyW * (BATTERY_VIEWPORT / BATTERY_BODY_W))
+                    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen),
+            ) {
+                with(shape) { draw(size) }
+                val k = size.width / BATTERY_VIEWPORT
+                val left = BATTERY_BODY_X * k
+                val top = BATTERY_BODY_Y * k
+                val width = BATTERY_BODY_W * k
+                val height = BATTERY_BODY_H * k
+                // SrcIn recolours only where the shape was drawn: the whole body dim, then the charged part coloured.
+                drawRect(Color.White.copy(alpha = 0.28f), Offset(left, top), Size(width, height), blendMode = BlendMode.SrcIn)
+                if (fraction > 0f) {
+                    drawRect(
+                        fillColor.copy(alpha = 0.95f),
+                        Offset(left, top),
+                        Size(width * fraction.coerceAtLeast(0.14f), height),
+                        blendMode = BlendMode.SrcIn,
                     )
                 }
             }
@@ -452,71 +481,23 @@ private fun BatteryPicto(battery: BatteryState) {
                     fontFeatureSettings = "tnum",
                     shadow = Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 3f),
                 ),
-                modifier = Modifier.padding(end = 4.dp),
                 maxLines = 1,
                 softWrap = false,
             )
         }
         if (battery.charging) {
             Spacer(Modifier.width(6.dp))
-            BoltIcon(Modifier.size(width = 14.dp, height = 24.dp))
+            Picto(R.drawable.ox_charge, 28.dp, tint = Amber)
         }
     }
 }
 
-@Composable
-private fun BoltIcon(modifier: Modifier) {
-    Canvas(modifier) {
-        val w = size.width
-        val h = size.height
-        val bolt = Path().apply {
-            moveTo(0.62f * w, 0f)
-            lineTo(0.05f * w, 0.56f * h)
-            lineTo(0.45f * w, 0.56f * h)
-            lineTo(0.30f * w, h)
-            lineTo(0.95f * w, 0.40f * h)
-            lineTo(0.55f * w, 0.40f * h)
-            close()
-        }
-        drawPath(bolt, Amber)
-    }
-}
-
-/** Speaker with sound waves; with a diagonal slash when [muted]. */
-@Composable
-private fun SpeakerIcon(muted: Boolean, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val u = size.minDimension / 24f
-        val body = Path().apply {
-            moveTo(3f * u, 9f * u)
-            lineTo(7f * u, 9f * u)
-            lineTo(12.5f * u, 4.5f * u)
-            lineTo(12.5f * u, 19.5f * u)
-            lineTo(7f * u, 15f * u)
-            lineTo(3f * u, 15f * u)
-            close()
-        }
-        drawPath(body, tint)
-        if (muted) {
-            val from = Offset(3.5f * u, 3.5f * u)
-            val to = Offset(20.5f * u, 20.5f * u)
-            drawLine(Color.Black.copy(alpha = 0.35f), from, to, strokeWidth = 4.6f * u, cap = StrokeCap.Round)
-            drawLine(tint, from, to, strokeWidth = 2.4f * u, cap = StrokeCap.Round)
-        } else {
-            for (r in listOf(4.5f, 8.5f)) {
-                drawArc(
-                    tint,
-                    startAngle = -50f,
-                    sweepAngle = 100f,
-                    useCenter = false,
-                    topLeft = Offset((11f - r) * u, (12f - r) * u),
-                    size = Size(2 * r * u, 2 * r * u),
-                    style = Stroke(1.9f * u, cap = StrokeCap.Round),
-                )
-            }
-        }
-    }
-}
+// Geometry of ox_batterie.xml (viewport units).
+private const val BATTERY_VIEWPORT = 48f
+private const val BATTERY_BODY_X = 2.46f
+private const val BATTERY_BODY_Y = 12.46f
+private const val BATTERY_BODY_W = 43.09f
+private const val BATTERY_BODY_H = 23.08f
 
 // --- Cards ---------------------------------------------------------------------------------
 
@@ -532,7 +513,11 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
     val muted = audio?.muted == true
     GlassCard(modifier) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            SpeakerIcon(muted, if (muted) MuteRed else Color.White, Modifier.size(24.dp))
+            Picto(
+                if (audio != null) volumeRes(audio) else R.drawable.ox_son_3,
+                28.dp,
+                tint = if (muted) MuteRed else Color.White,
+            )
             Spacer(Modifier.width(8.dp))
             GlassText("Son", size = 16.sp, weight = FontWeight.SemiBold)
             if (audio != null && !keys) {
@@ -543,7 +528,7 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
         if (audio != null && !keys) {
             if (stretch) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                MuteButton(audio.muted, compact = true, onClick = {
+                MuteButton(audio, compact = true, onClick = {
                     c.tap()
                     c.update { copy(audio = AudioState(audio.volume, !audio.muted)) }
                     c.send(ActionMessages.volumeMute(!audio.muted))
@@ -568,7 +553,7 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
             if (stretch) Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (audio != null) {
-                    MuteButton(audio.muted, onClick = {
+                    MuteButton(audio, onClick = {
                         c.tap()
                         c.update { copy(audio = AudioState(audio.volume, !audio.muted)) }
                         c.send(ActionMessages.volumeMute(!audio.muted))
@@ -625,13 +610,13 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                 if (now.app.isNotBlank()) OneLine(now.app, 12.sp, FontWeight.Normal, 0.55f)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RoundIconKey(R.drawable.ic_action_skip_previous) { c.tap(); c.send(ActionMessages.mediaPrevious()) }
-                    RoundIconKey(if (now.playing) R.drawable.ic_action_pause else R.drawable.ic_action_play) {
+                    RoundIconKey(R.drawable.ox_next_left) { c.tap(); c.send(ActionMessages.mediaPrevious()) }
+                    RoundIconKey(if (now.playing) R.drawable.ox_pause else R.drawable.ox_play) {
                         c.tap()
                         c.update { copy(nowPlaying = nowPlaying?.copy(playing = !now.playing)) }
                         c.send(ActionMessages.mediaPlayPause())
                     }
-                    RoundIconKey(R.drawable.ic_action_skip_next) { c.tap(); c.send(ActionMessages.mediaNext()) }
+                    RoundIconKey(R.drawable.ox_next_right) { c.tap(); c.send(ActionMessages.mediaNext()) }
                 }
             }
         }
@@ -653,7 +638,7 @@ private fun OneLine(text: String, size: androidx.compose.ui.unit.TextUnit, weigh
 private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
     GlassCard(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Picto(R.drawable.ic_action_brightness, 24.dp)
+            Picto(brightnessRes(brightness), 28.dp)
             Spacer(Modifier.width(8.dp))
             GlassText("Luminosité", size = 16.sp, weight = FontWeight.SemiBold)
         }
@@ -683,14 +668,14 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
 private fun RadioTiles(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         state.wifi?.let { wifi: WifiState ->
-            Tile(R.drawable.ic_action_wifi, "Wi-Fi", wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f).fillMaxHeight()) {
+            Tile(wifiRes(wifi), "Wi-Fi", wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
-                c.update { copy(wifi = WifiState(!wifi.on, wifi.ssid)) }
+                c.update { copy(wifi = wifi.copy(on = !wifi.on)) }
                 c.send(ActionMessages.wifiSet(!wifi.on))
             }
         }
         state.bluetooth?.let { bt: BluetoothState ->
-            Tile(R.drawable.ic_action_bluetooth, "Bluetooth", bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f).fillMaxHeight()) {
+            Tile(R.drawable.ox_bluetooth, "Bluetooth", bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(bluetooth = BluetoothState(!bt.on, bt.connected)) }
                 c.send(ActionMessages.bluetoothSet(!bt.on))
@@ -723,7 +708,7 @@ private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier)
             .padding(start = 14.dp, end = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Picto(R.drawable.ic_action_usb, 28.dp, alpha = 0.9f)
+        Picto(usbRes(drive.kind), 28.dp, alpha = 0.9f)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
             BasicText(
@@ -742,12 +727,12 @@ private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier)
             }
         }
         Spacer(Modifier.width(6.dp))
-        ChipIconButton(R.drawable.ic_action_folder_open, "Ouvrir ${drive.drive}") {
+        ChipIconButton(R.drawable.ox_dossier, "Ouvrir ${drive.drive}") {
             c.tap()
             c.send(ActionMessages.usbOpen(drive.drive))
         }
         Spacer(Modifier.width(6.dp))
-        ChipIconButton(R.drawable.ic_action_eject, "Éjecter ${drive.drive}") {
+        ChipIconButton(R.drawable.ox_eject, "Éjecter ${drive.drive}") {
             c.tap()
             c.send(ActionMessages.usbEject(drive.drive))
         }
@@ -789,11 +774,12 @@ private fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier:
 }
 
 /**
- * Speaker toggle: red tint, slashed speaker and the label "Muet" when muted; plain "Son" otherwise.
+ * Speaker toggle: red tint, crossed-out speaker and the label "Muet" when muted; the speaker for the level otherwise.
  * [compact] is a 56 dp square with the icon alone (the card header already says "Son").
  */
 @Composable
-private fun MuteButton(muted: Boolean, onClick: () -> Unit, compact: Boolean = false) {
+private fun MuteButton(audio: AudioState, onClick: () -> Unit, compact: Boolean = false) {
+    val muted = audio.muted
     val tint = if (muted) MuteRed else Color.White
     val shape = if (compact) RoundedCornerShape(16.dp) else TileShape
     val base = Modifier
@@ -804,11 +790,11 @@ private fun MuteButton(muted: Boolean, onClick: () -> Unit, compact: Boolean = f
         .clickable(onClick = onClick)
     if (compact) {
         Box(base.size(56.dp), contentAlignment = Alignment.Center) {
-            SpeakerIcon(muted, tint, Modifier.size(30.dp))
+            Picto(volumeRes(audio), 32.dp, tint = tint)
         }
     } else {
         Column(base.padding(horizontal = 16.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            SpeakerIcon(muted, tint, Modifier.size(30.dp))
+            Picto(volumeRes(audio), 32.dp, tint = tint)
             GlassText(if (muted) "Muet" else "Son", size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
         }
     }

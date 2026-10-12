@@ -5,6 +5,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -16,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -61,9 +68,9 @@ fun GlassPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
     )
 }
 
-/** Large glass button; [selected] adds a stronger fill and a bright edge. */
+/** Large glass button; [selected] adds a stronger fill and a bright edge. [icon] (a drawable id) sits left of the label. */
 @Composable
-fun GlassButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun GlassButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, icon: Int? = null) {
     Box(
         modifier = modifier
             .heightIn(min = 64.dp)
@@ -79,12 +86,24 @@ fun GlassButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: 
             .padding(horizontal = 24.dp, vertical = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
-        GlassText(
-            text,
-            size = 20.sp,
-            alpha = if (selected) 1f else 0.75f,
-            weight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        )
+        val alpha = if (selected) 1f else 0.75f
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                Image(
+                    painterResource(icon),
+                    contentDescription = null,
+                    modifier = Modifier.size(30.dp),
+                    colorFilter = ColorFilter.tint(Color.White.copy(alpha = alpha)),
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            GlassText(
+                text,
+                size = 20.sp,
+                alpha = alpha,
+                weight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+        }
     }
 }
 

@@ -173,4 +173,33 @@ class ActionsStateTest {
         val n = parse("""{"now_playing":{"available":true,"app":null,"title":null,"artist":null,"album":null}}""").nowPlaying!!
         assertEquals(NowPlaying("", "", "", "", false, null), n)
     }
+
+    @Test
+    fun wifiSignalIsParsedClampedAndTolerant() {
+        fun signal(raw: String) = parse("""{"wifi":{"available":true,"on":true,"signal":$raw}}""").wifi!!.signal
+        assertEquals(72, signal("72"))
+        assertEquals(0, signal("0"))
+        assertEquals(100, signal("250"))
+        assertEquals(0, signal("-5"))
+        assertEquals(58, signal("57.6"))
+        assertEquals(40, signal("\"40\""))
+        assertNull(signal("null"))
+        assertNull(signal("\"strong\""))
+        assertNull(signal("true"))
+        assertNull(signal("[]"))
+        assertNull(parse("""{"wifi":{"available":true,"on":true}}""").wifi!!.signal)
+    }
+
+    @Test
+    fun usbKindDefaultsToStick() {
+        val s = parse(
+            """{"usb":[{"drive":"E:","kind":"stick"},{"drive":"F:","kind":"disk"},{"drive":"G:"},
+                        {"drive":"H:","kind":"weird"},{"drive":"I:","kind":null},{"drive":"J:","kind":5},
+                        {"drive":"K:","kind":"DISK"}]}""",
+        )
+        assertEquals(
+            listOf(UsbKind.STICK, UsbKind.DISK, UsbKind.STICK, UsbKind.STICK, UsbKind.STICK, UsbKind.STICK, UsbKind.DISK),
+            s.usb.map { it.kind },
+        )
+    }
 }

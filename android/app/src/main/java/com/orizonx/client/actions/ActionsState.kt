@@ -10,14 +10,24 @@ data class AudioState(val volume: Float, val muted: Boolean)
 
 data class BrightnessState(val value: Float)
 
-data class WifiState(val on: Boolean, val ssid: String?)
+/** [signal] is the connection quality 0..100, null when Wi-Fi is not connected (or the PC does not report it). */
+data class WifiState(val on: Boolean, val ssid: String?, val signal: Int? = null)
 
 data class BluetoothState(val on: Boolean, val connected: List<String>)
 
 data class AirplaneState(val on: Boolean)
 
-/** [freeBytes] / [totalBytes] are null when the PC did not report them. */
-data class UsbDrive(val drive: String, val label: String, val freeBytes: Long?, val totalBytes: Long?)
+/** Kind of removable drive; drives the chip pictogram. */
+enum class UsbKind { STICK, DISK }
+
+/** [freeBytes] / [totalBytes] are null when the PC did not report them. [kind] is STICK when the PC does not say. */
+data class UsbDrive(
+    val drive: String,
+    val label: String,
+    val freeBytes: Long?,
+    val totalBytes: Long?,
+    val kind: UsbKind = UsbKind.STICK,
+)
 
 /** [artworkId] (sha1 hex) names the MEDIA_ARTWORK image of the track, null when it has no cover. */
 data class NowPlaying(
@@ -66,7 +76,7 @@ data class ActionsState(
                 val value = b.optDouble("value", Double.NaN)
                 if (value.isNaN()) null else BrightnessState(value.toFloat().coerceIn(0f, 1f))
             },
-            wifi = available(json, "wifi")?.let { WifiState(it.optBoolean("on", false), text(it, "ssid")) },
+            wifi = available(json, "wifi")?.let { WifiState(it.optBoolean("on", false), text(it, "ssid"), signal(it)) },
             bluetooth = available(json, "bluetooth")?.let { b ->
                 val names = b.optJSONArray("connected")
                 val connected = if (names == null) {
@@ -100,6 +110,16 @@ data class ActionsState(
         private fun text(obj: JSONObject, key: String): String? =
             if (obj.isNull(key)) null else obj.optString(key, "").takeIf { it.isNotBlank() }
 
+        /** Wi-Fi quality 0..100 (clamped); null when absent, null, or not a number. */
+        private fun signal(wifi: JSONObject): Int? {
+            val value = when (val raw = wifi.opt("signal")) {
+                is Number -> raw.toDouble()
+                is String -> raw.trim().toDoubleOrNull()
+                else -> null
+            }
+            return if (value == null || value.isNaN()) null else Math.round(value.coerceIn(0.0, 100.0)).toInt()
+        }
+
         private fun clock(json: JSONObject): ClockState? {
             val c = json.optJSONObject("clock") ?: return null
             if (c.isNull("epoch_ms")) return null
@@ -118,6 +138,7 @@ data class ActionsState(
                     label = text(d, "label") ?: "",
                     freeBytes = d.optLong("free_bytes", -1).takeIf { it >= 0 },
                     totalBytes = d.optLong("total_bytes", -1).takeIf { it >= 0 },
+                    kind = if (text(d, "kind")?.lowercase() == "disk") UsbKind.DISK else UsbKind.STICK,
                 )
             }
         }

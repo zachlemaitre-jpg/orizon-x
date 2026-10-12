@@ -85,9 +85,9 @@ fun WaitingScreen(
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    GlassButton("Écran", selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = Modifier.weight(1f))
+                    GlassButton("Écran", selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_screen)
                     Spacer(Modifier.width(12.dp))
-                    GlassButton("Actions", selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = Modifier.weight(1f))
+                    GlassButton("Actions", selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_actions)
                 }
                 if (reason != null) {
                     Spacer(Modifier.height(8.dp))
