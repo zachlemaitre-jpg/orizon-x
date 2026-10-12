@@ -54,16 +54,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -111,6 +112,7 @@ private val MuteRed = Color(0xFFFF6B6B)
 private val BatteryGreen = Color(0xFF34C77B)
 private val BatteryAmber = Color(0xFFF2A93B)
 private val BatteryRed = Color(0xFFE5484D)
+private val BatteryText = Color(0xFF0B1F14)
 private val PillShape = RoundedCornerShape(24.dp)
 private val TileShape = RoundedCornerShape(18.dp)
 private val CoverShape = RoundedCornerShape(16.dp)
@@ -450,36 +452,34 @@ private fun BatteryPicto(battery: BatteryState) {
         val bodyW = 68.dp
         val bodyH = bodyW * (BATTERY_BODY_H / BATTERY_BODY_W)
         Box(Modifier.size(width = bodyW, height = bodyH), contentAlignment = Alignment.Center) {
-            Canvas(
-                Modifier
-                    .requiredSize(bodyW * (BATTERY_VIEWPORT / BATTERY_BODY_W))
-                    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen),
-            ) {
-                with(shape) { draw(size) }
+            Canvas(Modifier.requiredSize(bodyW * (BATTERY_VIEWPORT / BATTERY_BODY_W))) {
                 val k = size.width / BATTERY_VIEWPORT
                 val left = BATTERY_BODY_X * k
                 val top = BATTERY_BODY_Y * k
                 val width = BATTERY_BODY_W * k
                 val height = BATTERY_BODY_H * k
-                // SrcIn recolours only where the shape was drawn: the whole body dim, then the charged part coloured.
-                drawRect(Color.White.copy(alpha = 0.28f), Offset(left, top), Size(width, height), blendMode = BlendMode.SrcIn)
+                val body = Path().apply {
+                    addRoundRect(RoundRect(left, top, left + width, top + height, CornerRadius(BATTERY_BODY_R * k)))
+                }
+                // 1. The whole body, dimmed (the vector is white: drawn at 28 % alpha).
+                with(shape) { draw(size, alpha = 0.28f) }
+                // 2. The charge at full opacity on top, clipped to the rounded body.
                 if (fraction > 0f) {
-                    drawRect(
-                        fillColor.copy(alpha = 0.95f),
-                        Offset(left, top),
-                        Size(width * fraction.coerceAtLeast(0.14f), height),
-                        blendMode = BlendMode.SrcIn,
-                    )
+                    clipPath(body) {
+                        drawRect(fillColor, Offset(left, top), Size(width * fraction.coerceAtLeast(0.14f), height))
+                    }
                 }
             }
+            // Dark text when the charge covers the middle of the body (bright fill behind it), white otherwise.
+            val onFill = fraction >= 0.5f
             BasicText(
                 "${battery.percent}%",
                 style = TextStyle(
-                    color = Color.White,
+                    color = if (onFill) BatteryText else Color.White,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     fontFeatureSettings = "tnum",
-                    shadow = Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 3f),
+                    shadow = if (onFill) null else Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 3f),
                 ),
                 maxLines = 1,
                 softWrap = false,
@@ -498,6 +498,7 @@ private const val BATTERY_BODY_X = 2.46f
 private const val BATTERY_BODY_Y = 12.46f
 private const val BATTERY_BODY_W = 43.09f
 private const val BATTERY_BODY_H = 23.08f
+private const val BATTERY_BODY_R = 9.22f
 
 // --- Cards ---------------------------------------------------------------------------------
 
@@ -561,9 +562,9 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
                 }
                 if (keys) {
                     Spacer(Modifier.weight(1f))
-                    RoundKey("⏮") { c.tap(); c.send(ActionMessages.mediaPrevious()) }
-                    RoundKey("⏯") { c.tap(); c.send(ActionMessages.mediaPlayPause()) }
-                    RoundKey("⏭") { c.tap(); c.send(ActionMessages.mediaNext()) }
+                    RoundIconKey(R.drawable.ox_next_left) { c.tap(); c.send(ActionMessages.mediaPrevious()) }
+                    RoundIconKey(R.drawable.ox_play) { c.tap(); c.send(ActionMessages.mediaPlayPause()) }
+                    RoundIconKey(R.drawable.ox_next_right) { c.tap(); c.send(ActionMessages.mediaNext()) }
                 }
             }
         }
@@ -797,21 +798,6 @@ private fun MuteButton(audio: AudioState, onClick: () -> Unit, compact: Boolean 
             Picto(volumeRes(audio), 32.dp, tint = tint)
             GlassText(if (muted) "Muet" else "Son", size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
         }
-    }
-}
-
-@Composable
-private fun RoundKey(glyph: String, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.10f))
-            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        GlassText(glyph, size = 22.sp, align = TextAlign.Center)
     }
 }
 
