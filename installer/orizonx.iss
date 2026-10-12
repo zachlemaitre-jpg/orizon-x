@@ -194,6 +194,23 @@ begin
   end;
 end;
 
+{ Arrête le serveur adb quel que soit son dossier de lancement : une ancienne version de l'appli le lançait depuis
+  son dossier (répertoire courant dans {app}), ce qui verrouille ce dossier même si adb.exe vient du SDK Android.
+  Lancé depuis le dossier temporaire pour ne pas verrouiller {app} à son tour ; les erreurs sont ignorées. }
+procedure KillAdbServer(const AppFolder: String);
+var
+  Adb: String;
+  Code: Integer;
+begin
+  Adb := AddBackslash(AppFolder) + 'tools\adb.exe';
+  if not FileExists(Adb) then
+    Exit;
+  if Exec(Adb, 'kill-server', ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, Code) then
+    Log(Format('%s kill-server -> exit code %d', [Adb, Code]))
+  else
+    Log(Format('Cannot run %s kill-server: %s', [Adb, SysErrorMessage(Code)]));
+end;
+
 function InitializeSetup(): Boolean;
 begin
   DriverPresentAtStart := VddPresent();
@@ -216,6 +233,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   { Mise à jour : Restart Manager ferme OrizonX.exe (CloseApplications), mais pas le serveur adb, sans fenêtre,
     qui verrouillerait tools\adb.exe. L'appli le relance quand il lui faut. }
+  KillAdbServer(WizardDirValue);
   TerminateProcessesIn(AddBackslash(WizardDirValue) + 'tools', 'adb.exe');
   Result := '';
 end;
@@ -284,6 +302,7 @@ begin
   if CurUninstallStep <> usUninstall then
     Exit;
   TerminateProcessesIn(ExpandConstant('{app}'), '{#AppExe}');
+  KillAdbServer(ExpandConstant('{app}'));
   TerminateProcessesIn(ExpandConstant('{app}'), 'adb.exe');
   RunApp('--cleanup');
   if RegQueryDWordValue(HKLM, OrizonKey, 'VddInstalledByUs', ByUs) and (ByUs = 1) and VddPresent()

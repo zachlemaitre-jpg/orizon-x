@@ -442,7 +442,8 @@ class Win32DeviceApi:
         exe = pnputil_path(os.environ.get("SystemRoot", r"C:\Windows"), wow64)
         try:
             result = subprocess.run([exe, *args], capture_output=True, creationflags=tools.NO_WINDOW,
-                                    timeout=PNPUTIL_TIMEOUT_S, stdin=subprocess.DEVNULL)
+                                    timeout=PNPUTIL_TIMEOUT_S, stdin=subprocess.DEVNULL,
+                                    cwd=tools.tool_cwd(exe))
         except subprocess.TimeoutExpired:
             return ERROR_TIMEOUT, f"pnputil did not finish within {PNPUTIL_TIMEOUT_S} s"
         except OSError as error:

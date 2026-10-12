@@ -70,6 +70,37 @@ class NoWindowTest(unittest.TestCase):
         self.assertEqual(tools.NO_WINDOW, expected)
 
 
+class ToolCwdTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()).resolve()
+        self.app = self.root / "app"
+        (self.app / "tools").mkdir(parents=True)
+        self.sdk = self.root / "sdk"
+        self.sdk.mkdir()
+
+    def cwd(self, exe):
+        return tools.tool_cwd(str(exe), app_folder=self.app)
+
+    def test_external_tool_runs_in_its_own_folder(self):
+        self.assertEqual(self.cwd(self.sdk / "adb.exe"), str(self.sdk))
+
+    def test_bare_name_runs_in_the_temp_folder(self):
+        self.assertEqual(tools.tool_cwd("adb"), tempfile.gettempdir())
+        self.assertEqual(tools.tool_cwd("ffmpeg.exe"), tempfile.gettempdir())
+
+    def test_tool_in_the_app_folder_or_below_runs_in_the_temp_folder(self):
+        self.assertEqual(self.cwd(self.app / "tools" / "adb.exe"), tempfile.gettempdir())
+        self.assertEqual(self.cwd(self.app / "adb.exe"), tempfile.gettempdir())
+
+    def test_missing_folder_runs_in_the_temp_folder(self):
+        self.assertEqual(self.cwd(self.root / "gone" / "adb.exe"), tempfile.gettempdir())
+
+    def test_default_app_folder_is_the_real_one(self):
+        inside = tools.app_dir() / "tools" / "adb.exe"
+        self.assertEqual(tools.tool_cwd(str(inside)), tempfile.gettempdir())
+        self.assertNotEqual(Path(tools.tool_cwd(str(tools.app_dir() / "x.exe"))).resolve(), tools.app_dir())
+
+
 class AppDirTest(unittest.TestCase):
     def test_dev_app_dir_is_host_prototype(self):
         self.assertEqual(tools.app_dir(), Path(tools.__file__).resolve().parent)

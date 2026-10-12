@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +32,24 @@ def app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def tool_cwd(exe: str, *, app_folder: Path | None = None) -> str:
+    """Working directory to run an external tool (adb, ffmpeg, pnputil...) in: never the app folder.
+
+    adb starts a long-lived server that inherits its parent's working directory and keeps that folder locked, so a
+    tool run from the app folder (the shortcut's start folder) would stop the build script renaming it and the
+    installer replacing or removing it. The tool's own folder is used, unless it is inside the app folder (the
+    bundled tools/) or unknown (a bare name looked up on the PATH): then the temp folder.
+    """
+    folder = os.path.dirname(exe)
+    root = app_folder if app_folder is not None else app_dir()
+    if folder and os.path.isdir(folder):
+        resolved = Path(folder).resolve()
+        resolved_root = Path(root).resolve()
+        if resolved != resolved_root and resolved_root not in resolved.parents:
+            return str(resolved)
+    return tempfile.gettempdir()
 
 
 def sdk_platform_tools() -> Path:

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import queue
 import re
 import socket
@@ -718,6 +719,20 @@ class StreamingTest(unittest.TestCase):
         rec.wait_state(State.STREAMING)
         for cmd, kwargs in run.calls + popen.calls:
             self.assertEqual(kwargs.get("creationflags"), tools.NO_WINDOW, cmd)
+
+    def test_subprocesses_never_run_in_the_app_folder(self):
+        """adb's server inherits its cwd and would keep the app folder locked (rename, update, uninstall)."""
+        import tempfile
+        run, popen = FakeRun(), FakePopen(live)
+        relay, rec = make_engine(self, run=run, popen=popen, config=engine.Config(encoder="auto"))
+        relay.start()
+        rec.wait_state(State.STREAMING)
+        self.assertTrue(any(cmd[1:] == ["devices"] for cmd, _ in run.calls))
+        self.assertTrue(any(cmd[1] == "forward" for cmd, _ in run.calls))
+        self.assertTrue(popen.calls)
+        for cmd, kwargs in run.calls + popen.calls:
+            self.assertEqual(kwargs.get("cwd"), tempfile.gettempdir(), cmd)  # bare tool names -> temp folder
+            self.assertNotEqual(os.path.realpath(kwargs["cwd"]), os.path.realpath(tools.app_dir()), cmd)
 
 
 class StopTest(unittest.TestCase):

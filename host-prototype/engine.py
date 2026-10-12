@@ -192,7 +192,7 @@ def probe_outputs(ffmpeg: str, max_outputs: int = 8, run: Run = subprocess.run,
                  "-i", f"ddagrab=output_idx={index}:framerate=1,hwdownload,format=bgra",
                  "-frames:v", "1", "-f", "null", "-"],
                 capture_output=True, text=True, errors="replace", creationflags=tools.NO_WINDOW,
-                timeout=ENCODER_PROBE_TIMEOUT_S,
+                timeout=ENCODER_PROBE_TIMEOUT_S, cwd=tools.tool_cwd(ffmpeg),
             )
         except subprocess.TimeoutExpired:
             break  # ffmpeg bloqué (GPU endormi…) : on garde les écrans déjà trouvés
@@ -256,6 +256,7 @@ def probe_encoder(ffmpeg: str, encoder: str, run: Run = subprocess.run) -> bool:
              "-f", "lavfi", "-i", "color=c=black:s=256x256:r=1", "-frames:v", "1",
              *ENCODERS[encoder], "-f", "null", "-"],
             capture_output=True, creationflags=tools.NO_WINDOW, timeout=ENCODER_PROBE_TIMEOUT_S,
+            cwd=tools.tool_cwd(ffmpeg),
         )
     except subprocess.TimeoutExpired:
         return False
@@ -285,7 +286,7 @@ def adb_problem(adb: str, run: Run = subprocess.run) -> Msg | None:
     """None if exactly one authorized device is ready, else a message saying what to do."""
     try:
         result = run([adb, "devices"], capture_output=True, text=True, creationflags=tools.NO_WINDOW,
-                     timeout=ADB_TIMEOUT_S)
+                     timeout=ADB_TIMEOUT_S, cwd=tools.tool_cwd(adb))
     except subprocess.TimeoutExpired:
         return _ADB_TIMEOUT_PROBLEM
     if result.returncode != 0:
@@ -307,7 +308,8 @@ def ensure_forward(adb: str, run: Run = subprocess.run) -> Msg | None:
         return problem
     try:
         result = run([adb, "forward", f"tcp:{protocol.PORT}", f"tcp:{protocol.PORT}"],
-                     capture_output=True, text=True, creationflags=tools.NO_WINDOW, timeout=ADB_TIMEOUT_S)
+                     capture_output=True, text=True, creationflags=tools.NO_WINDOW, timeout=ADB_TIMEOUT_S,
+                     cwd=tools.tool_cwd(adb))
     except subprocess.TimeoutExpired:
         return _ADB_TIMEOUT_PROBLEM
     if result.returncode != 0:
@@ -1045,7 +1047,8 @@ class RelayEngine:
                 run_video = threading.Event()
                 command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
                 process = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                           stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW)
+                                           stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW,
+                                           cwd=tools.tool_cwd(self._ffmpeg))
                 with capture_lock:
                     ffmpeg = process
                     moved_meanwhile = restart_pending

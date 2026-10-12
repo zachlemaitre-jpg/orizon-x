@@ -1,5 +1,8 @@
+import os
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 import engine
 import tools
@@ -186,6 +189,43 @@ class AdbProblemTest(unittest.TestCase):
     def test_adb_forward_failure_is_a_message(self):
         run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_code=1)
         self.assertEqual(engine.ensure_forward("adb", run), msg("adb.forward_failed", error=""))
+
+
+class ToolCwdTest(unittest.TestCase):
+    """Every adb / ffmpeg call runs in the tool's own folder (never the app folder): adb's server inherits it."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.adb = os.path.join(self.folder, "adb.exe")
+        self.ffmpeg = os.path.join(self.folder, "ffmpeg.exe")
+
+    def assert_all_in_folder(self, run):
+        self.assertTrue(run.calls)
+        for cmd, kwargs in run.calls:
+            self.assertEqual(kwargs.get("cwd"), str(Path(self.folder).resolve()), cmd)
+
+    def test_adb_devices_and_forward(self):
+        run = FakeRun(adb_stdout="List of devices attached\nR52\tdevice\n", forward_code=0)
+        self.assertIsNone(engine.ensure_forward(self.adb, run))
+        self.assertEqual(len(run.calls), 2)
+        self.assert_all_in_folder(run)
+
+    def test_bare_adb_runs_in_the_temp_folder(self):
+        run = FakeRun(adb_stdout="List of devices attached\n\n")
+        engine.adb_problem("adb", run)
+        self.assertEqual(run.calls[0][1]["cwd"], tempfile.gettempdir())
+
+    def test_ffmpeg_probes(self):
+        run = FakeRun(ok_encoders=("nvenc",))
+        engine.probe_encoder(self.ffmpeg, "nvenc", run)
+
+        def probe(cmd, **kwargs):
+            run.calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "Stream #0:0: Video: bgra, 2880x1800")
+
+        engine.probe_outputs(self.ffmpeg, max_outputs=1, run=probe)
+        self.assertEqual(len(run.calls), 2)
+        self.assert_all_in_folder(run)
 
 
 class FormatStatsTest(unittest.TestCase):

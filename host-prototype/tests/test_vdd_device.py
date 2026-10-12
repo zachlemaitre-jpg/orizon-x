@@ -136,6 +136,17 @@ class ParsingTest(unittest.TestCase):
         self.assertEqual(vdd_device.pnputil_path(r"C:\Windows", wow64=False), r"C:\Windows\System32\pnputil.exe")
         self.assertEqual(vdd_device.pnputil_path(r"C:\Windows", wow64=True), r"C:\Windows\Sysnative\pnputil.exe")
 
+    def test_pnputil_runs_outside_the_app_folder(self):
+        import subprocess
+        from unittest import mock
+        done = subprocess.CompletedProcess(["x"], 0, stdout=b"ok", stderr=b"")
+        api = object.__new__(vdd_device.Win32DeviceApi)
+        with mock.patch.object(vdd_device.subprocess, "run", return_value=done) as run:
+            self.assertEqual(api.pnputil(["/enum-drivers"]), (0, "ok"))
+        cwd = run.call_args.kwargs["cwd"]
+        self.assertEqual(cwd, vdd_device.tools.tool_cwd(run.call_args.args[0][0]))
+        self.assertNotEqual(os.path.realpath(cwd), os.path.realpath(vdd_device.tools.app_dir()))
+
     def test_error_text_carries_the_windows_code(self):
         error = VddDeviceError("install_driver", 5, "SetupDiCreateDeviceInfoW")
         self.assertEqual(error.winerror, 5)

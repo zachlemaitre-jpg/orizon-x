@@ -267,6 +267,7 @@ class RunTest(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["creationflags"], admin.tools.NO_WINDOW)
         self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["cwd"], admin.tools.tool_cwd("icacls.exe"))
 
     def test_install_driver(self):
         self.assertEqual(self.run_admin("--install-driver", r"C:\Program Files\Orizon X\vdd\MttVDD.inf"), 0)

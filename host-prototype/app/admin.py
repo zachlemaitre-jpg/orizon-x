@@ -104,7 +104,7 @@ def primary_gpu_name(adapters: Callable[[], list[Adapter]] = enum_display_adapte
 def system_command(args: list[str]) -> tuple[int, str]:
     """Runs a command without a window, without stdin; (exit code, its output). Raises OSError / TimeoutExpired."""
     result = subprocess.run(args, capture_output=True, creationflags=tools.NO_WINDOW, stdin=subprocess.DEVNULL,
-                            timeout=ICACLS_TIMEOUT_S)
+                            timeout=ICACLS_TIMEOUT_S, cwd=tools.tool_cwd(args[0]))
     return result.returncode, (result.stdout + result.stderr).decode("oem", errors="replace").strip()
 
 
