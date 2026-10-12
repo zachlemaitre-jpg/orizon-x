@@ -195,8 +195,8 @@ begin
 end;
 
 { Arrête le serveur adb quel que soit son dossier de lancement : une ancienne version de l'appli le lançait depuis
-  son dossier (répertoire courant dans {app}), ce qui verrouille ce dossier même si adb.exe vient du SDK Android.
-  Lancé depuis le dossier temporaire pour ne pas verrouiller {app} à son tour ; les erreurs sont ignorées. }
+  son dossier (répertoire courant dans le dossier d'installation), ce qui verrouille ce dossier même si adb.exe vient
+  du SDK Android. Lancé depuis le dossier temporaire pour ne pas le verrouiller à son tour ; les erreurs sont ignorées. }
 procedure KillAdbServer(const AppFolder: String);
 var
   Adb: String;
