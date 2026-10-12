@@ -18,6 +18,7 @@ from typing import Any, Callable
 SW_HIDE = 0
 SEE_MASK_NOCLOSEPROCESS = 0x00000040
 SEE_MASK_NOASYNC = 0x00000100
+ERROR_SUCCESS_REBOOT_REQUIRED = 3010  # --add-resolution worked, Windows only wants a restart to finish: a success
 ERROR_CANCELLED = 1223  # l'utilisateur a refusé l'invite UAC
 WAIT_OBJECT_0 = 0
 WAIT_FAILED = 0xFFFFFFFF
@@ -143,6 +144,8 @@ def add_resolution(width: int, height: int, *, hwnd: int | None = None,
     """
     file, parameters = command(["--add-resolution", f"{width}x{height}"])
     code = run(file, parameters, hwnd=hwnd)
+    if code == ERROR_SUCCESS_REBOOT_REQUIRED:
+        code = 0
     if code == 0:
         deadline = clock() + READY_TIMEOUT_S
         while not driver_ready() and clock() < deadline:

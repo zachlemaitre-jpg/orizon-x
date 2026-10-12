@@ -6,6 +6,8 @@
 ; The driver work is done by OrizonX.exe itself (app/admin.py), run hidden and elevated from [Code] so that every
 ; exit code is checked (0 = success, 1 = failure, details in the app's log):
 ;   --configure-vdd [--restart], --install-driver <inf>, --remove-driver, --cleanup.
+; Exit code 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) = success, but Windows must restart to finish: setup then asks
+; for a restart (NeedRestart / UninstallNeedRestart below).
 ; No devcon (Microsoft's tool is not redistributable).
 
 #ifndef AppVersion
@@ -110,6 +112,7 @@ const
 
 var
   DriverPresentAtStart: Boolean;
+  RebootNeeded: Boolean;   { un pilote installé, redémarré ou retiré demande un redémarrage de Windows }
   DriverPage: TOutputMsgWizardPage;
 
 { Détection du pilote : le nœud créé pour VDD s'appelle ROOT\DISPLAY\NNNN (pas ROOT\MTTVDD\...), on cherche donc
@@ -161,6 +164,36 @@ end;
 function RunApp(const Params: String): Integer;
 begin
   Result := RunHidden(ExpandConstant('{app}\{#AppExe}'), Params);
+end;
+
+{ Code de sortie d'OrizonX.exe : 0 ou 3010 = réussi ; 3010 demande en plus un redémarrage de Windows (noté). }
+function AdminSucceeded(RC: Integer): Boolean;
+begin
+  Result := (RC = 0) or (RC = 3010);
+  if RC = 3010 then
+  begin
+    RebootNeeded := True;
+    Log('Windows must restart to finish the virtual display driver work');
+  end;
+end;
+
+{ Règle de pare-feu entrante « bloquer » pour tools\adb.exe : Orizon X n'utilise que le bouclage (127.0.0.1), que
+  le pare-feu ne filtre pas ; une règle pour le programme évite l'invite Windows Defender au premier lancement.
+  Supprimée d'abord pour qu'une réinstallation ne la double pas. Jamais bloquant : les codes sont journalisés. }
+procedure AddAdbFirewallRule();
+var
+  Netsh: String;
+begin
+  Netsh := ExpandConstant('{sys}\netsh.exe');
+  RunHidden(Netsh, 'advfirewall firewall delete rule name="Orizon X - adb"');
+  if RunHidden(Netsh, 'advfirewall firewall add rule name="Orizon X - adb" dir=in action=block program="' +
+       ExpandConstant('{app}\tools\adb.exe') + '" enable=yes profile=any') <> 0 then
+    Log('Cannot add the adb firewall rule; Windows may ask about adb.exe at the first start');
+end;
+
+procedure RemoveAdbFirewallRule();
+begin
+  RunHidden(ExpandConstant('{sys}\netsh.exe'), 'advfirewall firewall delete rule name="Orizon X - adb"');
 end;
 
 { Termine les processus Name lancés depuis Folder (WMI). Sert à libérer les fichiers du dossier de l'appli : adb.exe reste
@@ -248,7 +281,7 @@ begin
     { Pilote déjà là (installé par nous ou par un autre programme) : on ne crée pas de second périphérique ; on
       écrit les résolutions et on redémarre le périphérique pour qu'il relise le XML. }
     RC := RunApp('--configure-vdd --restart');
-    if RC <> 0 then
+    if not AdminSucceeded(RC) then
       Log('Configuring or restarting the existing virtual display failed; it keeps its previous resolutions');
     { Une mise à jour garde la valeur notée par l'installation qui a posé le pilote. }
     if not RegQueryDWordValue(HKLM, OrizonKey, 'VddInstalledByUs', ByUs) then
@@ -261,7 +294,7 @@ begin
     if RC <> 0 then
       Log('Configuring the virtual display failed; the driver will use its built-in settings');
     RC := RunApp('--install-driver "' + ExpandConstant('{app}\vdd\MttVDD.inf') + '"');
-    if RC = 0 then
+    if AdminSucceeded(RC) then
       RegWriteDWordValue(HKLM, OrizonKey, 'VddInstalledByUs', 1)
     else
     begin
@@ -280,7 +313,21 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
+    AddAdbFirewallRule();
     SetupVirtualDisplay();
+  end;
+end;
+
+{ Page de fin « Redémarrer maintenant / plus tard » d'Inno (en /SILENT, /NORESTART est respecté). }
+function NeedRestart(): Boolean;
+begin
+  Result := RebootNeeded;
+end;
+
+function UninstallNeedRestart(): Boolean;
+begin
+  Result := RebootNeeded;
 end;
 
 procedure RemoveOurRunValue();
@@ -305,11 +352,12 @@ begin
   KillAdbServer(ExpandConstant('{app}'));
   TerminateProcessesIn(ExpandConstant('{app}'), 'adb.exe');
   RunApp('--cleanup');
+  RemoveAdbFirewallRule();
   if RegQueryDWordValue(HKLM, OrizonKey, 'VddInstalledByUs', ByUs) and (ByUs = 1) and VddPresent()
      and not UninstallSilent()
      and (MsgBox(CustomMessage('RemoveVddQuestion'), mbConfirmation, MB_YESNO) = IDYES) then
   begin
-    if RunApp('--remove-driver') <> 0 then
+    if not AdminSucceeded(RunApp('--remove-driver')) then
       MsgBox(CustomMessage('VddRemoveFailed'), mbError, MB_OK);
   end;
   RemoveOurRunValue();

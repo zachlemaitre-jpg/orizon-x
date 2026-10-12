@@ -66,9 +66,11 @@ class FakeDevice:
 
     def remove_driver(self):
         self._call("remove")
+        return self.reboot
 
     def restart_device(self):
         self._call("restart")
+        return self.reboot
 
 
 class FakeCommands:
@@ -148,11 +150,45 @@ class GpuNameTest(unittest.TestCase):
         self.assertEqual(admin.primary_gpu_name(lambda: adapters), "AMD Radeon(TM) 890M Graphics")
 
     def test_the_virtual_display_is_never_chosen(self):
-        adapters = [("Virtual Display Driver", "ROOT\\MTTVDD", 0x5), ("Intel(R) UHD", r"PCI\VEN_8086", 0x1)]
+        adapters = [("Virtual Display Driver", "ROOT\\MTTVDD", 0x5), ("Intel(R) UHD", r"PCI\VEN_8086", 0x0)]   # not attached: nothing else to fall back on
         self.assertIsNone(admin.primary_gpu_name(lambda: adapters))
+
+    def test_the_virtual_display_as_primary_falls_back_to_the_first_attached_gpu(self):
+        adapters = [("Virtual Display Driver", "ROOT\\MTTVDD", 0x5), ("Intel(R) UHD", r"PCI\VEN_8086", 0x1)]
+        self.assertEqual(admin.primary_gpu_name(lambda: adapters), "Intel(R) UHD")
 
     def test_no_primary(self):
         self.assertIsNone(admin.primary_gpu_name(lambda: []))
+
+    RDP = ("Microsoft Remote Display Adapter", r"SWD\RemoteDisplayEnum\RdpIdd_IndirectDisplay", 0x5)
+
+    def test_a_remote_display_primary_is_skipped_for_the_first_attached_real_gpu(self):
+        adapters = [self.RDP, ("NVIDIA GeForce RTX 5070", r"PCI\VEN_10DE&DEV_2D18", 0x0),
+                    ("AMD Radeon(TM) 890M Graphics", r"PCI\VEN_1002&DEV_150E", 0x1),
+                    ("Intel(R) UHD", r"PCI\VEN_8086", 0x1)]
+        self.assertEqual(admin.primary_gpu_name(lambda: adapters), "AMD Radeon(TM) 890M Graphics")
+
+    def test_remote_display_is_recognised_by_device_id_or_by_name(self):
+        by_id = ("Some Indirect Display", r"swd\remotedisplayenum\x", 0x5)
+        by_name = ("Microsoft Remote Display Adapter", r"ROOT\OTHER", 0x5)
+        real = ("Intel(R) UHD", r"PCI\VEN_8086", 0x1)
+        for skipped in (by_id, by_name):
+            with self.subTest(skipped=skipped[0]):
+                self.assertEqual(admin.primary_gpu_name(lambda: [skipped, real]), "Intel(R) UHD")
+
+    def test_basic_display_adapter_is_not_a_gpu(self):
+        adapters = [("Microsoft Basic Display Adapter", r"PCI\VEN_1414", 0x5), ("Intel(R) UHD", r"PCI\VEN_8086", 0x1)]
+        self.assertEqual(admin.primary_gpu_name(lambda: adapters), "Intel(R) UHD")
+
+    def test_only_remote_or_virtual_adapters_means_no_gpu(self):
+        adapters = [self.RDP, ("Virtual Display Driver", "Root\\MttVDD", 0x1),
+                    ("Microsoft Basic Display Adapter", r"PCI\VEN_1414", 0x1),
+                    ("NVIDIA GeForce RTX 5070", r"PCI\VEN_10DE", 0x0)]   # real but not attached
+        self.assertIsNone(admin.primary_gpu_name(lambda: adapters))
+
+    def test_a_real_primary_wins_over_other_attached_gpus(self):
+        adapters = [("Intel(R) UHD", r"PCI\VEN_8086", 0x1), ("AMD Radeon(TM) 890M Graphics", r"PCI\VEN_1002", 0x5)]
+        self.assertEqual(admin.primary_gpu_name(lambda: adapters), "AMD Radeon(TM) 890M Graphics")
 
     def test_real_struct_size(self):
         self.assertEqual(ctypes.sizeof(admin.DISPLAY_DEVICEW), 840)
@@ -277,10 +313,32 @@ class RunTest(unittest.TestCase):
         self.assertEqual(self.device.calls, [("install", r"C:\Program Files\Orizon X\vdd\MttVDD.inf")])
         self.assertNotIn("Windows must restart", self.logs)
 
-    def test_install_driver_needing_a_reboot_says_so(self):
+    def test_install_driver_needing_a_reboot_says_so_with_exit_3010(self):
         self.device.reboot = True
-        self.assertEqual(self.run_admin("--install-driver", "MttVDD.inf"), 0)
+        self.assertEqual(self.run_admin("--install-driver", "MttVDD.inf"), 3010)
+        self.assertEqual(admin.EXIT_REBOOT_REQUIRED, 3010)
         self.assertIn("Windows must restart", self.logs)
+
+    def test_remove_driver_exit_codes(self):
+        self.assertEqual(self.run_admin("--remove-driver"), 0)
+        self.device.reboot = True
+        self.assertEqual(self.run_admin("--remove-driver"), 3010)
+
+    def test_a_failure_is_1_even_when_a_reboot_was_pending(self):
+        self.device.reboot = True
+        self.device.fail["install"] = VddDeviceError("install_driver", 5)
+        self.assertEqual(self.run_admin("--install-driver", "MttVDD.inf"), 1)
+
+    def test_configure_vdd_restart_needing_a_reboot_is_3010_after_the_whole_configuration(self):
+        self.device.reboot = True
+        self.assertEqual(self.run_admin("--configure-vdd", "--restart"), 3010)
+        self.assertEqual([c[0] for c in self.vdd.calls], ["gpu", "single", "rates", "resolutions"])
+        self.assertEqual(len(self.commands.calls), 1)
+        self.assertEqual(self.run_admin("--configure-vdd"), 0)   # no restart asked: never 3010
+
+    def test_add_resolution_restart_needing_a_reboot_is_3010(self):
+        self.device.reboot = True
+        self.assertEqual(self.run_admin("--add-resolution", "2800x1752"), 3010)
 
     def test_restart_alone_is_an_error(self):
         self.assertEqual(self.run_admin("--restart"), 1)
@@ -467,6 +525,13 @@ class ElevateTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(calls, [("exe", "--add-resolution 2800x1752")])
         self.assertEqual(clock[0], 2 * elevate.READY_POLL_S)
+
+    def test_add_resolution_reboot_required_counts_as_success_in_the_app(self):
+        calls = []
+        code = elevate.add_resolution(2800, 1752, run=lambda f, p, hwnd=None: 3010,
+                                      driver_ready=lambda: calls.append(1) or True,
+                                      command=lambda args: ("exe", " ".join(args)))
+        self.assertEqual((code, calls), (0, [1]))
 
     def test_add_resolution_refused_or_failed_does_not_wait(self):
         for result in (None, 1):

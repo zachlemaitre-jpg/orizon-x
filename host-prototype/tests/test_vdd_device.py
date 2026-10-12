@@ -350,8 +350,11 @@ class RemoveDriverTest(unittest.TestCase):
         self.assertEqual(caught.exception.winerror, 2)
         self.assertIn("Échec", str(caught.exception))
 
-    def test_reboot_required_counts_as_success(self):
-        vdd_device.remove_driver(api=FakeApi(pnputil_results=[(3010, "")]), registry=this_pc_registry())
+    def test_reboot_required_counts_as_success_and_is_reported(self):
+        self.assertIs(vdd_device.remove_driver(api=FakeApi(pnputil_results=[(3010, "")]),
+                                               registry=this_pc_registry()), True)
+        self.assertIs(vdd_device.remove_driver(api=FakeApi(), registry=this_pc_registry()), False)
+        self.assertIs(vdd_device.remove_driver(api=FakeApi(), registry=FakeRegistry({})), False)
 
     def test_suspicious_inf_name_is_never_passed_to_pnputil(self):
         registry = this_pc_registry(**{CLASS + "\\" + DISPLAY_GUID + r"\0004": {"InfPath": "mttvdd.inf"}})
@@ -372,6 +375,11 @@ class RestartDeviceTest(unittest.TestCase):
         api = FakeApi()
         vdd_device.restart_device(api=api, registry=this_pc_registry())
         self.assertEqual(api.calls, [("is_admin",), ("pnputil", "/restart-device", r"ROOT\DISPLAY\0000")])
+
+    def test_reports_whether_a_reboot_is_needed(self):
+        self.assertIs(vdd_device.restart_device(api=FakeApi(pnputil_results=[(3010, "")]),
+                                                registry=this_pc_registry()), True)
+        self.assertIs(vdd_device.restart_device(api=FakeApi(), registry=this_pc_registry()), False)
 
     def test_no_device_raises_not_found(self):
         with self.assertRaises(VddDeviceError) as caught:

@@ -11,7 +11,9 @@
     --remove-driver           remove the device and its driver package (admin)
     --add-resolution WxH      add WxH at 60 Hz to the XML (rates limited to 60 Hz), then restart the device (admin, "Add exact resolution")
 
-Exit code 0 on success, 1 on failure (2: wrong command line, see app/main.py). The exe is windowed (no console):
+Exit code 0 on success, 1 on failure (2: wrong command line, see app/main.py), 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) when
+the command worked but Windows says a restart is needed to finish (--install-driver, --remove-driver, and the device
+restart of --configure-vdd --restart / --add-resolution): the caller (the installer) treats it as a success. The exe is windowed (no console):
 nothing is printed, details go to the admin log (relay-admin.log). The XML is the driver's own file (VDDPATH).
 Every Windows-touching piece is a parameter of run() so tests use fakes.
 """
@@ -30,7 +32,9 @@ from typing import Any, Callable
 import tools
 import vdd
 
+DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x1
 DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4
+EXIT_REBOOT_REQUIRED = 3010   # ERROR_SUCCESS_REBOOT_REQUIRED
 VDD_HARDWARE_ID = "root\\mttvdd"
 USERS_MODIFY_GRANT = "*S-1-5-32-545:(OI)(CI)M"   # BUILTIN\Users (SID, so any Windows language): Modify, inherited
 ICACLS_TIMEOUT_S = 60
@@ -92,10 +96,27 @@ def enum_display_adapters() -> list[Adapter]:
         index += 1
 
 
+def _is_real_gpu(name: str, device_id: str) -> bool:
+    """False for the virtual display itself and for adapters that are not a GPU: the RDP / Hyper-V / Sandbox indirect
+    display (``SWD\\RemoteDisplayEnum...``, "Microsoft Remote Display Adapter") and "Microsoft Basic Display Adapter"."""
+    device_id, lowered = device_id.strip().lower(), name.strip().lower()
+    return (bool(lowered) and device_id != VDD_HARDWARE_ID
+            and not device_id.startswith("swd\\remotedisplayenum")
+            and "remote display adapter" not in lowered and "basic display" not in lowered)
+
+
 def primary_gpu_name(adapters: Callable[[], list[Adapter]] = enum_display_adapters) -> str | None:
-    """Friendly name of the GPU driving the primary display, never the virtual display itself; None if unknown."""
-    for name, device_id, flags in adapters():
-        if flags & DISPLAY_DEVICE_PRIMARY_DEVICE and device_id.strip().lower() != VDD_HARDWARE_ID and name.strip():
+    """Friendly name of the GPU driving the primary display; None if unknown.
+
+    Adapters that are not real GPUs (the virtual display, a remote-desktop display, the basic display adapter) are
+    skipped; when the primary display is one of them, the first real GPU attached to the desktop is used instead.
+    """
+    listed = adapters()
+    for name, device_id, flags in listed:
+        if flags & DISPLAY_DEVICE_PRIMARY_DEVICE and _is_real_gpu(name, device_id):
+            return name.strip()
+    for name, device_id, flags in listed:
+        if flags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP and _is_real_gpu(name, device_id):
             return name.strip()
     return None
 
@@ -146,7 +167,8 @@ def configure_vdd(*, controller: Any, device: Any, gpu_name: Callable[[], str | 
     try:
         gpu = gpu_name()
         if gpu is None:
-            log.warning("Configure VDD: GPU of the primary display not found, the XML keeps its GPU setting")
+            log.warning("Configure VDD: no real GPU found for the primary display (remote or virtual display only?), "
+                        "the XML keeps its GPU setting")
         else:
             changed = controller.set_gpu_in_xml(gpu)
             log.info("Configure VDD: GPU %r%s", gpu, "" if changed else " (unchanged)")
@@ -165,8 +187,11 @@ def configure_vdd(*, controller: Any, device: Any, gpu_name: Callable[[], str | 
         if device.find_device() is None:
             log.info("Configure VDD: no virtual display device yet, nothing to restart")
         else:
-            device.restart_device()
+            reboot = bool(device.restart_device())
             log.info("Configure VDD: device restarted")
+            if reboot:
+                log.warning("Configure VDD: Windows must restart before the device restart is complete")
+                return EXIT_REBOOT_REQUIRED
     return 0
 
 
@@ -175,12 +200,16 @@ def install_driver(inf: str, *, device: Any, log: logging.Logger) -> int:
     log.info("Virtual display driver installed from %s", inf)
     if reboot:
         log.warning("Virtual display driver: Windows must restart before the driver is fully installed")
+        return EXIT_REBOOT_REQUIRED
     return 0
 
 
 def remove_driver(*, device: Any, log: logging.Logger) -> int:
-    device.remove_driver()
+    reboot = bool(device.remove_driver())
     log.info("Virtual display driver removed")
+    if reboot:
+        log.warning("Virtual display driver: Windows must restart before the driver is fully removed")
+        return EXIT_REBOOT_REQUIRED
     return 0
 
 
@@ -195,8 +224,11 @@ def add_resolution(size: tuple[int, int], *, controller: Any, device: Any, log: 
         log.info("Global refresh rates limited to 60 Hz")
     changed = controller.add_resolutions([(width, height, 60)])
     log.info("Resolution %dx%d@60 %s", width, height, "added" if changed else "already in the XML")
-    device.restart_device()  # même déjà présente : le pilote ne l'a pas chargée, sinon on ne serait pas là
+    reboot = bool(device.restart_device())  # même déjà présente : le pilote ne l'a pas chargée, sinon on ne serait pas là
     log.info("Virtual display device restarted")
+    if reboot:
+        log.warning("Virtual display device: Windows must restart before the restart is complete")
+        return EXIT_REBOOT_REQUIRED
     return 0
 
 
@@ -204,7 +236,8 @@ def run(args: argparse.Namespace, *, log: logging.Logger, vdd_factory: Callable[
         device: Any = None, display_factory: Callable[..., Any] | None = None,
         gpu_name: Callable[[], str | None] = primary_gpu_name,
         run_command: Callable[[list[str]], tuple[int, str]] | None = None) -> int:
-    """Runs the admin command of `args`; 0 on success, 1 on any failure (logged with its traceback)."""
+    """Runs the admin command of `args`; 0 on success, 3010 on success needing a Windows restart, 1 on any
+    failure (logged with its traceback)."""
     vdd_factory = vdd_factory or vdd.VddController  # fichier du pilote, VDDPATH compris
     if args.restart and not args.configure_vdd:
         log.error("--restart only goes with --configure-vdd")

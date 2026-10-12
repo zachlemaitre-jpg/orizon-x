@@ -229,14 +229,16 @@ def install_driver(inf_path: str | os.PathLike, *, api: "DeviceApi | None" = Non
     return reboot
 
 
-def remove_driver(*, api: "DeviceApi | None" = None, registry: Registry | None = None) -> None:
-    """Removes every Root\\MttVDD node, then its driver package from the driver store (admin). No-op if absent."""
+def remove_driver(*, api: "DeviceApi | None" = None, registry: Registry | None = None) -> bool:
+    """Removes every Root\\MttVDD node, then its driver package from the driver store (admin). No-op if absent.
+
+    Returns True when pnputil says a reboot is needed to finish (exit code 3010)."""
     operation = "remove_driver"
     api = api or Win32DeviceApi()
     _require_admin(api, operation)
     devices = find_devices(registry)
     if not devices:
-        return
+        return False
     # Noms oemNN.inf relevés avant le retrait : après, la clé de classe a disparu.
     packages = list(dict.fromkeys(d.inf_name for d in devices if d.inf_name))
     try:
@@ -248,20 +250,26 @@ def remove_driver(*, api: "DeviceApi | None" = None, registry: Registry | None =
             api.destroy_info_list(hset)
     except VddDeviceError as error:
         raise _as(operation, error) from error
+    reboot = False
     for package in packages:
-        _pnputil(api, operation, ["/delete-driver", package, "/uninstall"])
+        reboot = _pnputil(api, operation, ["/delete-driver", package, "/uninstall"]) or reboot
+    return reboot
 
 
-def restart_device(*, api: "DeviceApi | None" = None, registry: Registry | None = None) -> None:
-    """Restarts the VDD device so the driver reads vdd_settings.xml again (admin). The screen blinks."""
+def restart_device(*, api: "DeviceApi | None" = None, registry: Registry | None = None) -> bool:
+    """Restarts the VDD device so the driver reads vdd_settings.xml again (admin). The screen blinks.
+
+    Returns True when pnputil says a reboot is needed to finish (exit code 3010)."""
     operation = "restart_device"
     api = api or Win32DeviceApi()
     _require_admin(api, operation)
     devices = find_devices(registry)
     if not devices:
         raise VddDeviceError(operation, ERROR_NOT_FOUND, f"no {HARDWARE_ID} device")
+    reboot = False
     for device in devices:
-        _pnputil(api, operation, ["/restart-device", device.instance_id])
+        reboot = _pnputil(api, operation, ["/restart-device", device.instance_id]) or reboot
+    return reboot
 
 
 def _require_admin(api: "DeviceApi", operation: str) -> None:
@@ -269,11 +277,13 @@ def _require_admin(api: "DeviceApi", operation: str) -> None:
         raise VddDeviceError(operation, ERROR_ACCESS_DENIED, "administrator rights required")
 
 
-def _pnputil(api: "DeviceApi", operation: str, args: list[str]) -> None:
+def _pnputil(api: "DeviceApi", operation: str, args: list[str]) -> bool:
+    """Runs pnputil; True when it succeeded but asks for a reboot (3010), raises VddDeviceError on failure."""
     code, output = api.pnputil(args)
     if code not in (0, ERROR_SUCCESS_REBOOT_REQUIRED):
         tail = " ".join(output.split())[-300:]
         raise VddDeviceError(operation, code, f"pnputil {' '.join(args)}: {tail}" if tail else f"pnputil {args[0]}")
+    return code == ERROR_SUCCESS_REBOOT_REQUIRED
 
 
 def _as(operation: str, error: VddDeviceError) -> VddDeviceError:
