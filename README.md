@@ -1,105 +1,222 @@
 # Orizon X
 
-Tablette Android comme second écran pour Windows, via câble USB-C.
+**Orizon X** transforme une tablette ou un téléphone Android, branché en USB-C, en **écran étendu pour Windows** (image en 60 fps, tactile et stylet) ou en **barre « Actions »** : des boutons tactiles pour piloter le PC (volume, médias, luminosité, Wi-Fi, clés USB…).
 
-Phase actuelle : **1 — pipeline vidéo** (spec : `docs/superpowers/specs/2026-10-01-phase1-video-pipeline-design.md`, plan : `docs/superpowers/plans/2026-10-01-phase1-video-pipeline.md`). Le PC capture son écran principal, l'encode en H.264 matériel et l'envoie à la tablette par `adb forward` ; la tablette décode et affiche, et mesure la latence.
+- [Installation](#installation-utilisateurs)
+- [Utilisation](#utilisation)
+- [Dépannage](#dépannage)
+- [Développement](#développement)
+- [Historique des essais](#historique-des-essais)
 
-## Structure
+## Installation (utilisateurs)
+
+### Ce qu'il faut télécharger
+
+- `OrizonX-Setup.exe` : l'installateur pour le PC Windows (10 ou 11, 64 bits).
+- `OrizonX.apk` : l'application pour l'appareil Android (Android 11 ou plus).
+
+### Sur le PC
+
+1. Lance `OrizonX-Setup.exe`.
+2. **SmartScreen** peut afficher « Windows a protégé votre ordinateur », car l'installateur n'est pas signé. Clique sur **Informations complémentaires**, puis sur **Exécuter quand même**.
+3. Windows demande les **droits administrateur** (une seule fois) : accepte.
+4. Choisis la langue. **English** est présélectionné ; **Français** est disponible dans la liste.
+5. Clique sur Suivant jusqu'à l'installation. Deux cases sont proposées : un raccourci sur le bureau (cochée) et « Démarrer Orizon X avec Windows » (décochée).
+6. Pendant l'installation, Windows demande d'installer le **pilote d'écran virtuel** (éditeur : **SignPath Foundation**). Clique sur **Installer**. Si la fenêtre n'apparaît pas au premier plan, cherche-la dans la barre des tâches. Si tu refuses, Orizon X fonctionne seulement en mode Dupliquer.
+7. Si l'installateur demande de **redémarrer**, redémarre : le pilote n'est prêt qu'après.
+8. Lance **Orizon X** (case « Lancer Orizon X » à la fin, ou raccourci).
+
+### Sur l'appareil Android
+
+1. Copie `OrizonX.apk` sur l'appareil.
+2. Ouvre le fichier. Android demande d'**autoriser l'installation d'applications inconnues** pour l'application que tu utilises (Fichiers, Chrome…) : autorise-la, puis installe l'APK.
+3. Active le **débogage USB** (étapes génériques ; les menus varient selon la marque, des guides par marque suivront) :
+   1. Paramètres → À propos → Informations sur le logiciel.
+   2. Tape **7 fois** sur « Numéro de version » : le mode développeur s'active.
+   3. Reviens dans Paramètres → **Options de développement** → active **Débogage USB**.
+4. Branche l'appareil au PC avec un câble USB-C **qui transmet des données** (pas un câble de charge seul).
+5. Accepte la fenêtre « **Autoriser le débogage USB ?** » sur l'appareil (coche « Toujours autoriser » pour ne plus la revoir).
+
+L'ordre de lancement n'a pas d'importance : le PC attend l'appareil, et l'appareil attend le PC.
+
+## Utilisation
+
+Ouvre Orizon X sur le PC, puis sur l'appareil. L'appareil affiche un écran d'attente avec deux gros boutons, **Screen** et **Actions**, pour choisir son rôle. Le rôle est mémorisé. Par défaut : Screen sur tablette, Actions sur téléphone. Changer de rôle pendant une connexion la ferme et la rouvre aussitôt.
+
+### Mode Écran (Screen)
+
+L'appareil devient un écran en plus.
+
+- **L'écran virtuel apparaît à la connexion** et disparaît quelques secondes après le débranchement du câble (15 s de grâce, pour un rebranchement rapide).
+- **Réglages dans la fenêtre Orizon X** (appliqués tout de suite) :
+
+  | Réglage | Choix |
+  |---|---|
+  | Mode | **Extend** (vrai écran étendu) ou **Duplicate** (copie de l'écran principal) |
+  | Position | À droite (par défaut), à gauche, au-dessus, en dessous |
+  | Scale | **Auto** (calculée d'après la densité de l'appareil, p. ex. 200 % pour 2880×1800) ou 100 % à 250 % |
+  | Encoder | **Auto**, AMF (AMD) ou NVENC (NVIDIA) |
+  | Language | English ou Français |
+
+  Position et Scale sont grisés en mode Duplicate.
+- **Duplicate** : aucun écran virtuel n'est créé, l'appareil montre l'écran principal.
+- **Adjust in Windows…** ouvre les paramètres d'affichage de Windows pour les réglages fins.
+- **Tactile et stylet** : le doigt et le S Pen pilotent Windows à l'endroit touché.
+  - Doigt : tap = clic, appui long = clic droit, défilement et zoom à deux doigts. Trois doigts au plus sont transmis.
+  - S Pen : survol = curseur, encre avec pression et inclinaison, bouton latéral = clic droit. Tant que le stylet est détecté, la paume est ignorée.
+- **HUD** : un **appui long à 4 doigts** (2 s, sans bouger) affiche ou masque les infos de connexion (fps, latence envoi→affichage, décodeur). Ce geste n'existe pas en mode Actions.
+
+### Mode Actions
+
+Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le PC. L'écran reste allumé, et le portrait est autorisé. Les tuiles dont le PC ne dispose pas (pas de batterie, pas de Wi-Fi…) disparaissent.
+
+- **Horloge** (heure et date du PC) et **batterie du PC**.
+- **Volume** (curseur) et **muet**.
+- **Médias** : précédent, lecture/pause, suivant.
+- **En cours de lecture** : carte avec la pochette, le titre, l'artiste, l'album et l'application. Elle marche avec toute source qui publie dans les contrôles multimédias de Windows (Spotify, navigateur, VLC…).
+- **Luminosité**.
+- **Wi-Fi** (avec barres de signal), **Bluetooth** et **mode avion**.
+- **Clés et disques USB** : **Ouvrir** dans l'Explorateur, **Éjecter** proprement. Si l'éjection est refusée (clé utilisée), un message le dit.
+
+### Fenêtre, zone de notification, quitter
+
+- **La croix** range la fenêtre dans la zone de notification : la connexion continue. Un clic sur l'icône la rouvre. Le menu de l'icône (clic droit) propose Démarrer/Arrêter, Ouvrir la fenêtre, Ouvrir le journal, Lancer avec Windows et Quitter.
+- **Quit** (bouton de la fenêtre, ou « Quitter » dans le menu de l'icône) arrête tout proprement : écran virtuel retiré, contacts tactiles relâchés. À utiliser avant de désinstaller, de relancer en administrateur ou de brancher l'appareil à un autre PC.
+- La couleur de l'icône indique l'état : gris arrêté, ambre en attente, vert connecté, rouge erreur.
+
+## Dépannage
+
+**L'état reste sur « En attente de la tablette ».**
+- Vérifie le câble : il doit transmettre des données. Essaie un autre câble ou un autre port.
+- Vérifie que le **débogage USB** est activé.
+- Vérifie la fenêtre d'**autorisation** sur l'appareil. Si elle ne s'est jamais affichée : débranche, rebranche, ou dans Options de développement, « Révoquer les autorisations de débogage USB », puis rebranche.
+- Ouvre l'application Orizon X sur l'appareil (le PC affiche alors « Ouvre Orizon X sur la tablette » tant qu'elle est fermée).
+
+**Pas d'écran virtuel (message « Virtual display driver not found »).**
+- Le pilote n'est pas installé ou attend un redémarrage : redémarre Windows, puis relance Orizon X.
+- Sinon, relance `OrizonX-Setup.exe` (réinstallation par-dessus), en acceptant la demande du pilote.
+- En attendant, passe en mode **Duplicate** (bouton « Use Duplicate »).
+- Si la résolution exacte de l'appareil n'est pas connue du pilote, l'image s'affiche avec des bandes noires. Le bouton **Add exact resolution** l'ajoute (une demande de droits administrateur) ; l'image se corrige à la reconnexion.
+- Avant une mise à jour de pilote graphique, désinstalle Orizon X (ou le pilote d'écran virtuel) pour éviter un écran noir au redémarrage.
+
+**Le tactile ne marche pas dans certaines fenêtres (Gestionnaire des tâches, installeurs).** Windows refuse le tactile injecté dans une fenêtre lancée en administrateur tant qu'Orizon X ne l'est pas aussi.
+1. Quitte Orizon X (bouton **Quit**). Sinon, le nouveau lancement ne fait que réafficher l'ancienne fenêtre, qui n'est pas administrateur.
+2. Clic droit sur le raccourci Orizon X → **Exécuter en tant qu'administrateur**.
+
+**Le tactile ne marche nulle part.** Le tactile vise l'écran Windows qui a la taille du flux. S'il n'existe pas un écran unique de cette taille, il se désactive et la vidéo continue.
+
+**SmartScreen / pare-feu.**
+- SmartScreen à l'installation et au premier lancement : voir plus haut (Informations complémentaires → Exécuter quand même).
+- Orizon X n'utilise que la boucle locale (127.0.0.1). L'installateur ajoute une règle de pare-feu pour `adb.exe`, qui évite l'invite de Windows Defender au premier lancement.
+- Le premier lancement peut être lent : l'antivirus analyse l'exe.
+
+**Le journal.** `%LOCALAPPDATA%\OrizonX\relay.log` (menu de l'icône → Ouvrir le journal). Joins-le à tout signalement de problème. Les opérations qui demandent les droits administrateur écrivent dans `relay-admin.log`, au même endroit.
+
+**NVENC ne marche pas.** NVENC exige un pilote NVIDIA ≥ 610 avec le ffmpeg fourni. En mode Auto, Orizon X retombe sur AMF. Sinon, mets à jour le pilote ou choisis un autre encodeur.
+
+## Développement
+
+### Dépôt
 
 | Dossier | Contenu |
 |---|---|
-| `protocol/` | Référence du protocole TABX v1 et vecteurs de test partagés |
-| `host-prototype/` | Relais Python (phase 1) : ffmpeg → protocole TABX → tablette ; `app/` : appli PC (fenêtre + zone de notification) |
-| `android/` | App Android (Kotlin, Compose) : réception, décodage MediaCodec, interface |
+| `host-prototype/` | Appli PC en Python : moteur (`engine.py`), `app/` (fenêtre Qt, icône de notification, réglages, langues, droits admin), `actions/` (fournisseurs du mode Actions), écran virtuel (`vdd*.py`, `virtual_display.py`, `display_layout.py`), `relay.py` (CLI), `tests/` |
+| `android/` | App Android (Kotlin, Compose) : réception, décodage MediaCodec, écran d'attente, mode Actions |
+| `protocol/` | Référence du protocole (`PROTOCOL.md`) et vecteurs de test partagés Python/Kotlin |
+| `installer/` | Installateur Inno Setup (`orizonx.iss`), pilote d'écran virtuel signé (`vdd/`), licences |
+| `tools/` | Outils de développement (`svg_to_vector.py`) |
+| `extended/` | Sources graphiques : logo, police MAZAGLA, icônes SVG (`icons/`) |
+| `docs/` | Specs (`superpowers/specs/`), plans, notes d'exploration (`notes/`) |
+| `build-pc.ps1` | Compile l'appli PC et l'installateur dans `dist/` (ignoré par git, comme `build/`) |
 
-## Prérequis
+### Prérequis
 
-- Windows 11, Python ≥ 3.10 (lanceur `py`).
-- ffmpeg ≥ 6 avec `ddagrab`, `h264_amf` / `h264_nvenc` (build Gyan), dans le PATH pour compiler l'appli PC et pour le mode debug `py relay.py` (l'exe compilé embarque ffmpeg et adb). Sur la machine de dev, il est installé dans `%LOCALAPPDATA%\Programs\ffmpeg\bin` (déjà ajouté au PATH utilisateur ; ouvrir un nouveau terminal après l'installation). Vérifier avec `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
-- Encodeur : **AMF** (iGPU AMD) fonctionne. **NVENC** exige un pilote NVIDIA ≥ 610 avec ce build de ffmpeg : mets à jour le pilote avant de choisir NVENC (ou `--encoder nvenc` en ligne de commande). En mode Auto, Orizon X retombe sur AMF si NVENC est indisponible.
-- Android Studio (SDK + JBR). `adb` est cherché dans le PATH puis dans `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
-- Tablette Android 11+ avec le débogage USB activé : Paramètres → À propos de la tablette → Informations sur le logiciel → taper 7 fois sur « Numéro de version », puis Options de développement → « Débogage USB ». Brancher le câble et accepter l'autorisation sur la tablette.
+- Windows 11 et **Python 3.13** (lanceur `py`).
+- Un environnement virtuel `host-prototype\.venv` avec `requirements-dev.txt` (PySide6, PyInstaller, et les dépendances d'exécution). `build-pc.ps1` le crée et l'installe tout seul ; à la main : `py -m venv host-prototype\.venv`, puis `host-prototype\.venv\Scripts\python.exe -m pip install -r host-prototype\requirements-dev.txt`.
+- **Android Studio** (SDK + JBR) pour Gradle : `$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"`. `adb` est cherché dans le PATH, puis dans `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
+- **ffmpeg ≥ 6** (build Gyan, avec `ddagrab`, `h264_amf`, `h264_nvenc`) **dans le PATH**, pour compiler et pour le mode debug `py relay.py`. L'exe compilé embarque ffmpeg et adb. Vérification : `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
+- **Inno Setup 6** (pas la 7) pour l'installateur : `winget install --id JRSoftware.InnoSetup -e --scope user`. Sans lui, `build-pc.ps1` compile l'appli mais pas `OrizonX-Setup.exe`.
 
-## Lancer
+### Tests
 
-1. Installer l'app :
-   ```powershell
-   $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
-   cd android; .\gradlew.bat :app:installDebug; cd ..
-   ```
-2. Ouvrir **Orizon X** sur la tablette : écran d'attente en verre dépoli.
-3. Lancer **Orizon X** sur le PC :
-   - la première fois, compiler l'appli (environ 2 min, crée aussi les raccourcis) :
-     ```powershell
-     .\build-pc.ps1 -Shortcuts
-     ```
-   - ensuite : raccourci **Orizon X** (menu Démarrer ou bureau). La fenêtre attend la tablette toute seule ; l'ordre de lancement n'a pas d'importance.
+- Python, avec le venv (tous les tests, Qt compris) :
+  ```powershell
+  cd host-prototype
+  .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+  ```
+- Python, avec l'interpréteur `py` (les tests Qt, sans PySide6, sont ignorés) :
+  ```powershell
+  cd host-prototype; py -m unittest discover -s tests -v
+  ```
+- Android (JVM) :
+  ```powershell
+  cd android; .\gradlew.bat :app:testDebugUnitTest
+  ```
+- Convertisseur d'icônes : `cd tools; py -m unittest`.
 
-   La croix range la fenêtre dans la zone de notification : le flux continue. Clic droit sur l'icône : Démarrer/Arrêter, journal (`%LOCALAPPDATA%\OrizonX\relay.log`), « Lancer avec Windows », Quitter. Réglages dans la fenêtre : écran capturé (Auto = celui à la taille de la tablette) et encodeur (Auto = NVENC si disponible, sinon AMF).
+### Compiler
 
-   Mode debug en ligne de commande (même moteur ; **quitter d'abord l'appli PC** : icône de notification > Quitter, sinon les deux relais se disputent la tablette) :
-   ```powershell
-   cd host-prototype; py relay.py; cd ..
-   ```
-   Options : `--encoder auto|nvenc|amf` (par défaut `auto`), `--output auto|N` (par défaut `auto` : l'écran à la taille de la tablette ; pour dupliquer l'écran principal, `--output 0`), `--list-outputs`, `--fps 60`, `--bitrate 30M`.
+```powershell
+.\build-pc.ps1              # dist\OrizonX-PC\ (OrizonX.exe + ffmpeg + adb), puis dist\OrizonX-Setup.exe
+.\build-pc.ps1 -Shortcuts   # crée en plus les raccourcis « Orizon X » (menu Démarrer et bureau)
+```
 
-   Le relais refait `adb forward` à chaque essai, donc il attend la tablette et l'app tout seul. Les demandes de keyframe après une erreur de décodage sont journalisées.
-4. Appui long à 4 doigts (2 s, sans bouger) sur la tablette pendant le flux : affiche/masque le HUD (fps, latence envoi→affichage, p50/p99 de session, offset d'horloge, décodeur).
+Quitte Orizon X avant (le script refuse de recompiler une appli qui tourne). La compilation prend environ 2 min.
 
-La latence du HUD est mesurée **de l'envoi par le relais à l'affichage** : elle exclut la capture et l'encodage côté PC. La latence de bout en bout se mesure en filmant les deux écrans.
+APK de développement (installé sur l'appareil branché) :
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+cd android; .\gradlew.bat :app:installDebug
+```
+Le fichier est `android\app\build\outputs\apk\debug\app-debug.apk`.
 
-## Second écran étendu
+### CLI de debug
 
-Sans configuration, Orizon X **duplique** un écran existant. Pour un vrai écran étendu, il faut un moniteur virtuel. En attendant le driver maison (phase 3), on utilise [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver), un driver signé : pas besoin du mode test.
+Même moteur que l'appli, sans écran virtuel, avec la sortie dans le terminal. **Quitte d'abord l'appli PC** (sinon les deux se disputent l'appareil).
 
-1. Installer : `winget install --id=VirtualDrivers.Virtual-Display-Driver -e`. Lancer ensuite **VDD Control** (dans `%LOCALAPPDATA%\Microsoft\WinGet\Packages\VirtualDrivers.Virtual-Display-Driver_*`) et cliquer **une seule fois** sur « Install Driver » : chaque clic crée un adaptateur de plus.
-2. Configurer `C:\VirtualDisplayDriver\vdd_settings.xml` :
-   - `<friendlyname>` = le GPU qui pilote l'écran principal (ici `AMD Radeon(TM) 890M Graphics`) ;
-   - ajouter la résolution `2880`×`1800` à `60` Hz dans `<resolutions>`.
+```powershell
+cd host-prototype; py relay.py
+```
 
-   Cliquer ensuite sur « Restart Driver » dans VDD Control.
-3. Dans Paramètres → Écran : « Étendre ces affichages », écran virtuel en 2880×1800 à 200 %, placé du côté où se trouve la tablette.
-4. Lancer Orizon X : en mode Auto, elle capture l'écran qui a la taille de la tablette (2880×1800), ce qui vise donc l'écran virtuel. Les numéros d'écran changent quand on branche ou débranche un moniteur, d'où ce mode automatique.
+Options : `--encoder auto|nvenc|amf` (défaut `auto`), `--output auto|N` (défaut `auto` : l'écran à la taille de l'appareil ; `--output 0` duplique l'écran principal), `--list-outputs`, `--fps 60`, `--bitrate 30M`. Le tactile a son autotest : `py injector.py --selftest` (survol seulement, sans clic).
 
-   Pour voir les écrans ou en forcer un, en ligne de commande : `py relay.py --list-outputs`, puis `--output N`.
+Logs de l'appareil : `adb logcat -s VideoDecoder Session Receiver`.
 
-**À savoir :**
-- **Désinstaller le driver (VDD Control ou Gestionnaire de périphériques) avant toute mise à jour de pilote GPU**, sinon risque d'écran noir au démarrage.
+### Icônes
 
-## Tactile et stylet (phase 4)
+Les icônes des tuiles viennent de SVG monochromes. Dépose-les dans `extended/icons/` puis, depuis la racine du dépôt :
 
-Pendant le flux, le doigt et le S Pen pilotent Windows à l'endroit touché de l'écran étendu :
+```powershell
+py tools/svg_to_vector.py
+```
 
-- **Doigt** :
-  - tap = clic ;
-  - appui long = clic droit ;
-  - défilement et zoom à deux doigts (gestes natifs de Windows).
+Chaque `<nom>.svg` devient `android/app/src/main/res/drawable/ox_<nom>.xml` (VectorDrawable blanc, teintable). Le sous-ensemble SVG géré (chemins, rectangles, cercles, transformations, opacité) est décrit dans le docstring de `tools/svg_to_vector.py` ; le reste (traits, dégradés, masques, texte) est refusé avec une erreur au lieu d'être ignoré. Arguments facultatifs : `py tools/svg_to_vector.py [DOSSIER_SVG] [DOSSIER_SORTIE]`.
 
-  Au plus 3 doigts sont transmis : le 4e est réservé au HUD.
-- **S Pen** :
-  - survol = curseur ;
-  - encre avec pression et inclinaison ;
-  - bouton latéral = clic droit.
+### Tester l'installateur dans Windows Sandbox
 
-  Tant que le stylet est détecté, les doigts (la paume) sont ignorés.
-- **HUD** : appui long à 4 doigts (2 s, sans bouger).
-- **Écran ciblé** : le relais vise l'écran Windows qui a la taille du flux. S'il n'existe pas un écran unique de cette taille, le tactile se désactive mais la vidéo continue.
-- **Fenêtres administrateur** (Gestionnaire des tâches, installeurs) : voir [Fenêtres administrateur](#fenêtres-administrateur).
-- **Autotest de l'injection**, sans tablette et sans clic (survol uniquement) : `cd host-prototype; py injector.py --selftest`. Il vérifie que le curseur arrive au pixel visé.
+Windows Sandbox (Windows Pro) permet de tester l'installation sur un Windows vierge, sans toucher au PC.
 
-## Fenêtres administrateur
+1. Compile (`.\build-pc.ps1`) et copie `dist\OrizonX-Setup.exe` dans `build\sandbox\in\`.
+2. Double-clique sur `build\sandbox\orizonx.wsb`.
+3. Le script `build\sandbox\test.ps1` installe en silencieux, note ses vérifications (pilote, configuration, lancement de l'appli, désinstallation) et copie les journaux dans `build\sandbox\out\` (`result.txt`, `setup.log`, `relay.log`…).
 
-Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (Gestionnaire des tâches, installeurs…) tant qu'Orizon X ne l'est pas aussi. Pour les piloter :
+Dans la sandbox, l'appli finit en erreur « pas de tablette » (pas d'USB) et aucun écran virtuel n'apparaît (GPU virtuel) : ces deux points se vérifient sur un vrai PC.
 
-1. Quitter Orizon X d'abord (icône de notification > Quitter) : sinon le nouveau lancement ne fait que réafficher la fenêtre de l'instance déjà ouverte, qui n'est pas administrateur.
-2. Clic droit sur le raccourci Orizon X > Exécuter en tant qu'administrateur. En mode debug : `py relay.py` depuis un terminal administrateur.
+### Pièges connus
 
-## Appli PC : notes
+- **`winrt` avant `PySide6`** : importer un module `winrt` avant PySide6 fait planter le processus (violation d'accès). Importe toujours PySide6 d'abord. Dans les tests, pas d'import `winrt` au niveau du module (la découverte l'importerait avant les tests Qt).
+- **Limite de modes du pilote d'écran virtuel (VDD)** : il multiplie chaque résolution par chaque fréquence de `<global><g_refresh_rate>`. Avec trop de modes (156 constatés), il cesse de créer son moniteur sans erreur. Orizon X limite donc les fréquences à **60 Hz** et plafonne à 64 modes. Ne rajoute pas d'autres fréquences dans `vdd_settings.xml`.
+- **NVENC** : pilote NVIDIA ≥ 610 requis avec ce build de ffmpeg ; AMF (iGPU AMD) marche.
+- **Pilote d'écran virtuel jamais retiré** : l'appli active et désactive le chemin d'affichage (comme « Déconnecter cet écran ») ; elle ne fait pas varier le nombre de moniteurs de VDD.
+- **« Lancer avec Windows »** n'existe que dans l'appli compilée, pas en lançant les sources avec `py`.
+- **Textes de l'app Android** : en français pour l'instant (traduction prévue).
+- **Specs de référence** : `docs/superpowers/specs/` (appli PC, installateur et écran virtuel — §8 prime —, mode Actions, identité visuelle), et le protocole dans `protocol/PROTOCOL.md`.
 
-- Le premier lancement de l'exe peut être ralenti par l'analyse de l'antivirus. Les suivants sont rapides.
-- « Lancer avec Windows » (menu de l'icône) n'existe que dans l'appli compilée, pas en lançant les sources avec `py`.
+## Historique des essais
 
-## Appli PC : checklist
+Notes et résultats des phases 1 et 4, et checklists de vérification manuelle. Gardés pour mémoire.
+
+### Appli PC : checklist
 
 - [ ] Double-clic sur le raccourci : fenêtre en verre, aucune console qui clignote, « En attente de la tablette ».
 - [ ] Le fond de la fenêtre est flouté (effet verre), pas transparent.
@@ -111,15 +228,9 @@ Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (
 - [ ] Quitter en plein flux : la tablette affiche « PC déconnecté », aucun contact ne reste posé.
 - [ ] Lancer avec Windows coché, puis session rouverte : l'appli démarre dans la zone de notification.
 - [ ] Auto sur secteur et sur batterie : l'encodeur choisi est dans le journal.
+### Checklist d'intégration (phase 1)
 
-## Tests
-
-- Python : `cd host-prototype; .\.venv\Scripts\python.exe -m unittest discover -s tests -v`. Les tests Qt (fenêtre, zone de notification, contrôleur) ont besoin de PySide6, installé dans `host-prototype\.venv` par `build-pc.ps1` ; avec `py`, ils sont ignorés (skipped).
-- Android (JVM) : `cd android; .\gradlew.bat :app:testDebugUnitTest`
-
-## Checklist d'intégration (phase 1)
-
-### Critères de réussite (spec §9)
+#### Critères de réussite (spec §9)
 
 - [ ] 60 fps stables pendant 10 min en bougeant des fenêtres, sans artefacts cumulés (stats du relais + HUD).
 - [ ] HUD : p50 ≤ 20 ms, p99 ≤ 40 ms. Noter les valeurs et le nom du décodeur.
@@ -128,7 +239,7 @@ Windows refuse le tactile injecté dans une fenêtre lancée en administrateur (
 - [ ] Relais tué (Ctrl+C) en plein flux : l'app revient à l'écran d'attente avec « PC déconnecté ».
 - [ ] Tous les tests passent.
 
-### Vérifications techniques sur la tablette
+#### Vérifications techniques sur la tablette
 
 Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 
@@ -148,7 +259,7 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 - [ ] **Thermique de l'écran d'attente** : le laisser 30 min (flou plein écran animé), puis `adb shell dumpsys thermalservice` et noter le p50/p99 de la session suivante. Si la tablette chauffe ou bride, remplacer le flou par des dégradés radiaux (`Brush.radialGradient`) dans `WaitingScreen.kt`.
 - [ ] **Keyframes AMF** : après une recréation du décodeur, l'image revient en ≤ 1 s (IDR toutes les 60 frames). Sinon, AMF n'envoie qu'une IDR : revoir les options de `ENCODERS["amf"]` dans `relay.py`.
 
-### Vérifications tactile et stylet (phase 4)
+#### Vérifications tactile et stylet (phase 4)
 
 - [ ] **Tactile** :
   - tap précis (viser la croix d'une fenêtre) ;
@@ -173,8 +284,7 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
   - refaire l'essai avec le relais en administrateur.
 - [ ] **Garde-fou 100 ms** (`KEEPALIVE_S` dans `injector.py`) : garder un doigt immobile 5 s sur une fenêtre. Mettre ensuite la constante à `3600` et refaire l'essai. Si le contact tient aussi sans garde-fou, le garde-fou est inutile.
 - [ ] **Entre deux traits** : `PEN_EXIT_GRACE_MS` (50 ms, `TouchForwarder.kt`) évite que le stylet sorte de portée entre deux traits. Si le curseur du stylet clignote entre les traits, l'augmenter.
-
-## Mesures phase 1
+### Mesures phase 1
 
 | Date | Mode | Encodeur PC | Résolution | fps | Envoi→affichage moy. / max par s | p50 / p99 (HUD) | RTT USB | Ressenti |
 |---|---|---|---|---|---|---|---|---|
@@ -183,8 +293,7 @@ Logs utiles : `adb logcat -s VideoDecoder Session Receiver`
 - Critère p50 ≤ 20 ms : **atteint**. Critère p99 ≤ 40 ms : **non atteint**. Les pics (~1 image sur 60) coïncident avec les IDR envoyées chaque seconde, plus lourdes à transférer et à décoder.
 - Pistes, si le besoin se fait sentir : espacer les IDR, ou les remplacer par un rafraîchissement intra progressif. Cette dernière piste dépend de la phase 2 (IDR à la demande).
 - Latence filmée de bout en bout : non mesurée.
-
-## Essai phase 4 (tactile et stylet)
+### Essai phase 4 (tactile et stylet)
 
 | Date | Vérification | Résultat |
 |---|---|---|
