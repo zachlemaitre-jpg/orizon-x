@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="noct" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <rect x="21.33" y="5.41" width="5.34" height="7.71" rx="2.67" ry="2.67"/>
+  <rect x="10.91" y="9.72" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(-5.63 13.58) rotate(-45)"/>
+  <rect x="6.6" y="20.14" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(-14.73 33.27) rotate(-90)"/>
+  <rect x="10.91" y="30.56" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(-1.15 68.36) rotate(-135)"/>
+  <rect x="21.33" y="34.88" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(48 77.47) rotate(180)"/>
+  <rect x="31.75" y="30.56" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(83.09 34.42) rotate(135)"/>
+  <rect x="36.06" y="20.14" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(62.73 -14.73) rotate(90)"/>
+  <rect x="31.75" y="9.72" width="5.34" height="7.71" rx="2.67" ry="2.67" transform="translate(19.68 -20.36) rotate(45)"/>
+  <path d="M24,14.78c-5.09,0-9.22,4.13-9.22,9.22s4.13,9.22,9.22,9.22,9.22-4.13,9.22-9.22-4.13-9.22-9.22-9.22ZM24,30.25c-3.45,0-6.25-2.8-6.25-6.25s2.8-6.25,6.25-6.25c.76,0,1.49.14,2.17.39-1.85.2-3.3,1.75-3.3,3.66,0,2.04,1.65,3.69,3.69,3.69,1.72,0,3.15-1.18,3.56-2.77.09.41.13.84.13,1.28,0,3.45-2.8,6.25-6.25,6.25Z"/>
+</svg>
