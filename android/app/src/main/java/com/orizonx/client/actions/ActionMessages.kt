@@ -21,4 +21,5 @@ object ActionMessages {
     fun airplaneSet(on: Boolean): JSONObject = id("airplane.set").put("value", on)
     fun usbOpen(drive: String): JSONObject = id("usb.open").put("drive", drive)
     fun usbEject(drive: String): JSONObject = id("usb.eject").put("drive", drive)
+    fun contextPress(buttonId: String): JSONObject = id("context.press").put("button", buttonId)
 }

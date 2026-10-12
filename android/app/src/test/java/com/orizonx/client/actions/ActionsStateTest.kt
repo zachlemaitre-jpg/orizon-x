@@ -191,6 +191,52 @@ class ActionsStateTest {
     }
 
     @Test
+    fun contextIsParsed() {
+        val s = parse(
+            """{"context":{"available":true,"app":"PowerPoint","profile":"powerpoint","buttons":[
+                {"id":"ppt.prev","icon":"arrow_left","label":"Précédent"},
+                {"id":"ppt.next","icon":"arrow_right","label":"Suivant"}]}}""",
+        )
+        assertEquals(
+            ContextBar(
+                "PowerPoint", "powerpoint",
+                listOf(ContextButton("ppt.prev", "arrow_left", "Précédent"), ContextButton("ppt.next", "arrow_right", "Suivant")),
+            ),
+            s.context,
+        )
+    }
+
+    @Test
+    fun contextAbsentOrUnavailableIsNull() {
+        assertNull(parse("{}").context)
+        assertNull(parse("""{"context":{"available":false,"app":"X","profile":"x","buttons":[{"id":"a","icon":"copy","label":"A"}]}}""").context)
+        assertNull(parse("""{"context":{"app":"X","profile":"x","buttons":[{"id":"a","icon":"copy","label":"A"}]}}""").context)
+        assertNull(parse("""{"context":null}""").context)
+        assertNull(parse("""{"context":{"available":true,"app":"X","profile":"x"}}""").context)
+        assertNull(parse("""{"context":{"available":true,"app":"X","profile":"x","buttons":[]}}""").context)
+    }
+
+    @Test
+    fun contextKeepsAtMostEightButtons() {
+        val buttons = (1..11).joinToString(",") { """{"id":"b$it","icon":"copy","label":"B$it"}""" }
+        val s = parse("""{"context":{"available":true,"app":"X","profile":"x","buttons":[$buttons]}}""")
+        assertEquals((1..8).map { "b$it" }, s.context!!.buttons.map { it.id })
+    }
+
+    @Test
+    fun contextIsTolerantToBadButtons() {
+        val s = parse(
+            """{"context":{"available":true,"app":null,"buttons":[
+                {"icon":"copy","label":"no id"}, 5, null, {"id":"","icon":"copy"},
+                {"id":"ok","icon":"no_such_icon","label":"Ok"}, {"id":"bare"}]}}""",
+        )
+        val c = s.context!!
+        assertEquals("", c.app)
+        assertEquals("", c.profile)
+        assertEquals(listOf(ContextButton("ok", "no_such_icon", "Ok"), ContextButton("bare", "", "")), c.buttons)
+    }
+
+    @Test
     fun usbKindDefaultsToStick() {
         val s = parse(
             """{"usb":[{"drive":"E:","kind":"stick"},{"drive":"F:","kind":"disk"},{"drive":"G:"},

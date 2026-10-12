@@ -2,6 +2,8 @@ package com.orizonx.client.ui
 
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -59,6 +62,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
@@ -94,6 +98,9 @@ import com.orizonx.client.actions.BluetoothState
 import com.orizonx.client.actions.BrightnessIcon
 import com.orizonx.client.actions.BrightnessState
 import com.orizonx.client.actions.ClockState
+import com.orizonx.client.actions.ContextBar
+import com.orizonx.client.actions.ContextButton
+import com.orizonx.client.actions.ContextIcons
 import com.orizonx.client.actions.NowPlaying
 import com.orizonx.client.actions.UsbDrive
 import com.orizonx.client.actions.UsbKind
@@ -176,22 +183,29 @@ fun ActionsScreen(
         BlobBackground()
         val landscape = maxWidth > maxHeight
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-                    Pill("Changer de mode", selected = false, onClick = { tap(); onSwitchMode() })
-                }
-                val state = shown
-                if (state == null) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        GlassText("Connexion au PC…", size = 16.sp, alpha = 0.8f)
+            val state = shown
+            val contextBar = state?.context
+            Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                        Pill("Changer de mode", selected = false, onClick = { tap(); onSwitchMode() })
                     }
-                } else {
-                    ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
+                    if (state == null) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            GlassText("Connexion au PC…", size = 16.sp, alpha = 0.8f)
+                        }
+                    } else {
+                        ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
+                    }
                 }
+                // The Touch-Bar-like strip sits at the very bottom; without a context nothing is reserved for it.
+                if (contextBar != null) ContextBarStrip(contextBar, controls, landscape)
             }
             AnimatedVisibility(
                 visible = noticeText != null,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp, start = 16.dp, end = 16.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (contextBar != null) 24.dp + ContextBarHeight + ContextBarBottomMargin else 24.dp, start = 16.dp, end = 16.dp),
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
@@ -341,6 +355,104 @@ private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit
     state.brightness?.let { b -> list += { BrightnessCard(b, c) } }
     if (hasRadios(state)) list += { RadioTiles(state, c) }
     return list
+}
+
+// --- Contextual bar ------------------------------------------------------------------------
+
+private val ContextBarHeight = 76.dp
+private val ContextBarBottomMargin = 8.dp
+private val ContextBarShape = RoundedCornerShape(22.dp)
+private val ContextKeyShape = RoundedCornerShape(14.dp)
+private val ContextKeyMinWidth = 64.dp
+private const val CONTEXT_FADE_MS = 200
+
+/**
+ * Full-width glass strip with the buttons for the PC's foreground app. The content crossfades (~200 ms) when the profile
+ * changes; changes inside the same profile (e.g. the window title in the app name) just update it in place.
+ */
+@Composable
+private fun ContextBarStrip(bar: ContextBar, c: Controls, landscape: Boolean) {
+    val latest by rememberUpdatedState(bar)
+    // The outgoing profile keeps showing its own buttons while it fades out.
+    val lastByProfile = remember { mutableMapOf<String, ContextBar>() }
+    lastByProfile[bar.profile] = bar
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = ContextBarBottomMargin)
+            .height(ContextBarHeight)
+            .clip(ContextBarShape)
+            .background(Color.White.copy(alpha = 0.10f))
+            .border(
+                1.dp,
+                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.45f), Color.White.copy(alpha = 0.12f))),
+                ContextBarShape,
+            ),
+    ) {
+        Crossfade(targetState = bar.profile, animationSpec = tween(CONTEXT_FADE_MS), label = "contextBar") { profile ->
+            ContextBarContent(if (profile == latest.profile) latest else lastByProfile[profile] ?: latest, c, landscape)
+        }
+    }
+}
+
+/** App name small on the left, then the buttons evenly spread; they scroll horizontally when they would get too narrow. */
+@Composable
+private fun ContextBarContent(bar: ContextBar, c: Controls, landscape: Boolean) {
+    Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (bar.app.isNotBlank()) {
+            BasicText(
+                bar.app,
+                style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = if (landscape) 140.dp else 84.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+        }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
+            if (maxWidth / bar.buttons.size >= ContextKeyMinWidth) {
+                Row(Modifier.fillMaxSize()) { ContextKeys(bar, c, spread = true) }
+            } else {
+                Row(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) { ContextKeys(bar, c, spread = false) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.ContextKeys(bar: ContextBar, c: Controls, spread: Boolean) {
+    for (button in bar.buttons) {
+        ContextKey(
+            button, c,
+            if (spread) Modifier.weight(1f).fillMaxHeight() else Modifier.width(ContextKeyMinWidth).fillMaxHeight(),
+        )
+    }
+}
+
+/** 24 dp pictogram over a one-line 11 sp label; a tap sends `context.press` for this button. */
+@Composable
+private fun ContextKey(button: ContextButton, c: Controls, modifier: Modifier) {
+    Column(
+        modifier
+            .padding(vertical = 6.dp, horizontal = 2.dp)
+            .clip(ContextKeyShape)
+            .clickable {
+                c.tap()
+                c.send(ActionMessages.contextPress(button.id))
+            }
+            .padding(horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Picto(ContextIcons.drawable(button.icon), 24.dp)
+        Spacer(Modifier.height(4.dp))
+        BasicText(
+            button.label,
+            style = TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp, textAlign = TextAlign.Center),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 // --- Clock ---------------------------------------------------------------------------------

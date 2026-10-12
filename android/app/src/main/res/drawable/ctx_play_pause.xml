@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icône play_arrow + pause: Material Icons (Google), licence Apache-2.0, https://github.com/google/material-design-icons -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2,6v12l9,-6zM13.5,6h3v12h-3zM18.5,6h3v12h-3z" />
+</vector>

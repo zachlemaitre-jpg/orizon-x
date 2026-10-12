@@ -27,6 +27,11 @@ class ActionMessagesTest {
     }
 
     @Test
+    fun contextPress() {
+        assertEquals("""{"id":"context.press","button":"ppt.prev"}""", wire(ActionMessages.contextPress("ppt.prev")))
+    }
+
+    @Test
     fun mediaKeys() {
         assertEquals("""{"id":"media.play_pause"}""", wire(ActionMessages.mediaPlayPause()))
         assertEquals("""{"id":"media.next"}""", wire(ActionMessages.mediaNext()))

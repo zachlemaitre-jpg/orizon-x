@@ -41,6 +41,16 @@ data class NowPlaying(
 
 data class Notice(val code: String, val drive: String?)
 
+/** [icon] is a name from the spec list (see [ContextIcons]); it may be unknown, the UI then shows a dot. */
+data class ContextButton(val id: String, val icon: String, val label: String)
+
+/** Contextual bar for the PC's foreground app: [app] is the display name, [profile] changes with the app. */
+data class ContextBar(val app: String, val profile: String, val buttons: List<ContextButton>) {
+    companion object {
+        const val MAX_BUTTONS = 8
+    }
+}
+
 /**
  * Immutable view of an ACTIONS_STATE payload. A section is null when the PC reports it unavailable
  * (`available` not true), when it is absent, or when its mandatory fields are missing or invalid:
@@ -58,6 +68,7 @@ data class ActionsState(
     val usb: List<UsbDrive> = emptyList(),
     val nowPlaying: NowPlaying? = null,
     val notice: Notice? = null,
+    val context: ContextBar? = null,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -101,7 +112,21 @@ data class ActionsState(
             notice = json.optJSONObject("notice")?.let { n ->
                 text(n, "code")?.let { Notice(it, text(n, "drive")) }
             },
+            context = context(json),
         )
+
+        /** Null (bar hidden) when absent, unavailable or without any usable button; at most [ContextBar.MAX_BUTTONS] buttons. */
+        private fun context(json: JSONObject): ContextBar? {
+            val c = available(json, "context") ?: return null
+            val array = c.optJSONArray("buttons") ?: return null
+            val buttons = (0 until array.length()).mapNotNull { i ->
+                val b = array.optJSONObject(i) ?: return@mapNotNull null
+                val id = text(b, "id") ?: return@mapNotNull null
+                ContextButton(id, text(b, "icon") ?: "", text(b, "label") ?: "")
+            }.take(ContextBar.MAX_BUTTONS)
+            if (buttons.isEmpty()) return null
+            return ContextBar(text(c, "app") ?: "", text(c, "profile") ?: "", buttons)
+        }
 
         /** The section object when the PC reports it with `available: true`, else null. */
         private fun available(json: JSONObject, key: String): JSONObject? =
