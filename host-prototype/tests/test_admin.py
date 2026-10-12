@@ -30,6 +30,9 @@ class FakeVdd:
     def ensure_single_monitor(self):
         return self._call("single")
 
+    def limit_global_refresh_rates(self, rates=(60,)):
+        return self._call("rates", tuple(rates))
+
     def add_resolutions(self, resolutions):
         return self._call("resolutions", list(resolutions))
 
@@ -178,7 +181,7 @@ class RunTest(unittest.TestCase):
 
     def test_configure_vdd_writes_gpu_single_monitor_and_resolutions_without_restart(self):
         self.assertEqual(self.run_admin("--configure-vdd"), 0)
-        self.assertEqual(self.vdd.calls, [("gpu", "AMD Radeon(TM) 890M Graphics"), ("single",),
+        self.assertEqual(self.vdd.calls, [("gpu", "AMD Radeon(TM) 890M Graphics"), ("single",), ("rates", (60,)),
                                           ("resolutions", list(COMMON_RESOLUTIONS))])
         self.assertEqual(self.device.calls, [])
 
@@ -193,7 +196,7 @@ class RunTest(unittest.TestCase):
 
     def test_configure_vdd_without_gpu_keeps_the_xml_gpu(self):
         self.assertEqual(self.run_admin("--configure-vdd", gpu=None), 0)
-        self.assertEqual([c[0] for c in self.vdd.calls], ["single", "resolutions"])
+        self.assertEqual([c[0] for c in self.vdd.calls], ["single", "rates", "resolutions"])
         self.assertIn("GPU", self.logs)
 
     def test_configure_vdd_failure_is_exit_1_and_logged(self):
@@ -228,7 +231,7 @@ class RunTest(unittest.TestCase):
 
         self.device.restart_device = lambda: order.append("restart")
         self.run_admin_with(Recording(), "--configure-vdd", "--restart")
-        self.assertEqual(order, ["gpu", "single", "resolutions", "icacls", "restart"])
+        self.assertEqual(order, ["gpu", "single", "rates", "resolutions", "icacls", "restart"])
 
     def run_admin_with(self, commands, *argv):
         with self.assertLogs(LOG, "INFO"):
@@ -313,8 +316,27 @@ class RunTest(unittest.TestCase):
 
     def test_add_resolution_adds_it_at_60_hz_then_restarts_the_device(self):
         self.assertEqual(self.run_admin("--add-resolution", "2800x1752"), 0)
-        self.assertEqual(self.vdd.calls, [("resolutions", [(2800, 1752, 60)])])
+        self.assertEqual(self.vdd.calls, [("rates", (60,)), ("resolutions", [(2800, 1752, 60)])])
         self.assertEqual(self.device.calls, [("is_admin",), ("restart",)])
+
+    def test_add_resolution_limits_the_rates_before_the_resolution_and_the_restart(self):
+        order = []
+        self.vdd._call = lambda name, *args: order.append(name) or True
+        self.device.restart_device = lambda: order.append("restart")
+        self.assertEqual(self.run_admin("--add-resolution", "2800x1752"), 0)
+        self.assertEqual(order, ["rates", "resolutions", "restart"])
+
+    def test_configure_vdd_limits_the_rates_before_adding_the_resolutions(self):
+        self.run_admin("--configure-vdd")
+        names = [c[0] for c in self.vdd.calls]
+        self.assertLess(names.index("rates"), names.index("resolutions"))
+        self.assertIn("limited to 60 Hz", self.logs)
+
+    def test_rates_failure_stops_configure_vdd_with_exit_1(self):
+        self.vdd.fail["rates"] = VddError("access denied")
+        self.assertEqual(self.run_admin("--configure-vdd", "--restart"), 1)
+        self.assertNotIn("resolutions", [c[0] for c in self.vdd.calls])
+        self.assertEqual(self.device.calls, [])
 
     def test_add_resolution_restart_failure(self):
         self.device.fail["restart"] = VddDeviceError("restart_device", 1168, "no Root\\MttVDD device")

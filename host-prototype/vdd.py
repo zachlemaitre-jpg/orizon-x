@@ -17,6 +17,7 @@ self-closing elements.
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
@@ -32,6 +33,7 @@ DEFAULT_SETTINGS_PATH = Path(r"C:\VirtualDisplayDriver") / SETTINGS_FILE_NAME
 VDDPATH_KEY = r"SOFTWARE\MikeTheTech\VirtualDisplayDriver"
 VDDPATH_VALUE = "VDDPATH"
 BACKUP_SUFFIX = ".bak-orizonx"
+_log = logging.getLogger("orizonx.vdd")
 PIPE_TIMEOUT_S = 2.0
 # Le serveur n'a aucune instance de canal pendant quelques ms entre deux clients : on réessaie un peu, pas 2 s,
 # sinon chaque test « pilote absent » coûterait 2 s.
@@ -81,6 +83,13 @@ MINIMAL_XML = """<?xml version='1.0' encoding='utf-8'?>
 _INDENT = "    "
 
 Resolution = tuple[int, int, int]
+
+# Refresh rates kept in <global> (VddController.limit_global_refresh_rates): 60 Hz only.
+GLOBAL_REFRESH_RATES: tuple[int, ...] = (60,)
+# Conservative cap on the number of display modes the driver is asked to create (see add_resolutions).
+# Measured on the user's PC: 26 resolutions x 6 global rates = 156 modes made the driver silently create NO monitor
+# (device "OK", DISPLAY\MTT1337 absent); 7 resolutions x 6 rates and 26 resolutions x 1 rate both worked.
+MAX_MODES = 64
 
 
 class VddError(Exception):
@@ -159,17 +168,82 @@ class VddController:
             return []
         return _resolutions(self._load().getroot())
 
-    def add_resolutions(self, resolutions: Iterable[Resolution]) -> bool:
-        """Adds the missing (w, h, hz) entries, keeping everything else. True if the file changed."""
+    def limit_global_refresh_rates(self, rates: Iterable[int] = GLOBAL_REFRESH_RATES) -> bool:
+        """Makes <global> hold exactly the given <g_refresh_rate> entries (default: 60 only). True if the file changed.
+
+        Why: the driver replicates every <resolution> at every <global><g_refresh_rate>, so modes = resolutions x
+        rates. A file with 26 resolutions and the rates 60, 90, 120, 144, 165, 244 (156 modes) made the driver
+        silently stop creating its monitor (device "OK", monitor DISPLAY\\MTT1337 absent); the same 26 resolutions
+        with only 60 work (docs/superpowers/specs/2026-10-05-installer-virtual-display-design.md §8). Comments and
+        other elements of <global> are kept; <global> is created when missing.
+        """
+        wanted = []
+        for rate in rates:
+            rate = int(rate)
+            if rate <= 0:
+                raise ValueError(f"invalid refresh rate: {rate!r}")
+            if rate not in wanted:
+                wanted.append(rate)
+        if not wanted:
+            raise ValueError("no refresh rate given")
+        tree = self._load_or_template()
+        root = tree.getroot()
+        section = root.find("global")
+        changed = section is None
+        if section is None:
+            section = _child(root, "global", level=1)
+        closing = section[-1].tail if len(section) else None
+        kept: set[int] = set()
+        removed = False
+        for entry in list(section.iterfind("g_refresh_rate")):
+            try:
+                rate = int((entry.text or "").strip())
+            except ValueError:
+                rate = None
+            if rate in wanted and rate not in kept:
+                kept.add(rate)
+            else:
+                section.remove(entry)
+                removed = True
+        if removed and len(section) and closing is not None:
+            section[-1].tail = closing  # the closing indentation followed the last child, which may be gone
+        for rate in wanted:
+            if rate not in kept:
+                _append(section, _leaf("g_refresh_rate", str(rate)), level=2)
+                changed = True
+        if not (changed or removed):
+            return False
+        self._save(tree)
+        return True
+
+    def add_resolutions(self, resolutions: Iterable[Resolution], max_modes: int = MAX_MODES) -> bool:
+        """Adds the missing (w, h, hz) entries, keeping everything else. True if the file changed.
+
+        The entries are taken in the given order, which is their priority (the tablet's exact resolution first, then
+        COMMON_RESOLUTIONS). An entry that would bring the driver's mode count above `max_modes` is skipped with a
+        warning. The driver creates one mode per resolution for each of its own refresh rate and the <global> rates,
+        so a resolution costs len({global rates} | {its own rate}) modes. Too many modes make the driver create no
+        monitor at all (see limit_global_refresh_rates); the cap is deliberately far below that failure point.
+        """
         wanted = [_check_resolution(r) for r in resolutions]
         tree = self._load_or_template()
         root = tree.getroot()
         present = set(_resolutions(root))
+        rates = _global_rates(root)
+        modes = _mode_count(root)
         added = []
         for resolution in wanted:
-            if resolution not in present:
-                present.add(resolution)
-                added.append(resolution)
+            if resolution in present:
+                continue
+            cost = len(rates | {resolution[2]})
+            if modes + cost > max_modes:
+                _log.warning("VDD: resolution %dx%d@%d skipped, the settings file would exceed %d display modes "
+                             "(now %d): too many modes make the driver create no monitor",
+                             *resolution, max_modes, modes)
+                continue
+            present.add(resolution)
+            modes += cost
+            added.append(resolution)
         if not added:
             return False
         section = _child(root, "resolutions", level=1)
@@ -264,6 +338,24 @@ def _resolutions(root: ET.Element) -> list[Resolution]:
         except ValueError:
             continue  # entrée incomplète ou illisible : on la laisse telle quelle, on ne la compte pas
     return found
+
+
+def _global_rates(root: ET.Element) -> set[int]:
+    found = set()
+    for entry in root.iterfind("global/g_refresh_rate"):
+        try:
+            rate = int((entry.text or "").strip())
+        except ValueError:
+            continue
+        if rate > 0:
+            found.add(rate)
+    return found
+
+
+def _mode_count(root: ET.Element) -> int:
+    """Display modes the driver will create: per resolution, its own rate plus the <global> rates (deduplicated)."""
+    rates = _global_rates(root)
+    return sum(len(rates | {refresh}) for _w, _h, refresh in _resolutions(root))
 
 
 def _leaf(tag: str, text: str) -> ET.Element:

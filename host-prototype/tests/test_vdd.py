@@ -196,6 +196,185 @@ class AddResolutionsTest(XmlTestCase):
                 self.controller().add_resolutions([bad])
 
 
+SIX_RATES = "".join(f"<g_refresh_rate>{hz}</g_refresh_rate>" for hz in (60, 90, 120, 144, 165, 244))
+
+
+def xml_with(resolutions, rates="60"):
+    """A minimal settings file with `resolutions` (w, h, hz) and the given <global> refresh rates."""
+    entries = "".join(f"<resolution><width>{w}</width><height>{h}</height><refresh_rate>{hz}</refresh_rate>"
+                      f"</resolution>" for w, h, hz in resolutions)
+    rate_tags = rates if rates.startswith("<") else f"<g_refresh_rate>{rates}</g_refresh_rate>"
+    return f"<vdd_settings><global>{rate_tags}</global><resolutions>{entries}</resolutions></vdd_settings>"
+
+
+class LimitGlobalRefreshRatesTest(XmlTestCase):
+    def rates(self):
+        return [e.text for e in self.root().iter("g_refresh_rate")]
+
+    def test_removes_the_extra_rates_and_keeps_60(self):
+        self.write_xml()
+        self.assertTrue(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.rates(), ["60"])
+
+    def test_the_six_rates_of_the_failing_file_become_60_only(self):
+        self.write_xml(xml_with([(2880, 1800, 60)], SIX_RATES))
+        self.assertTrue(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.rates(), ["60"])
+
+    def test_keeps_comments_and_everything_else(self):
+        self.write_xml()
+        self.controller().limit_global_refresh_rates()
+        text = self.path.read_text(encoding="utf-8")
+        self.assertIn("<!--These are global refreshrates", text)
+        self.assertIn("<!-- TabX : Galaxy Tab S10 FE+ (natif) et alternative 16:10 -->", text)
+        self.assertIn('<custom_section kind="unknown"><foo bar="baz">keep me</foo></custom_section>', text)
+        self.assertEqual(self.root().findtext("monitors/count"), "2")
+        self.assertEqual(self.controller().read_resolutions(), [(2880, 1800, 60), (1920, 1080, 30)])
+
+    def test_keeps_the_closing_indentation_of_global(self):
+        self.write_xml()
+        self.controller().limit_global_refresh_rates()
+        self.assertIn("<g_refresh_rate>60</g_refresh_rate>\n\t</global>", self.path.read_text(encoding="utf-8"))
+
+    def test_already_60_only_leaves_the_file_untouched(self):
+        self.write_xml(xml_with([(2880, 1800, 60)]))
+        before = self.path.read_bytes()
+        self.assertFalse(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse(self.backup.exists())
+
+    def test_is_idempotent(self):
+        self.write_xml()
+        ctl = self.controller()
+        self.assertTrue(ctl.limit_global_refresh_rates())
+        self.assertFalse(ctl.limit_global_refresh_rates())
+
+    def test_duplicates_and_unreadable_entries_are_dropped(self):
+        self.write_xml(xml_with([(1280, 800, 60)], "<g_refresh_rate>60</g_refresh_rate>"
+                                                   "<g_refresh_rate>60</g_refresh_rate>"
+                                                   "<g_refresh_rate>x</g_refresh_rate>"))
+        self.assertTrue(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.rates(), ["60"])
+
+    def test_a_missing_60_is_added(self):
+        self.write_xml(xml_with([(1280, 800, 60)], "<g_refresh_rate>90</g_refresh_rate>"))
+        self.assertTrue(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.rates(), ["60"])
+
+    def test_creates_global_when_missing(self):
+        self.write_xml("<vdd_settings><monitors><count>1</count></monitors></vdd_settings>")
+        self.assertTrue(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.rates(), ["60"])
+        self.assertEqual(self.root().findtext("monitors/count"), "1")
+
+    def test_an_empty_global_gets_the_rate(self):
+        self.write_xml("<vdd_settings><global></global></vdd_settings>")
+        self.assertTrue(self.controller().limit_global_refresh_rates())
+        self.assertEqual(self.rates(), ["60"])
+
+    def test_other_rates_can_be_requested(self):
+        self.write_xml()
+        self.assertTrue(self.controller().limit_global_refresh_rates((60, 120)))
+        self.assertEqual(self.rates(), ["60", "120"])
+
+    def test_rejects_invalid_rates(self):
+        self.write_xml()
+        for bad in ((), (0,), (-60,)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.controller().limit_global_refresh_rates(bad)
+
+    def test_a_missing_file_already_matches_the_template(self):
+        self.assertFalse(self.controller().limit_global_refresh_rates())
+        self.assertFalse(self.path.exists())
+
+    def test_never_writes_self_closing_elements(self):
+        self.write_xml("<vdd_settings><global/><resolutions/></vdd_settings>")
+        self.controller().limit_global_refresh_rates()
+        self.assertNotIn("/>", self.path.read_text(encoding="utf-8"))
+
+    def test_makes_a_backup_of_the_original(self):
+        self.write_xml()
+        original = self.path.read_bytes()
+        self.controller().limit_global_refresh_rates()
+        self.assertEqual(self.backup.read_bytes(), original)
+
+    def test_the_minimal_template_has_a_single_60_hz_rate(self):
+        root = ET.fromstring(vdd.MINIMAL_XML)
+        self.assertEqual([e.text for e in root.iterfind("global/g_refresh_rate")], ["60"])
+
+
+class ModeCapTest(XmlTestCase):
+    def modes(self):
+        return vdd._mode_count(self.root())
+
+    def test_the_cap_is_conservative_but_fits_the_common_list(self):
+        self.assertLessEqual(vdd.MAX_MODES, 64)
+        self.assertGreater(vdd.MAX_MODES, len(vdd.COMMON_RESOLUTIONS) + 7)
+
+    def test_all_common_resolutions_fit_with_60_hz_only(self):
+        self.write_xml(xml_with([(2880, 1800, 60), (1920, 1080, 30)]))
+        self.assertTrue(self.controller().add_resolutions(vdd.COMMON_RESOLUTIONS))
+        self.assertEqual(len(self.controller().read_resolutions()), 22)
+        self.assertLessEqual(self.modes(), vdd.MAX_MODES)
+
+    def test_mode_count_is_resolutions_times_rates(self):
+        self.write_xml(xml_with([(2880, 1800, 60), (1920, 1080, 60)], SIX_RATES))
+        self.assertEqual(self.modes(), 12)
+        self.write_xml(xml_with([(2880, 1800, 30)], "60"))
+        self.assertEqual(self.modes(), 2)   # the resolution's own 30 Hz plus the global 60
+
+    def test_the_failing_file_had_156_modes_and_limiting_the_rates_makes_it_26(self):
+        self.write_xml(xml_with([(1000 + i, 1000, 60) for i in range(26)], SIX_RATES))
+        self.assertEqual(self.modes(), 156)
+        self.controller().limit_global_refresh_rates()
+        self.assertEqual(self.modes(), 26)
+
+    def test_resolutions_over_the_cap_are_skipped_in_priority_order(self):
+        self.write_xml(xml_with([(2880, 1800, 60)]))
+        wanted = [(1000 + i, 800, 60) for i in range(10)]
+        with self.assertLogs("orizonx.vdd", "WARNING") as logs:
+            self.assertTrue(self.controller().add_resolutions(wanted, max_modes=5))
+        self.assertEqual(self.controller().read_resolutions(), [(2880, 1800, 60)] + wanted[:4])
+        self.assertEqual(len(logs.records), 6)
+        self.assertIn("1004x800@60", logs.output[0])
+        self.assertIn("exceed 5 display modes", logs.output[0])
+
+    def test_the_exact_resolution_goes_in_before_the_common_ones(self):
+        self.write_xml(xml_with([(1920, 1080, 60)]))
+        wanted = [(2800, 1752, 60)] + list(vdd.COMMON_RESOLUTIONS)
+        with self.assertLogs("orizonx.vdd", "WARNING"):
+            self.controller().add_resolutions(wanted, max_modes=3)
+        self.assertEqual(self.controller().read_resolutions(),
+                         [(1920, 1080, 60), (2800, 1752, 60), (2880, 1800, 60)])
+
+    def test_every_extra_global_rate_costs_modes(self):
+        self.write_xml(xml_with([(1920, 1080, 60)], "<g_refresh_rate>60</g_refresh_rate>"
+                                                    "<g_refresh_rate>120</g_refresh_rate>"))
+        with self.assertLogs("orizonx.vdd", "WARNING"):
+            self.controller().add_resolutions([(1280, 800, 60), (1600, 900, 60)], max_modes=5)
+        self.assertEqual(self.controller().read_resolutions(), [(1920, 1080, 60), (1280, 800, 60)])  # 2+2, then 6 > 5
+
+    def test_a_file_already_over_the_cap_gets_nothing_and_stays_untouched(self):
+        self.write_xml(xml_with([(1000 + i, 1000, 60) for i in range(26)], SIX_RATES))
+        before = self.path.read_bytes()
+        with self.assertLogs("orizonx.vdd", "WARNING"):
+            self.assertFalse(self.controller().add_resolutions([(2800, 1752, 60)]))
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_limiting_the_rates_first_makes_room(self):
+        self.write_xml(xml_with([(1000 + i, 1000, 60) for i in range(26)], SIX_RATES))
+        ctl = self.controller()
+        ctl.limit_global_refresh_rates()
+        self.assertTrue(ctl.add_resolutions(vdd.COMMON_RESOLUTIONS))
+        self.assertEqual(len(ctl.read_resolutions()), 26 + 21)
+        self.assertLessEqual(self.modes(), vdd.MAX_MODES)
+
+    def test_a_resolution_already_present_logs_no_warning(self):
+        self.write_xml(xml_with([(2880, 1800, 60)]))
+        with self.assertNoLogs("orizonx.vdd", "WARNING"):
+            self.assertFalse(self.controller().add_resolutions([(2880, 1800, 60)], max_modes=1))
+
+
 class BackupAndAtomicWriteTest(XmlTestCase):
     def test_backup_is_made_once_from_the_original(self):
         self.write_xml()

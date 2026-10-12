@@ -2,13 +2,14 @@
 
     --cleanup                 turn the virtual screen off (its display path), like the app does at start-up
     --configure-vdd [--restart]
-                              write the VDD XML: GPU of the primary display, one monitor, common tablet resolutions;
+                              write the VDD XML: GPU of the primary display, one monitor, <global> refresh rates
+                              limited to 60 Hz, common tablet resolutions;
                               give the Users group Modify rights on the XML's folder (icacls), so the app can edit
                               it without admin rights; with --restart, also restart an existing VDD device so it
                               reads them (admin)
     --install-driver <inf>    create the Root\\MttVDD device and install its driver (admin)
     --remove-driver           remove the device and its driver package (admin)
-    --add-resolution WxH      add WxH at 60 Hz to the XML, then restart the device (admin, "Add exact resolution")
+    --add-resolution WxH      add WxH at 60 Hz to the XML (rates limited to 60 Hz), then restart the device (admin, "Add exact resolution")
 
 Exit code 0 on success, 1 on failure (2: wrong command line, see app/main.py). The exe is windowed (no console):
 nothing is printed, details go to the admin log (relay-admin.log). The XML is the driver's own file (VDDPATH).
@@ -150,6 +151,10 @@ def configure_vdd(*, controller: Any, device: Any, gpu_name: Callable[[], str | 
             changed = controller.set_gpu_in_xml(gpu)
             log.info("Configure VDD: GPU %r%s", gpu, "" if changed else " (unchanged)")
         controller.ensure_single_monitor()
+        # Before the resolutions: every <global> rate multiplies the mode count, and too many modes make the driver
+        # create no monitor (vdd.limit_global_refresh_rates).
+        changed = controller.limit_global_refresh_rates()
+        log.info("Configure VDD: global refresh rates limited to 60 Hz%s", "" if changed else " (unchanged)")
         changed = controller.add_resolutions(vdd.COMMON_RESOLUTIONS)
         log.info("Configure VDD: common tablet resolutions %s", "added" if changed else "already present")
     finally:
@@ -186,6 +191,8 @@ def add_resolution(size: tuple[int, int], *, controller: Any, device: Any, log: 
         log.error("--add-resolution needs administrator rights: the VDD settings are left untouched")
         return 1
     log.info("VDD settings file: %s", controller.settings_path)
+    if controller.limit_global_refresh_rates():  # first: it frees the mode budget (vdd.MAX_MODES)
+        log.info("Global refresh rates limited to 60 Hz")
     changed = controller.add_resolutions([(width, height, 60)])
     log.info("Resolution %dx%d@60 %s", width, height, "added" if changed else "already in the XML")
     device.restart_device()  # même déjà présente : le pilote ne l'a pas chargée, sinon on ne serait pas là
