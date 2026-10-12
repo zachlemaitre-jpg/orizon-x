@@ -78,6 +78,22 @@ Le bloc `now_playing` décrit la session média Windows courante (Spotify, navig
 
 `available: false` (ou section absente) quand aucune session média n'existe. `app`, `title`, `artist`, `album` sont des chaînes (vides si inconnues), `playing` un booléen, `artwork` l'id d'un `MEDIA_ARTWORK` ou `null` sans pochette.
 
+### Barre contextuelle (`context`, `context.press`)
+
+Le bloc `context` décrit l'app au premier plan sur le PC et les boutons que la tablette affiche en bas de l'écran. Le PC possède les profils : la tablette n'affiche que ce qu'elle reçoit.
+
+```json
+"context":{"available":true,"app":"PowerPoint","profile":"powerpoint",
+           "buttons":[{"id":"ppt.prev","icon":"arrow_left","label":"Précédent"}, …]}
+```
+
+- `available: false` (ou section absente) tant qu'aucune app n'a été vue : la barre est cachée.
+- `app` : le nom à afficher (chaîne non vide). `profile` : l'identifiant du profil (`spotify`, `powerpoint`, `browser`, `word`, `excel`, `vscode`, `explorer`, `generic`), informatif.
+- `buttons` : au plus 8 éléments `{"id","icon","label"}`. `icon` est un nom d'icône connu de la tablette (un nom inconnu donne une icône neutre) ; `label` est en français. Le raccourci clavier ne quitte jamais le PC.
+- Le bloc est relevé toutes les 250 ms avec l'audio ; un changement de profil est diffusé aussitôt (état complet).
+
+Action associée : `{"id":"context.press","button":"<id du bouton>"}`. Le PC regarde l'app au premier plan **à cet instant** et n'envoie le raccourci que si le bouton appartient à son profil ; sinon l'action est ignorée et journalisée (la tablette n'a pas encore redessiné sa barre). Un raccourci qui ne peut pas être injecté (app élevée au premier plan, touche absente de la disposition) donne un `notice` `{"code":"action_failed"}`.
+
 ### Compatibilité
 
 Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.

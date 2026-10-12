@@ -12,7 +12,7 @@ One thread owns everything:
   as it lasts.
 
 State shape: ``{"v": 1, "clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-"usb": [...], "now_playing", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
+"usb": [...], "now_playing", "context", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
 ``airplane`` come from ``merge_radio_state(radios, wifi_info, bt_info)`` (see actions.radios); ``usb`` is the list
 of drives. A section whose provider is missing or raising is ``{"available": False}`` (``[]`` for usb) until the
 provider answers again; the failure is logged once per streak.
@@ -29,8 +29,11 @@ be sent (no ``send_artwork`` callback, no bytes, or ``send_artwork`` raised Valu
 by ``None`` in the state; another error of ``send_artwork`` (the socket closed) holds the state back as well, and
 both are tried again at the next poll.
 
+The ``context`` section (actions.context, the context bar) is polled with the fast group (250 ms), like audio: the
+bar must follow the foreground app. Its actions are ``context.*``.
+
 Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
-now_playing.
+now_playing, context.
 """
 from __future__ import annotations
 
@@ -58,9 +61,10 @@ _ROUTES = (
     ("bluetooth.", "radios"),
     ("airplane.", "radios"),
     ("usb.", "usb"),
+    ("context.", "context"),
 )
 
-_FAST = ("audio",)
+_FAST = ("audio", "context")
 _SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing")
 _UNAVAILABLE = {"available": False}
 
@@ -276,6 +280,7 @@ class ActionsHub:
         drives = usb.get("drives", []) if usb and usb.get("available", True) else []
         state["usb"] = [dict(d) for d in drives]
         state["now_playing"] = self._section("now_playing")
+        state["context"] = self._section("context")
         return state
 
     def _log_artwork_once(self, artwork_id: str, line: str) -> None:
@@ -412,8 +417,13 @@ def default_providers(log: Optional[Callable[[str], None]] = None) -> dict:
         from actions.now_playing import NowPlayingProvider
         return NowPlayingProvider()
 
+    def context() -> Any:
+        from actions.context import ContextProvider
+        return ContextProvider(log=log)
+
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),
-                          ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing)):
+                          ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing),
+                          ("context", context)):
         add(name, factory)
     return providers

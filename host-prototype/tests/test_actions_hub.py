@@ -80,6 +80,8 @@ def make_providers():
         "usb": FakeProvider({"available": True, "drives": [
             {"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2, "kind": "stick"}]}),
         "now_playing": FakeNowPlaying(),
+        "context": FakeProvider({"available": True, "app": "Spotify", "profile": "spotify", "buttons": [
+            {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]}),
     }
 
 
@@ -127,6 +129,8 @@ class StateTest(unittest.TestCase):
             "usb": [{"drive": "E:", "label": "KINGSTON", "free_bytes": 1, "total_bytes": 2, "kind": "stick"}],
             "now_playing": {"available": True, "app": "Spotify", "title": "UN BESO", "artist": "M4GN",
                             "album": "UN BESO", "playing": True, "artwork": ID_A},
+            "context": {"available": True, "app": "Spotify", "profile": "spotify", "buttons": [
+                {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]},
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -167,7 +171,7 @@ class StateTest(unittest.TestCase):
         h = Harness(providers)
         h.tick()
         for key in ("clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-                    "now_playing"):
+                    "now_playing", "context"):
             self.assertIn("available", h.sent[0][key], key)
         self.assertEqual(h.sent[0]["brightness"], {"available": False})
         self.assertEqual(h.sent[0]["battery"], {"available": False})
@@ -192,6 +196,21 @@ class StateTest(unittest.TestCase):
         self.assertEqual(h.sent[0]["clock"], {"available": False})
         self.assertEqual(h.sent[0]["usb"], [])
         self.assertEqual(h.sent[0]["wifi"], {"available": False})
+        self.assertEqual(h.sent[0]["context"], {"available": False})
+
+    def test_context_section_is_the_providers_snapshot(self):
+        h = Harness()
+        h.providers["context"].snap = {"available": True, "app": "Word", "profile": "word", "buttons": []}
+        h.tick()
+        self.assertEqual(h.sent[0]["context"], {"available": True, "app": "Word", "profile": "word",
+                                                "buttons": []})
+
+    def test_failing_context_provider_is_unavailable_and_the_rest_goes_on(self):
+        h = Harness()
+        h.providers["context"].raises = RuntimeError("boom")
+        h.tick()
+        self.assertEqual(h.sent[0]["context"], {"available": False})
+        self.assertTrue(h.sent[0]["audio"]["available"])
 
 
 class PollingTest(unittest.TestCase):
@@ -209,6 +228,15 @@ class PollingTest(unittest.TestCase):
         self.assertEqual(h.providers["usb"].snapshots, 2)
         self.assertEqual(h.providers["radios"].snapshots, 2)
         self.assertEqual(h.providers["now_playing"].snapshots, 2)
+
+    def test_context_is_polled_in_the_fast_group(self):
+        h = Harness()
+        h.tick()
+        h.tick(0.25)
+        h.tick(0.25)
+        h.tick(0.25)
+        self.assertEqual(h.providers["context"].snapshots, 4)
+        self.assertEqual(h.providers["battery"].snapshots, 1)
 
     def test_tick_before_deadline_polls_nothing(self):
         h = Harness()
@@ -272,6 +300,18 @@ class BroadcastTest(unittest.TestCase):
         h.tick(0.5)
         self.assertEqual(len(h.sent), 2)
         self.assertEqual(h.sent[1]["battery"]["percent"], 75)
+
+    def test_profile_change_is_broadcast_within_one_fast_poll(self):
+        h = Harness()
+        h.tick()
+        self.assertEqual(len(h.sent), 1)
+        h.providers["context"].snap = {"available": True, "app": "Chrome", "profile": "browser", "buttons": [
+            {"id": "web.reload", "icon": "refresh", "label": "Actualiser"}]}
+        h.tick(0.25)
+        self.assertEqual(len(h.sent), 2)
+        self.assertEqual(h.sent[1]["context"]["profile"], "browser")
+        h.tick(0.25)
+        self.assertEqual(len(h.sent), 2)
 
     def test_usb_change_is_sent(self):
         h = Harness()
@@ -352,6 +392,7 @@ class RoutingTest(unittest.TestCase):
             ({"id": "airplane.set", "value": True}, "radios"),
             ({"id": "usb.open", "drive": "E:"}, "usb"),
             ({"id": "usb.eject", "drive": "E:"}, "usb"),
+            ({"id": "context.press", "button": "spotify.playpause"}, "context"),
         ]
         for action, key in cases:
             with self.subTest(action=action):
@@ -844,12 +885,76 @@ class ThreadTest(unittest.TestCase):
         hub.stop()
 
 
+class ContextBarThroughTheHubTest(unittest.TestCase):
+    """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
+
+    class Tracker:
+        def __init__(self):
+            self.app = None
+
+        def current(self):
+            return self.app
+
+    def setUp(self):
+        from actions.context import ContextProvider
+        from actions.foreground import ForegroundApp
+        self.ForegroundApp = ForegroundApp
+        self.tracker = self.Tracker()
+        self.pressed = []
+        providers = make_providers()
+        providers["context"] = ContextProvider(tracker=self.tracker, send_shortcut=self._press, log=lambda _l: None)
+        self.h = Harness(providers)
+
+    def _press(self, shortcut):
+        self.pressed.append(shortcut)
+        return True
+
+    def front(self, exe, window_class="Cls", title="Window"):
+        self.tracker.app = self.ForegroundApp(exe, window_class, title, 1)
+
+    def test_context_section_follows_the_foreground_app(self):
+        self.h.tick()
+        self.assertEqual(self.h.sent[0]["context"], {"available": False})
+        self.front("POWERPNT.EXE")
+        self.h.tick(0.25)
+        ctx = self.h.sent[-1]["context"]
+        self.assertEqual((ctx["available"], ctx["app"], ctx["profile"]), (True, "PowerPoint", "powerpoint"))
+        self.assertEqual(ctx["buttons"][0], {"id": "ppt.slideshow", "icon": "slideshow", "label": "Diaporama"})
+        self.front("chrome.exe")
+        self.h.tick(0.25)
+        self.assertEqual(self.h.sent[-1]["context"]["profile"], "browser")
+
+    def test_press_of_a_button_of_the_active_profile_sends_its_shortcut(self):
+        self.front("POWERPNT.EXE")
+        self.h.tick()
+        self.h.hub.handle({"id": "context.press", "button": "ppt.next"})
+        self.h.hub._tick(self.h.clock.t)
+        self.assertEqual(self.pressed, ["Right"])
+        self.assertTrue(all("notice" not in s for s in self.h.sent))
+
+    def test_press_after_the_foreground_changed_is_ignored(self):
+        self.front("POWERPNT.EXE")
+        self.h.tick()
+        self.front("chrome.exe")  # the device has not redrawn yet
+        self.h.hub.handle({"id": "context.press", "button": "ppt.next"})
+        self.h.hub._tick(self.h.clock.t)
+        self.assertEqual(self.pressed, [])
+
+    def test_blocked_press_gives_an_action_failed_notice(self):
+        self.front("chrome.exe")
+        self.h.tick()
+        self.h.providers["context"]._send_shortcut = lambda _s: False
+        self.h.hub.handle({"id": "context.press", "button": "web.reload"})
+        self.h.hub._tick(self.h.clock.t)
+        self.assertEqual(self.h.sent[-1]["notice"], {"code": "action_failed"})
+
+
 class DefaultProvidersTest(unittest.TestCase):
     def test_builds_the_known_provider_names_without_calling_any_action(self):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 
