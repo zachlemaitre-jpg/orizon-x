@@ -89,6 +89,9 @@ Name: "autostart"; Description: "{cm:AutoStartTask}"; GroupDescription: "{cm:Sta
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Pilote VDD x64 signé : ne jamais modifier ces fichiers (le .cat signe leurs octets exacts).
 Source: "vdd\*"; DestDir: "{app}\vdd"; Flags: ignoreversion
+; Dernière entrée : son AfterInstall lance le travail du pilote une fois tous les fichiers posés. Pas en
+; ssPostInstall, car Inno interroge NeedRestart avant cette étape : le redémarrage demandé par le pilote serait perdu.
+Source: "LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion; AfterInstall: AfterAllFiles
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
@@ -310,13 +313,11 @@ begin
   RunApp('--cleanup');
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
+{ Appelé par la dernière entrée de [Files] (voir le commentaire là-bas). }
+procedure AfterAllFiles();
 begin
-  if CurStep = ssPostInstall then
-  begin
-    AddAdbFirewallRule();
-    SetupVirtualDisplay();
-  end;
+  AddAdbFirewallRule();
+  SetupVirtualDisplay();
 end;
 
 { Page de fin « Redémarrer maintenant / plus tard » d'Inno (en /SILENT, /NORESTART est respecté). }
