@@ -55,11 +55,12 @@ L'appareil devient un écran en plus.
   | Mode | **Extend** (vrai écran étendu) ou **Duplicate** (copie de l'écran principal) |
   | Position | À droite (par défaut), à gauche, au-dessus, en dessous |
   | Scale | **Auto** (calculée d'après la densité de l'appareil, p. ex. 200 % pour 2880×1800) ou 100 % à 250 % |
-  | Encoder | **Auto**, AMF (AMD) ou NVENC (NVIDIA) |
+  | Encoder | **Auto** (NVENC, puis AMF, puis QuickSync, puis le processeur), AMF (AMD), NVENC (NVIDIA), QuickSync (Intel) ou Processor (CPU) |
   | Language | English ou Français |
 
   Position et Scale sont grisés en mode Duplicate.
 - **Duplicate** : aucun écran virtuel n'est créé, l'appareil montre l'écran principal.
+- **Adapté à l'appareil** : l'appareil annonce la plus grande image que son décodeur lit à 60 i/s (sinon 30). L'écran virtuel prend cette taille, et le débit se calcule tout seul. Sans encodeur graphique (AMF, NVENC, QuickSync), le processeur encode, à 30 i/s et 1920 pixels de large au plus.
 - **Adjust in Windows…** ouvre les paramètres d'affichage de Windows pour les réglages fins.
 - **Tactile et stylet** : le doigt et le S Pen pilotent Windows à l'endroit touché.
   - Doigt : tap = clic, appui long = clic droit, défilement et zoom à deux doigts. Trois doigts au plus sont transmis.
@@ -112,7 +113,9 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
 
 **Le journal.** `%LOCALAPPDATA%\OrizonX\relay.log` (menu de l'icône → Ouvrir le journal). Joins-le à tout signalement de problème. Les opérations qui demandent les droits administrateur écrivent dans `relay-admin.log`, au même endroit.
 
-**NVENC ne marche pas.** NVENC exige un pilote NVIDIA ≥ 610 avec le ffmpeg fourni. En mode Auto, Orizon X retombe sur AMF. Sinon, mets à jour le pilote ou choisis un autre encodeur.
+**NVENC ne marche pas.** NVENC exige un pilote NVIDIA ≥ 610 avec le ffmpeg fourni. En mode Auto, Orizon X retombe sur AMF, puis QuickSync, puis le processeur. Sinon, mets à jour le pilote ou choisis un autre encodeur.
+
+**Image saccadée sur un PC sans carte graphique récente.** Le journal indique « x264 runs on the processor » : l'encodage se fait sur le processeur, limité à 30 i/s. C'est normal ; fermer les applications lourdes aide.
 
 ## Développement
 
@@ -128,13 +131,14 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
 | `extended/` | Sources graphiques : logo, police MAZAGLA, icônes SVG (`icons/`) |
 | `docs/` | Specs (`superpowers/specs/`), plans, notes d'exploration (`notes/`) |
 | `build-pc.ps1` | Compile l'appli PC et l'installateur dans `dist/` (ignoré par git, comme `build/`) |
+| `build-android.ps1` | Compile l'APK release signée dans `dist/OrizonX.apk` |
 
 ### Prérequis
 
 - Windows 11 et **Python 3.13** (lanceur `py`).
 - Un environnement virtuel `host-prototype\.venv` avec `requirements-dev.txt` (PySide6, PyInstaller, et les dépendances d'exécution). `build-pc.ps1` le crée et l'installe tout seul ; à la main : `py -m venv host-prototype\.venv`, puis `host-prototype\.venv\Scripts\python.exe -m pip install -r host-prototype\requirements-dev.txt`.
 - **Android Studio** (SDK + JBR) pour Gradle : `$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"`. `adb` est cherché dans le PATH, puis dans `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
-- **ffmpeg ≥ 6** (build Gyan, avec `ddagrab`, `h264_amf`, `h264_nvenc`) **dans le PATH**, pour compiler et pour le mode debug `py relay.py`. L'exe compilé embarque ffmpeg et adb. Vérification : `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
+- **ffmpeg ≥ 6** (build Gyan, avec `ddagrab`, `h264_amf`, `h264_nvenc`, `h264_qsv`, `libx264`) **dans le PATH**, pour compiler et pour le mode debug `py relay.py`. L'exe compilé embarque ffmpeg et adb. Vérification : `ffmpeg -hide_banner -encoders | Select-String h264_amf`.
 - **Inno Setup 6** (pas la 7) pour l'installateur : `winget install --id JRSoftware.InnoSetup -e --scope user`. Sans lui, `build-pc.ps1` compile l'appli mais pas `OrizonX-Setup.exe`.
 
 ### Tests
@@ -163,12 +167,27 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
 
 Quitte Orizon X avant (le script refuse de recompiler une appli qui tourne). La compilation prend environ 2 min.
 
-APK de développement (installé sur l'appareil branché) :
+APK à distribuer (signée avec la clé de release, voir plus bas) :
+```powershell
+.uild-android.ps1        # dist\OrizonX.apk, puis affiche l'empreinte SHA-256 du certificat
+```
+
+APK de développement (installé sur l'appareil branché, signée avec la clé de debug) :
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 cd android; .\gradlew.bat :app:installDebug
 ```
 Le fichier est `android\app\build\outputs\apk\debug\app-debug.apk`.
+
+### Clé de signature Android
+
+L'APK release est signée avec une clé personnelle, **hors du dépôt** : `%USERPROFILE%\OrizonX-signing\` (`orizonx-release.jks` et `keystore.properties`, qui contient les mots de passe). La variable d'environnement `ORIZONX_SIGNING_DIR` permet de pointer vers un autre dossier. Sans ce dossier, seule la compilation release échoue ; la debug marche.
+
+**Sauvegarde ce dossier** (clé USB, gestionnaire de mots de passe, coffre chiffré), et ne le mets jamais dans Git ni dans un message.
+- Android n'installe une mise à jour que si elle est signée avec **la même clé**. Si la clé est perdue, la mise à jour suivante doit être signée avec une nouvelle clé, et chaque appareil doit **désinstaller** Orizon X avant d'installer la nouvelle version (ses réglages sont perdus).
+- Si la clé fuite, quelqu'un peut publier une fausse mise à jour qu'Android accepterait par-dessus Orizon X.
+
+Passage de l'APK de debug à l'APK release : désinstaller une fois `com.orizonx.client` de l'appareil, puis installer `OrizonX.apk`. Les versions suivantes s'installent par-dessus.
 
 ### CLI de debug
 
@@ -178,7 +197,7 @@ Même moteur que l'appli, sans écran virtuel, avec la sortie dans le terminal. 
 cd host-prototype; py relay.py
 ```
 
-Options : `--encoder auto|nvenc|amf` (défaut `auto`), `--output auto|N` (défaut `auto` : l'écran à la taille de l'appareil ; `--output 0` duplique l'écran principal), `--list-outputs`, `--fps 60`, `--bitrate 30M`. Le tactile a son autotest : `py injector.py --selftest` (survol seulement, sans clic).
+Options : `--encoder auto|nvenc|amf|qsv|x264` (défaut `auto`), `--output auto|N` (défaut `auto` : l'écran à la taille de l'appareil ; `--output 0` duplique l'écran principal), `--list-outputs`, `--fps 60` (plafond), `--bitrate auto` (défaut, ou une valeur fixe comme `30M`). Le tactile a son autotest : `py injector.py --selftest` (survol seulement, sans clic).
 
 Logs de l'appareil : `adb logcat -s VideoDecoder Session Receiver`.
 
