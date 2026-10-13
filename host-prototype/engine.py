@@ -1144,8 +1144,10 @@ class RelayEngine:
                     except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fin de la session
                         self._log(f"Actions: hub stop failed: {e}")
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
-            plan = plan_stream((hello.width, hello.height), info.video if info is not None else None, encoder,
-                               self._config.fps)
+            video = info.video if info is not None else None
+            self._log("Device video: not announced (native size)" if video is None
+                      else f"Device video: {video.width}x{video.height} at {video.fps} fps")
+            plan = plan_stream((hello.width, hello.height), video, encoder, self._config.fps)
             for note in plan.notes:
                 self._log(note)
             capture = self._choose_capture(hello, outputs, should_stop, plan.size)

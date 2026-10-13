@@ -1934,6 +1934,7 @@ class VideoCapsTest(unittest.TestCase):
         self.assertIn("ddagrab=output_idx=1:framerate=60,hwdownload,format=bgra", command)
         self.assertEqual((option(command, "-g"), option(command, "-rc")), ("60", "cbr"))
         self.assertEqual(config[3], 60)
+        self.assertIn("Device video: not announced (native size)", rec.logs)
         self.assertNotIn("scale=", " ".join(command))
 
     def test_automatic_bitrate_without_video(self):
@@ -1956,6 +1957,7 @@ class VideoCapsTest(unittest.TestCase):
         self.assertEqual(rec.displays[0].tablet_size, (2160, 1350))
         self.assertEqual(cfg[3], 60)
         self.assertEqual(option(popen.calls[0][0], "-b:v"), "15746400")  # 2160x1350 x 60 x 0.09
+        self.assertIn("Device video: 2160x1350 at 60 fps", rec.logs)
 
     def test_relayout_keeps_using_the_corrected_dpi(self):
         relay, _rec, display, *_ = self.extend(self.SMALL, size=(2160, 1350), rect=self.SMALL_RECT)
