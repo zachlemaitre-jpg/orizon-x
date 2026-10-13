@@ -100,12 +100,25 @@ class Input:
     contacts: tuple[Contact, ...]
 
 
+MAX_VIDEO_SIDE = 16384  # largest width / height accepted in DEVICE_INFO.video
+MAX_VIDEO_FPS = 240
+
+
+@dataclass(frozen=True)
+class VideoCaps:
+    """The largest stream the device's hardware decoder handles (DEVICE_INFO.video)."""
+    width: int
+    height: int
+    fps: int
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     role: str
     kind: str
     name: str
     app: str
+    video: VideoCaps | None = None  # absent on older apps, or invalid
 
 
 @dataclass(frozen=True)
@@ -239,7 +252,21 @@ def _decode_device_info(payload: bytes) -> DeviceInfo:
     for key in ("role", "kind", "name", "app"):
         if not isinstance(obj.get(key), str):
             raise ProtocolError(f"DEVICE_INFO: field {key!r} missing or not a string")
-    return DeviceInfo(obj["role"], obj["kind"], obj["name"], obj["app"])
+    return DeviceInfo(obj["role"], obj["kind"], obj["name"], obj["app"], _decode_video(obj.get("video")))
+
+
+def _decode_video(value: object) -> VideoCaps | None:
+    """DEVICE_INFO.video, read tolerantly: anything but three plausible positive integers gives None."""
+    if not isinstance(value, dict):
+        return None
+    limits = (("width", MAX_VIDEO_SIDE), ("height", MAX_VIDEO_SIDE), ("fps", MAX_VIDEO_FPS))
+    numbers = []
+    for key, limit in limits:
+        number = value.get(key)
+        if isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= limit:
+            return None
+        numbers.append(number)
+    return VideoCaps(*numbers)
 
 
 def _decode_action(payload: bytes) -> Action:

@@ -5,10 +5,12 @@ import unittest
 from pathlib import Path
 
 import engine
+import protocol
 import tools
 from messages import msg
 
 OUTPUTS = [(0, (2560, 1600)), (1, (2880, 1800)), (2, None)]
+CODECS = {"nvenc": "h264_nvenc", "amf": "h264_amf", "qsv": "h264_qsv", "x264": "libx264"}
 
 
 class FakeRun:
@@ -28,7 +30,7 @@ class FakeRun:
         self.calls.append((cmd, kwargs))
         joined = " ".join(cmd)
         if "color=" in joined:
-            name = "nvenc" if "h264_nvenc" in joined else "amf"
+            name = next(n for n, codec in CODECS.items() if codec in joined)
             return subprocess.CompletedProcess(cmd, 0 if name in self.ok_encoders else 1, b"", b"")
         if cmd[1:] == ["devices"]:
             return subprocess.CompletedProcess(cmd, self.adb_code, self.adb_stdout, self.adb_stderr)
@@ -108,6 +110,139 @@ class FfmpegCommandTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-b:v") + 1], "30M")
         self.assertEqual(cmd[cmd.index("-g") + 1], "60")
         self.assertEqual(cmd[-3:], ["-f", "h264", "-"])
+        self.assertEqual(cmd[cmd.index("-rc") + 1], "cbr")
+        self.assertNotIn("-maxrate", cmd)
+
+    def test_qsv_arguments(self):
+        cmd = engine.ffmpeg_command("ffmpeg", "qsv", 0, 60, "30M")
+        self.assertEqual(cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2], ["-c:v", "h264_qsv"])
+        for option, value in (("-preset", "veryfast"), ("-look_ahead", "0"), ("-async_depth", "1"),
+                              ("-pix_fmt", "nv12"), ("-b:v", "30M"), ("-maxrate", "30M"), ("-bf", "0"), ("-g", "60")):
+            self.assertEqual(cmd[cmd.index(option) + 1], value, option)
+        self.assertNotIn("-rc", cmd)  # h264_qsv n'a pas d'option -rc : maxrate = b:v donne le débit constant
+
+    def test_x264_arguments(self):
+        cmd = engine.ffmpeg_command("ffmpeg", "x264", 0, 30, "20M")
+        self.assertEqual(cmd[cmd.index("-c:v"):cmd.index("-c:v") + 2], ["-c:v", "libx264"])
+        for option, value in (("-preset", "ultrafast"), ("-tune", "zerolatency"), ("-profile:v", "high"),
+                              ("-x264-params", "keyint=30:min-keyint=30:scenecut=0"), ("-b:v", "20M"),
+                              ("-maxrate", "20M"), ("-bufsize", "10M"), ("-bf", "0"), ("-g", "30")):
+            self.assertEqual(cmd[cmd.index(option) + 1], value, option)
+        # bgra -> yuv420p explicite : sans lui x264 choisit le 4:4:4 et refuse le profil high
+        self.assertEqual(cmd[cmd.index("-pix_fmt") + 1], "yuv420p")
+        self.assertNotIn("-rc", cmd)
+        self.assertEqual(cmd[-3:], ["-f", "h264", "-"])
+
+    def test_x264_keyframe_interval_follows_the_fps(self):
+        cmd = engine.ffmpeg_command("ffmpeg", "x264", 0, 24, "8M")
+        self.assertEqual(cmd[cmd.index("-x264-params") + 1], "keyint=24:min-keyint=24:scenecut=0")
+
+    def test_bufsize_with_a_suffixed_or_plain_bitrate(self):
+        for bitrate, bufsize in (("12M", "6M"), ("8000k", "4000k"), ("9000000", "4500000")):
+            with self.subTest(bitrate=bitrate):
+                cmd = engine.ffmpeg_command("ffmpeg", "x264", 0, 30, bitrate)
+                self.assertEqual(cmd[cmd.index("-bufsize") + 1], bufsize)
+
+    def test_no_scale_by_default(self):
+        cmd = engine.ffmpeg_command("ffmpeg", "x264", 3, 30, "8M")
+        self.assertIn("ddagrab=output_idx=3:framerate=30,hwdownload,format=bgra", cmd)
+
+    def test_scale_is_added_after_the_download(self):
+        cmd = engine.ffmpeg_command("ffmpeg", "x264", 3, 30, "8M", scale=(1920, 1200))
+        self.assertIn("ddagrab=output_idx=3:framerate=30,hwdownload,format=bgra,scale=1920:1200:flags=bilinear", cmd)
+
+
+class EncoderTablesTest(unittest.TestCase):
+    def test_choices_and_order(self):
+        self.assertEqual(engine.ENCODER_CHOICES, ("auto", "nvenc", "amf", "qsv", "x264"))
+        self.assertEqual(engine.AUTO_ORDER, ("nvenc", "amf", "qsv", "x264"))
+        self.assertEqual(set(engine.ENCODERS), {"nvenc", "amf", "qsv", "x264"})
+        self.assertEqual(engine.ENCODER_NAMES["qsv"], "QuickSync")
+        self.assertEqual(engine.ENCODER_NAMES["x264"], "x264")
+
+
+class FitWidthTest(unittest.TestCase):
+    def test_smaller_or_equal_sizes_are_unchanged(self):
+        self.assertEqual(engine.fit_width((1920, 1200), 1920), (1920, 1200))
+        self.assertEqual(engine.fit_width((1280, 800), 1920), (1280, 800))
+
+    def test_wider_sizes_keep_the_aspect_ratio(self):
+        self.assertEqual(engine.fit_width((2880, 1800), 1920), (1920, 1200))
+        self.assertEqual(engine.fit_width((2560, 1600), 1920), (1920, 1200))
+        self.assertEqual(engine.fit_width((3840, 2160), 1920), (1920, 1080))
+
+    def test_height_is_a_multiple_of_8(self):
+        self.assertEqual(engine.fit_width((2000, 1200), 1920), (1920, 1152))
+
+
+class BitrateTest(unittest.TestCase):
+    def test_formula(self):
+        self.assertEqual(engine.auto_bitrate(2400, 1500, 60), 19_440_000)
+        self.assertEqual(engine.auto_bitrate(2880, 1800, 60), 27_993_600)
+
+    def test_bounds(self):
+        self.assertEqual(engine.auto_bitrate(1920, 1200, 30), 8_000_000)  # 6,2 Mb/s relevé à 8
+        self.assertEqual(engine.auto_bitrate(320, 200, 30), 8_000_000)
+        self.assertEqual(engine.auto_bitrate(3840, 2400, 60), 40_000_000)
+        self.assertEqual(engine.auto_bitrate(7680, 4320, 60), 40_000_000)
+
+    def test_auto_setting_is_computed(self):
+        self.assertEqual(engine.resolve_bitrate("auto", 2400, 1500, 60), "19440000")
+
+    def test_a_fixed_setting_wins(self):
+        self.assertEqual(engine.resolve_bitrate("30M", 2400, 1500, 60), "30M")
+        self.assertEqual(engine.resolve_bitrate("5000k", 3840, 2400, 60), "5000k")
+
+    def test_default_config_is_auto(self):
+        self.assertEqual(engine.Config().bitrate, "auto")
+
+
+class PlanStreamTest(unittest.TestCase):
+    NATIVE = (2880, 1800)
+
+    def plan(self, video=None, encoder="amf", fps=60, native=NATIVE):
+        return engine.plan_stream(native, video, encoder, fps)
+
+    def test_without_video_the_native_size_and_the_configured_fps(self):
+        plan = self.plan()
+        self.assertEqual((plan.size, plan.fps, plan.notes), ((2880, 1800), 60, []))
+
+    def test_video_gives_the_size_and_the_fps(self):
+        plan = self.plan(protocol.VideoCaps(2160, 1350, 30))
+        self.assertEqual((plan.size, plan.fps), ((2160, 1350), 30))
+
+    def test_fps_is_the_minimum_of_config_device_and_encoder(self):
+        self.assertEqual(self.plan(protocol.VideoCaps(2880, 1800, 60), fps=45).fps, 45)
+        self.assertEqual(self.plan(protocol.VideoCaps(2880, 1800, 30), fps=60).fps, 30)
+        self.assertEqual(self.plan(protocol.VideoCaps(2880, 1800, 60), "x264", fps=60).fps, 30)
+        self.assertEqual(self.plan(protocol.VideoCaps(2880, 1800, 60), "qsv", fps=60).fps, 60)
+
+    def test_video_larger_than_the_screen_is_ignored(self):
+        for video in (protocol.VideoCaps(3840, 1800, 60), protocol.VideoCaps(2880, 2400, 60)):
+            plan = self.plan(video)
+            self.assertEqual(plan.size, (2880, 1800))
+            self.assertEqual(plan.fps, 60)
+            self.assertTrue(any("ignored" in note for note in plan.notes), plan.notes)
+
+    def test_x264_caps_the_width_and_keeps_the_aspect_ratio(self):
+        plan = self.plan(encoder="x264")
+        self.assertEqual((plan.size, plan.fps), ((1920, 1200), 30))
+        self.assertEqual(plan.notes, ["x264 runs on the processor: 30 fps at most",
+                                      "x264 runs on the processor: 1920x1200 at most"])
+
+    def test_x264_caps_the_size_the_device_announced(self):
+        self.assertEqual(self.plan(protocol.VideoCaps(2400, 1500, 60), "x264").size, (1920, 1200))
+        plan = self.plan(protocol.VideoCaps(1280, 800, 60), "x264")
+        self.assertEqual((plan.size, plan.fps), ((1280, 800), 30))
+
+    def test_x264_below_its_limits_adds_no_processor_note(self):
+        plan = self.plan(protocol.VideoCaps(1280, 800, 30), "x264", fps=30)
+        self.assertEqual((plan.size, plan.fps), ((1280, 800), 30))
+        self.assertFalse([note for note in plan.notes if "processor" in note], plan.notes)
+
+    def test_other_encoders_have_no_limits(self):
+        for encoder in ("nvenc", "amf", "qsv"):
+            self.assertEqual(self.plan(encoder=encoder).size, (2880, 1800), encoder)
 
 
 class ResolveEncoderTest(unittest.TestCase):
@@ -119,6 +254,35 @@ class ResolveEncoderTest(unittest.TestCase):
         run = FakeRun(ok_encoders=("amf",))
         self.assertEqual(engine.resolve_encoder("ffmpeg", "auto", run),
                          ("amf", "Encoder: AMF (NVENC unavailable)"))
+
+    def test_auto_falls_back_to_quicksync_then_x264(self):
+        run = FakeRun(ok_encoders=("qsv", "x264"))
+        self.assertEqual(engine.resolve_encoder("ffmpeg", "auto", run),
+                         ("qsv", "Encoder: QuickSync (NVENC, AMF unavailable)"))
+
+    def test_only_x264_available_gives_x264(self):
+        run = FakeRun(ok_encoders=("x264",))
+        self.assertEqual(engine.resolve_encoder("ffmpeg", "auto", run),
+                         ("x264", "Encoder: x264 (NVENC, AMF, QuickSync unavailable)"))
+        self.assertEqual([next(c for c in CODECS.values() if c in " ".join(cmd)) for cmd, _ in run.calls],
+                         ["h264_nvenc", "h264_amf", "h264_qsv", "libx264"])
+
+    def test_forced_new_encoders_are_not_probed(self):
+        run = FakeRun()
+        self.assertEqual(engine.resolve_encoder("ffmpeg", "qsv", run), ("qsv", "Encoder: QuickSync (forced)"))
+        self.assertEqual(engine.resolve_encoder("ffmpeg", "x264", run), ("x264", "Encoder: x264 (forced)"))
+        self.assertEqual(run.calls, [])
+
+    def test_probe_uses_each_encoders_own_arguments(self):
+        for name, codec in (("qsv", "h264_qsv"), ("x264", "libx264")):
+            run = FakeRun(ok_encoders=(name,))
+            self.assertTrue(engine.probe_encoder("ffmpeg", name, run))
+            cmd = run.calls[0][0]
+            self.assertEqual(cmd[cmd.index("-c:v") + 1], codec)
+            self.assertNotIn("{fps}", " ".join(cmd))
+        run = FakeRun(ok_encoders=("x264",))
+        engine.probe_encoder("ffmpeg", "x264", run)
+        self.assertIn("yuv420p", run.calls[0][0])
 
     def test_auto_without_any_encoder_is_fatal(self):
         with self.assertRaises(engine.FatalError) as raised:

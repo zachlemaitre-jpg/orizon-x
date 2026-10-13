@@ -76,6 +76,14 @@ class SettingsTest(unittest.TestCase):
             self.path.write_text(json.dumps({"scale": bad_scale}), encoding="utf-8")
             self.assertEqual(settings.load(self.path).scale, "auto", bad_scale)
 
+    def test_every_encoder_choice_is_kept(self):
+        self.path.parent.mkdir(parents=True)
+        for encoder in ("auto", "nvenc", "amf", "qsv", "x264"):
+            self.path.write_text(json.dumps({"encoder": encoder}), encoding="utf-8")
+            self.assertEqual(settings.load(self.path).encoder, encoder)
+        self.path.write_text(json.dumps({"encoder": "vaapi"}), encoding="utf-8")
+        self.assertEqual(settings.load(self.path).encoder, "auto")
+
     def test_old_file_with_a_screen_choice_still_loads(self):
         self.path.parent.mkdir(parents=True)
         self.path.write_text(json.dumps({"output": "1", "encoder": "nvenc", "first_close_hint_shown": True,

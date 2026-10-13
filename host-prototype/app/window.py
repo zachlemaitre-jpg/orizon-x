@@ -19,8 +19,8 @@ MODE_ICONS = {"extend": "etendre_affichage", "duplicate": "dupliquer_affichage"}
 STOP_ICON = "stop"
 COMBO_ICON_PX = 18
 BUTTON_ICON_PX = 18
-ENCODER_NAMES = {"amf": "AMF (AMD)", "nvenc": "NVENC (NVIDIA)"}  # noms de produits : jamais traduits
-ENCODER_VALUES = ("auto", "amf", "nvenc")
+ENCODER_NAMES = {"amf": "AMF (AMD)", "nvenc": "NVENC (NVIDIA)", "qsv": "QuickSync (Intel)"}  # noms de produits : jamais traduits
+ENCODER_VALUES = ("auto", "amf", "nvenc", "qsv", "x264")
 LANGUAGE_ITEMS = (("English", "en"), ("Français", "fr"))  # chaque langue dans sa propre langue : jamais traduits
 VDD_MISSING_KEY = "display.vdd_missing"  # seule erreur qui propose « Passer en Dupliquer »
 WIDTH = 360
@@ -75,7 +75,11 @@ def _scale_label(value: str, lang: str) -> str:
 
 
 def _encoder_label(value: str, lang: str) -> str:
-    return tr("window.auto", lang) if value == "auto" else ENCODER_NAMES[value]
+    if value == "auto":
+        return tr("window.auto", lang)
+    if value == "x264":
+        return tr("window.encoder_cpu", lang)
+    return ENCODER_NAMES[value]
 
 
 class ChoiceCombo(QComboBox):

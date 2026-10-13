@@ -51,8 +51,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "fr": "Aucun écran en {width}x{height} (taille de la tablette). Règle l'écran virtuel à cette résolution, "
               "ou choisis un autre écran (réglage Écran dans l'appli, --output N en ligne de commande) :\n{outputs}",
     },
-    "error.no_encoder": {"en": "No H.264 hardware encoder (AMF/NVENC) available.",
-                         "fr": "Aucun encodeur matériel H.264 (AMF/NVENC) disponible."},
+    "error.no_encoder": {"en": "No H.264 encoder available (NVENC, AMF, QuickSync or x264 in ffmpeg).",
+                         "fr": "Aucun encodeur H.264 disponible (NVENC, AMF, QuickSync ou x264 dans ffmpeg)."},
     "error.ffmpeg_keeps_stopping": {"en": "ffmpeg keeps stopping ({count} times in a row). Last message: {last}",
                                     "fr": "ffmpeg s'arrête sans cesse ({count} fois de suite). Dernier message : {last}"},
     "error.no_message": {"en": "no message", "fr": "aucun message"},
@@ -124,6 +124,7 @@ TEXTS: dict[str, dict[str, str]] = {
     "window.scale": {"en": "Scale", "fr": "Échelle"},
     "window.scale_percent": {"en": "{percent}%", "fr": "{percent} %"},
     "window.auto": {"en": "Auto", "fr": "Auto"},
+    "window.encoder_cpu": {"en": "Processor (CPU)", "fr": "Processeur (CPU)"},
     "window.encoder": {"en": "Encoder", "fr": "Encodeur"},
     "window.language": {"en": "Language", "fr": "Langue"},
     "window.adjust_in_windows": {"en": "Adjust in Windows…", "fr": "Régler dans Windows…"},

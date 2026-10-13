@@ -8,7 +8,7 @@ from pathlib import Path
 
 from messages import LANGUAGES
 
-ENCODERS = ("auto", "nvenc", "amf")
+ENCODERS = ("auto", "nvenc", "amf", "qsv", "x264")
 MODES = ("extend", "duplicate")  # Extend : écran virtuel ; Duplicate : écran principal
 POSITIONS = ("right", "left", "above", "below")  # côté de l'écran principal où se place l'écran virtuel
 SCALES = ("auto", "100", "125", "150", "175", "200", "225", "250")  # "auto" : selon la densité de la tablette

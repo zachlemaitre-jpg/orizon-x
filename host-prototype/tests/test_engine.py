@@ -19,6 +19,7 @@ from inputstate import Rect
 from messages import msg
 from virtual_display import PrepareResult
 
+CODECS = {"nvenc": "h264_nvenc", "amf": "h264_amf", "qsv": "h264_qsv", "x264": "libx264"}
 SAMPLE = (Path(__file__).parent / "sample.h264").read_bytes()
 State = engine.State
 
@@ -41,8 +42,11 @@ def touch_frame(*contacts):
     return protocol._frame(protocol.INPUT, 0, payload)
 
 
-def device_info_frame(role="actions", kind="phone", name="Pixel 8", app="1.0"):
-    payload = json.dumps({"role": role, "kind": kind, "name": name, "app": app}).encode()
+def device_info_frame(role="actions", kind="phone", name="Pixel 8", app="1.0", video=None):
+    fields = {"role": role, "kind": kind, "name": name, "app": app}
+    if video is not None:
+        fields["video"] = video
+    payload = json.dumps(fields).encode()
     return protocol._frame(protocol.DEVICE_INFO, 0, payload)
 
 
@@ -92,7 +96,7 @@ class FakeRun:
                 return done(1, stderr="Failed to enumerate DXGI output")
             return done(0, stderr=f"Stream #0:0: Video: bgra, {size[0]}x{size[1]}")
         if "color=" in joined:
-            name = "nvenc" if "h264_nvenc" in joined else "amf"
+            name = next(n for n, codec in CODECS.items() if codec in joined)
             return done(0 if name in self.encoders_ok else 1)
         raise AssertionError(f"commande inattendue : {cmd}")
 
@@ -1893,6 +1897,153 @@ class DeviceRoleTest(unittest.TestCase):
         rec.wait_for(lambda: rec.last_state() is State.WAITING_APP, timeout=5.0)
         self.assertEqual(popen.calls, [])
         self.assertEqual(hubs.created, [])
+
+
+def option(command, name):
+    return command[command.index(name) + 1]
+
+
+class VideoCapsTest(unittest.TestCase):
+    """DEVICE_INFO.video: the virtual screen is prepared at the size the tablet decodes, at its fps; x264 adds its
+    own limits; the bitrate is automatic; the Auto scale follows the capture/native ratio."""
+
+    NATIVE = (2880, 1800)
+    SMALL = {"width": 2160, "height": 1350, "fps": 60}
+    SMALL_RECT = Rect(2560, 0, 2160, 1350)
+
+    def extend(self, video=None, config=None, size=NATIVE, rect=VDD_RECT, role="screen", **kwargs):
+        """An Extend session whose tablet announces `video`; the virtual screen comes up as `rect`."""
+        run = FakeRun(outputs=((0, (2560, 1600)),))
+        display = FakeDisplay(result=PrepareResult(rect, True, size),
+                              on_prepare=lambda: run.outputs.__setitem__(1, size))
+        popen, injectors = FakePopen(live), FakeInjectors()
+        connect = FakeConnect(after_hello=device_info_frame(role=role, video=video))
+        config = config or engine.Config(encoder="amf", position="left", scale="150")
+        relay, rec = make_engine(self, run=run, popen=popen, connect=connect, injectors=injectors, config=config,
+                                 display=display, device_info_timeout_s=5.0, **kwargs)
+        relay.start()
+        tablet = first_tablet(connect)
+        _type, _flags, payload = tablet.next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        return relay, rec, display, popen, injectors, tablet, protocol._CONFIG.unpack(payload)
+
+    def test_without_video_nothing_changes(self):
+        relay, rec, display, popen, injectors, _tablet, config = self.extend()
+        self.assertEqual(display.prepares(), [("prepare", 2880, 1800, 274, "left", "150", False)])
+        command = popen.calls[0][0]
+        self.assertIn("ddagrab=output_idx=1:framerate=60,hwdownload,format=bgra", command)
+        self.assertEqual((option(command, "-g"), option(command, "-rc")), ("60", "cbr"))
+        self.assertEqual(config[3], 60)
+        self.assertNotIn("scale=", " ".join(command))
+
+    def test_automatic_bitrate_without_video(self):
+        _relay, rec, _display, popen, *_ = self.extend()
+        self.assertEqual(option(popen.calls[0][0], "-b:v"), "27993600")  # 2880x1800 x 60 x 0.09
+        self.assertIn("Bitrate: 28.0 Mb/s (auto)", rec.logs)
+
+    def test_a_fixed_bitrate_wins(self):
+        config = engine.Config(encoder="amf", bitrate="30M")
+        _relay, rec, _display, popen, *_ = self.extend(config=config)
+        self.assertEqual(option(popen.calls[0][0], "-b:v"), "30M")
+        self.assertFalse([line for line in rec.logs if line.startswith("Bitrate")])
+
+    def test_video_sets_the_virtual_screen_size_and_the_auto_scale_follows(self):
+        config = engine.Config(encoder="amf", position="left", scale="auto")
+        _relay, rec, display, popen, _injectors, _tablet, cfg = self.extend(
+            self.SMALL, config=config, size=(2160, 1350), rect=self.SMALL_RECT)
+        # dpi 274 x 2160/2880 = 205.5 -> 205 : Windows scale 150 % (200 % at the native size), same physical text size
+        self.assertEqual(display.prepares(), [("prepare", 2160, 1350, 205, "left", "auto", False)])
+        self.assertEqual(rec.displays[0].tablet_size, (2160, 1350))
+        self.assertEqual(cfg[3], 60)
+        self.assertEqual(option(popen.calls[0][0], "-b:v"), "15746400")  # 2160x1350 x 60 x 0.09
+
+    def test_relayout_keeps_using_the_corrected_dpi(self):
+        relay, _rec, display, *_ = self.extend(self.SMALL, size=(2160, 1350), rect=self.SMALL_RECT)
+        relay.relayout("left", "auto")
+        self.assertEqual(display.layouts(), [("apply_layout", "left", "auto", 205)])
+
+    def test_touch_targets_the_virtual_screen_at_the_reduced_size(self):
+        _relay, _rec, _display, _popen, injectors, tablet, _cfg = self.extend(
+            self.SMALL, size=(2160, 1350), rect=self.SMALL_RECT)
+        self.assertEqual(injectors.rects, [self.SMALL_RECT])  # coordonnées normalisées : elles couvrent tout l'écran
+        down = protocol.CONTACT_CONTACT | protocol.CONTACT_IN_RANGE
+        tablet.send(touch_frame((0, down, 65535, 65535, 0, 0, 0)))
+        wait_until(lambda: injectors.created[0].handled)
+
+    def test_video_fps_lowers_the_frame_rate(self):
+        _relay, rec, _display, popen, _inj, _tablet, cfg = self.extend({**self.SMALL, "fps": 30})
+        command = popen.calls[0][0]
+        self.assertEqual(cfg[3], 30)
+        self.assertIn("framerate=30", " ".join(command))
+        self.assertEqual(option(command, "-g"), "30")
+
+    def test_the_configured_fps_still_limits(self):
+        config = engine.Config(encoder="amf", fps=45)
+        _relay, _rec, _display, popen, _inj, _tablet, cfg = self.extend(
+            self.SMALL, config=config, size=(2160, 1350), rect=self.SMALL_RECT)
+        self.assertEqual((cfg[3], option(popen.calls[0][0], "-g")), (45, "45"))
+
+    def test_video_larger_than_the_screen_is_ignored(self):
+        _relay, rec, display, *_ = self.extend({"width": 3840, "height": 2400, "fps": 60})
+        self.assertEqual(display.prepares()[0][1:3], (2880, 1800))
+        self.assertTrue([line for line in rec.logs if "ignored" in line])
+
+    def test_invalid_video_behaves_like_no_video(self):
+        _relay, _rec, display, popen, *_ = self.extend({"width": "big", "height": 1800, "fps": 60})
+        self.assertEqual(display.prepares(), [("prepare", 2880, 1800, 274, "left", "150", False)])
+        self.assertIn("framerate=60", " ".join(popen.calls[0][0]))
+
+    def test_x264_caps_the_size_the_fps_and_sets_the_bitrate(self):
+        config = engine.Config(encoder="x264", position="left", scale="auto")
+        _relay, rec, display, popen, _inj, _tablet, cfg = self.extend(
+            None, config=config, size=(1920, 1200), rect=Rect(2560, 0, 1920, 1200))
+        command = popen.calls[0][0]
+        self.assertEqual(display.prepares(), [("prepare", 1920, 1200, 182, "left", "auto", False)])  # 274x1920/2880
+        self.assertEqual(cfg[3], 30)
+        self.assertIn("framerate=30", " ".join(command))
+        self.assertEqual(option(command, "-x264-params"), "keyint=30:min-keyint=30:scenecut=0")
+        self.assertEqual(option(command, "-b:v"), "8000000")  # 1920x1200 x 30 x 0.09 = 6.2 Mb/s -> minimum 8
+        self.assertNotIn("scale=", " ".join(command))
+        self.assertIn("x264 runs on the processor: 30 fps at most", rec.logs)
+        self.assertIn("x264 runs on the processor: 1920x1200 at most", rec.logs)
+
+    def test_actions_sessions_do_not_prepare_a_screen(self):
+        display, popen = FakeDisplay(), FakePopen(live)
+        connect = FakeConnect(after_hello=device_info_frame(
+            role="actions", video={"width": 1920, "height": 1200, "fps": 30}))
+        relay, rec = make_engine(self, popen=popen, connect=connect, display=display,
+                                 config=engine.Config(encoder="amf"), device_info_timeout_s=5.0)
+        relay.start()
+        rec.wait_state(State.ACTIONS)
+        self.assertEqual(display.prepares(), [])
+        self.assertEqual(popen.calls, [])
+
+    def duplicate(self, encoder, video=None):
+        popen, injectors, connect = FakePopen(live), FakeInjectors(), FakeConnect(
+            after_hello=device_info_frame(role="screen", video=video))
+        relay, rec = make_engine(self, run=FakeRun(outputs=((0, (2560, 1600)),)), popen=popen, injectors=injectors,
+                                 connect=connect, monitors=[(PRIMARY, True, "D1")], device_info_timeout_s=5.0,
+                                 config=engine.Config(encoder=encoder, mode="duplicate"))
+        relay.start()
+        first_tablet(connect).next_message(protocol.CONFIG)
+        wait_until(lambda: injectors.created)
+        return rec, popen, injectors
+
+    def test_duplicate_keeps_the_main_screen_size_whatever_the_device_announces(self):
+        _rec, popen, injectors = self.duplicate("amf", self.SMALL)
+        command = popen.calls[0][0]
+        self.assertNotIn("scale=", " ".join(command))
+        self.assertEqual(injectors.rects, [PRIMARY])
+        self.assertEqual(option(command, "-b:v"), str(engine.auto_bitrate(2560, 1600, 60)))
+
+    def test_duplicate_with_x264_scales_the_capture_down(self):
+        rec, popen, injectors = self.duplicate("x264")
+        command = popen.calls[0][0]
+        self.assertIn("ddagrab=output_idx=0:framerate=30,hwdownload,format=bgra,scale=1920:1200:flags=bilinear",
+                      command)
+        self.assertEqual(injectors.rects, [PRIMARY])  # le tactile couvre toujours l'écran principal en entier
+        self.assertEqual(option(command, "-b:v"), "8000000")
+        self.assertIn("Scaling the capture 2560x1600 to 1920x1200", rec.logs)
 
 
 if __name__ == "__main__":

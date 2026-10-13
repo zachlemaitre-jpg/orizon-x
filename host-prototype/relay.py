@@ -1,6 +1,6 @@
 """Relay CLI (debug mode): the same engine as the Orizon X PC app, logging to the terminal in English.
 
-Usage: py relay.py [--encoder auto|nvenc|amf] [--output auto|N] [--fps 60] [--bitrate 30M]
+Usage: py relay.py [--encoder auto|nvenc|amf|qsv|x264] [--output auto|N] [--fps 60] [--bitrate auto|30M]
        py relay.py --list-outputs
 """
 from __future__ import annotations
@@ -23,12 +23,14 @@ def output_choice(value: str) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Orizon X relay: PC screen -> tablet over adb")
     parser.add_argument("--encoder", choices=engine.ENCODER_CHOICES, default="auto",
-                        help="auto (default: NVENC if available, else AMF), nvenc or amf")
+                        help="auto (default: NVENC, else AMF, else QuickSync, else x264 on the processor), "
+                             "nvenc, amf, qsv or x264")
     parser.add_argument("--output", type=output_choice, default="auto",
                         help="number of the captured screen (see --list-outputs), or 'auto' (default): "
                              "the screen that has the tablet's size")
     parser.add_argument("--fps", type=int, default=60)
-    parser.add_argument("--bitrate", default="30M")
+    parser.add_argument("--bitrate", default="auto",
+                        help="'auto' (default: from the stream's size and fps) or an ffmpeg bitrate such as 30M")
     parser.add_argument("--list-outputs", action="store_true", help="list the capturable screens and exit")
     return parser.parse_args(argv)
 

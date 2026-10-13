@@ -11,11 +11,15 @@ from messages import msg
 class ParseArgsTest(unittest.TestCase):
     def test_encoder_defaults_to_auto(self):
         args = relay.parse_args([])
-        self.assertEqual((args.encoder, args.output, args.fps, args.bitrate), ("auto", "auto", 60, "30M"))
+        self.assertEqual((args.encoder, args.output, args.fps, args.bitrate), ("auto", "auto", 60, "auto"))
 
     def test_explicit_values(self):
         args = relay.parse_args(["--encoder", "amf", "--output", "2", "--fps", "30", "--bitrate", "20M"])
         self.assertEqual((args.encoder, args.output, args.fps, args.bitrate), ("amf", "2", 30, "20M"))
+
+    def test_new_encoders_accepted(self):
+        for encoder in ("qsv", "x264"):
+            self.assertEqual(relay.parse_args(["--encoder", encoder]).encoder, encoder)
 
     def test_output_choice_rejects_garbage(self):
         with self.assertRaises(Exception):

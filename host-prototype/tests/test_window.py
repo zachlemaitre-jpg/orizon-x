@@ -99,7 +99,8 @@ class WindowTest(unittest.TestCase):
                          [("Auto", "auto"), ("100 %", "100"), ("125 %", "125"), ("150 %", "150"), ("175 %", "175"),
                           ("200 %", "200"), ("225 %", "225"), ("250 %", "250")])
         self.assertEqual(self.window.combo_items("encoder"),
-                         [("Auto", "auto"), ("AMF (AMD)", "amf"), ("NVENC (NVIDIA)", "nvenc")])
+                         [("Auto", "auto"), ("AMF (AMD)", "amf"), ("NVENC (NVIDIA)", "nvenc"),
+                          ("QuickSync (Intel)", "qsv"), ("Processeur (CPU)", "x264")])
         self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Échelle", "Encodeur", "Langue"])
         self.assertEqual((self.window.adjust_text(), self.window.quit_text()), ("Régler dans Windows…", "Quitter"))
 
@@ -110,6 +111,8 @@ class WindowTest(unittest.TestCase):
                          ["Right", "Left", "Above", "Below"])
         self.assertEqual([label for label, _v in self.window.combo_items("scale")],
                          ["Auto", "100%", "125%", "150%", "175%", "200%", "225%", "250%"])
+        self.assertEqual([label for label, _v in self.window.combo_items("encoder")],
+                         ["Auto", "AMF (AMD)", "NVENC (NVIDIA)", "QuickSync (Intel)", "Processor (CPU)"])
         self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Scale", "Encoder", "Language"])
         self.assertEqual((self.window.adjust_text(), self.window.quit_text()), ("Adjust in Windows…", "Quit"))
 

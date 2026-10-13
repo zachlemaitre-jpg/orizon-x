@@ -15,7 +15,8 @@ EXPECTED_TABLET_MESSAGES = {
     "KEYFRAME_REQ": lambda f: protocol.KeyframeRequest(),
     "STATS": lambda f: protocol.Stats(**f),
     "INPUT": lambda f: protocol.Input(f["device"], tuple(protocol.Contact(**c) for c in f["contacts"])),
-    "DEVICE_INFO": lambda f: protocol.DeviceInfo(**f),
+    "DEVICE_INFO": lambda f: protocol.DeviceInfo(
+        **({**f, "video": protocol.VideoCaps(**f["video"])} if "video" in f else f)),
     "ACTION": lambda f: protocol.Action(f),
 }
 
@@ -170,6 +171,45 @@ class DeviceInfoTest(unittest.TestCase):
         payload = json.dumps({**self.GOOD, "name": name}, separators=(",", ":")).encode("utf-8")
         self.assertEqual(len(payload), protocol.MAX_JSON)
         self.assertEqual(self.decode(payload).name, name)
+
+    def test_video_is_absent_by_default(self):
+        self.assertIsNone(self.decode(json.dumps(self.GOOD).encode("utf-8")).video)
+        self.assertIsNone(protocol.DeviceInfo("actions", "phone", "x", "1").video)
+
+    def test_decodes_the_video_capabilities(self):
+        info = self.decode(json.dumps({**self.GOOD, "video": {"width": 2160, "height": 1350, "fps": 60}}).encode())
+        self.assertEqual(info.video, protocol.VideoCaps(2160, 1350, 60))
+        self.assertEqual(info.role, "actions")
+
+    def test_invalid_video_is_ignored_not_an_error(self):
+        bad_values = [
+            None, 3, "2880x1800", [], {},
+            {"width": 2880, "height": 1800},  # fps manquant
+            {"width": 2880, "fps": 60},  # hauteur manquante
+            {"height": 1800, "fps": 60},
+            {"width": "2880", "height": 1800, "fps": 60},
+            {"width": 2880.5, "height": 1800, "fps": 60},
+            {"width": 2880, "height": 1800, "fps": 59.9},
+            {"width": True, "height": 1800, "fps": 60},
+            {"width": 2880, "height": 1800, "fps": True},
+            {"width": 0, "height": 1800, "fps": 60},
+            {"width": 2880, "height": -1, "fps": 60},
+            {"width": 2880, "height": 1800, "fps": 0},
+            {"width": 2880, "height": 1800, "fps": 1000},
+            {"width": 100000, "height": 1800, "fps": 60},
+            {"width": 2880, "height": 100000, "fps": 60},
+            {"width": None, "height": 1800, "fps": 60},
+        ]
+        for video in bad_values:
+            with self.subTest(video=video):
+                info = self.decode(json.dumps({**self.GOOD, "video": video}).encode("utf-8"))
+                self.assertIsNone(info.video)
+                self.assertEqual(info.name, "Pixel 8")
+
+    def test_video_extra_fields_are_ignored(self):
+        info = self.decode(json.dumps(
+            {**self.GOOD, "video": {"width": 1920, "height": 1200, "fps": 30, "codec": "avc"}}).encode())
+        self.assertEqual(info.video, protocol.VideoCaps(1920, 1200, 30))
 
 
 class ActionTest(unittest.TestCase):

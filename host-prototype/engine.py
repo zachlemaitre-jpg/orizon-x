@@ -61,9 +61,9 @@ MODES = ("extend", "duplicate")  # valeurs de Config.mode ; toute autre valeur s
 @dataclass(frozen=True)
 class Config:
     output: str = "auto"  # "auto" ou un index ddagrab (sans écran virtuel : CLI, Duplicate)
-    encoder: str = "auto"  # "auto" | "nvenc" | "amf"
-    fps: int = 60
-    bitrate: str = "30M"
+    encoder: str = "auto"  # "auto" | "nvenc" | "amf" | "qsv" | "x264"
+    fps: int = 60  # plafond : l'appareil et l'encodeur peuvent le baisser (plan_stream)
+    bitrate: str = "auto"  # "auto" : calculé d'après la taille et les i/s (auto_bitrate) ; sinon une valeur ffmpeg ("30M")
     mode: str = "extend"  # "extend" : écran virtuel (si l'engine en a un) | "duplicate" : écran principal
     position: str = "right"  # right | left | above | below : place de l'écran virtuel (1re apparition)
     scale: str = "auto"  # "auto" ou un pourcentage ("150") : échelle de l'écran virtuel (1re apparition)
@@ -135,10 +135,34 @@ ENCODERS = {
     # AMF : -usage ultralowlatency/lowlatency ignorent -g (une seule IDR) ; sans -usage, -latency 1 donne la basse latence en gardant le GOP.
     # -aud 0 : sinon AMF ajoute ses propres AUD, en double avec ceux du bsf h264_metadata.
     "amf": ["-c:v", "h264_amf", "-latency", "1", "-quality", "speed", "-aud", "0"],
+    # QuickSync (Intel) : pas d'option -rc ; -maxrate = -b:v (ffmpeg_command) donne le débit constant. nv12 : la conversion depuis bgra.
+    "qsv": ["-c:v", "h264_qsv", "-preset", "veryfast", "-look_ahead", "0", "-async_depth", "1", "-pix_fmt", "nv12"],
+    # x264 (processeur). {fps} est remplacé par encoder_args. -pix_fmt yuv420p est indispensable : depuis bgra, x264
+    # choisirait le 4:4:4 (essayé avec le vrai ffmpeg : « high profile doesn't support 4:4:4 »), que le décodeur
+    # de la tablette ne sait pas lire.
+    "x264": ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "high",
+             "-pix_fmt", "yuv420p", "-x264-params", "keyint={fps}:min-keyint={fps}:scenecut=0"],
 }
-ENCODER_NAMES = {"nvenc": "NVENC", "amf": "AMF"}
-ENCODER_CHOICES = ("auto", "nvenc", "amf")
-AUTO_ORDER = ("nvenc", "amf")  # NVENC d'abord (sur secteur), AMF sinon (sur batterie, ou pilote NVIDIA trop ancien)
+ENCODER_NAMES = {"nvenc": "NVENC", "amf": "AMF", "qsv": "QuickSync", "x264": "x264"}
+ENCODER_CHOICES = ("auto", "nvenc", "amf", "qsv", "x264")
+# NVENC d'abord (sur secteur), AMF sinon (sur batterie, ou pilote NVIDIA trop ancien), puis QuickSync (Intel), puis le processeur.
+AUTO_ORDER = ("nvenc", "amf", "qsv", "x264")
+# Encodeurs qui prennent le débit en « -rc cbr » ; les autres (qsv, x264) : -maxrate = -b:v et -bufsize.
+RC_CBR_ENCODERS = ("nvenc", "amf")
+
+
+@dataclass(frozen=True)
+class EncoderLimits:
+    max_fps: int | None = None
+    max_width: int | None = None
+
+
+# x264 tourne sur le processeur : 30 i/s et 1920 de large au plus (le format est gardé).
+ENCODER_LIMITS = {"x264": EncoderLimits(max_fps=30, max_width=1920)}
+AUTO_BITRATE_FACTOR = 0.09  # bit par pixel et par image
+AUTO_BITRATE_MIN = 8_000_000
+AUTO_BITRATE_MAX = 40_000_000
+SIZE_MULTIPLE = 8  # les tailles réduites sont arrondies à un multiple de 8, comme côté Android
 
 MAX_FFMPEG_FAILURES = 3  # captures de suite sans vidéo avant l'état ERROR
 RETRY_DELAY_S = 2.0  # entre deux relances sans vidéo (la 1re relance après un arrêt est immédiate)
@@ -237,24 +261,110 @@ def output_for_rect(outputs: Outputs, rect: Rect, monitors: list[injector.Monito
     return candidates[min(rank, len(candidates) - 1)]
 
 
-def ffmpeg_command(ffmpeg: str, encoder: str, output: int, fps: int, bitrate: str) -> list[str]:
+def encoder_args(encoder: str, fps: int = 30) -> list[str]:
+    """The codec arguments of `encoder` (fps: the keyframe interval of x264)."""
+    return [arg.format(fps=fps) for arg in ENCODERS[encoder]]
+
+
+def parse_bitrate(value: str) -> int:
+    """Bits per second of an ffmpeg bitrate: "30M", "8000k" or a plain number. ValueError otherwise."""
+    text = value.strip()
+    factor = {"k": 1000, "m": 1_000_000}.get(text[-1:].lower(), 1)
+    return round(float(text[:-1] if factor != 1 else text) * factor)
+
+
+def _half_bitrate(value: str) -> str:
+    """Half of an ffmpeg bitrate, in its own notation ("12M" -> "6M"); VBV buffer of the encoders without -rc cbr."""
+    text = value.strip()
+    suffix = text[-1] if text[-1:].lower() in ("k", "m") else ""
+    number = float(text[:-1] if suffix else text) / 2
+    return f"{number:g}{suffix}" if suffix or number != int(number) else str(int(number))
+
+
+def ffmpeg_command(ffmpeg: str, encoder: str, output: int, fps: int, bitrate: str,
+                   scale: tuple[int, int] | None = None) -> list[str]:
+    """scale: reduce the captured image to this size before encoding (x264 above its width limit)."""
+    source = f"ddagrab=output_idx={output}:framerate={fps},hwdownload,format=bgra"
+    if scale is not None:
+        source += f",scale={scale[0]}:{scale[1]}:flags=bilinear"
+    if encoder in RC_CBR_ENCODERS:
+        rate = ["-rc", "cbr", "-b:v", bitrate]
+    else:
+        rate = ["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", _half_bitrate(bitrate)]
     return [
         ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "warning",
         # hwdownload : sur le portable hybride l'écran est sur l'AMD et NVENC sur la NVIDIA (corrigé en phase 2).
-        "-f", "lavfi", "-i", f"ddagrab=output_idx={output}:framerate={fps},hwdownload,format=bgra",
-        *ENCODERS[encoder],
-        "-rc", "cbr", "-b:v", bitrate, "-bf", "0", "-g", str(fps),
+        "-f", "lavfi", "-i", source,
+        *encoder_args(encoder, fps),
+        *rate, "-bf", "0", "-g", str(fps),
         "-bsf:v", "h264_metadata=aud=insert", "-f", "h264", "-",
     ]
 
 
+def fit_width(size: tuple[int, int], max_width: int) -> tuple[int, int]:
+    """`size` reduced to `max_width` wide at most, same aspect ratio, the height a multiple of 8."""
+    width, height = size
+    if width <= max_width:
+        return size
+    reduced = round(height * max_width / width / SIZE_MULTIPLE) * SIZE_MULTIPLE
+    return max_width, max(reduced, SIZE_MULTIPLE)
+
+
+def auto_bitrate(width: int, height: int, fps: int) -> int:
+    """Bits per second for a width x height stream at fps: 0.09 bit per pixel and frame, within 8..40 Mb/s."""
+    return min(max(round(width * height * fps * AUTO_BITRATE_FACTOR), AUTO_BITRATE_MIN), AUTO_BITRATE_MAX)
+
+
+def resolve_bitrate(setting: str, width: int, height: int, fps: int) -> str:
+    """`setting` itself when it is a value; for "auto", the computed bitrate (bits per second, as text)."""
+    return str(auto_bitrate(width, height, fps)) if setting == "auto" else setting
+
+
+@dataclass(frozen=True)
+class StreamPlan:
+    size: tuple[int, int]  # taille demandée pour l'écran capturé (l'écran virtuel en mode Extend)
+    fps: int
+    notes: list[str]  # lignes de journal (anglais) qui expliquent ce qui a été limité
+
+
+def plan_stream(native: tuple[int, int], video: protocol.VideoCaps | None, encoder: str,
+                config_fps: int) -> StreamPlan:
+    """Size and fps of the stream from the tablet's screen, what its decoder announced and the encoder's limits.
+
+    No `video` (an older app): the native size at the configured fps. A `video` larger than the screen is ignored
+    (the virtual screen has no mode beyond the screen's size). The fps is the lowest of the configured one, the
+    device's and the encoder's; the encoder's width limit applies to the size (same aspect ratio).
+    """
+    notes: list[str] = []
+    size, fps = native, config_fps
+    if video is not None:
+        if video.width > native[0] or video.height > native[1]:
+            notes.append(f"Device video {video.width}x{video.height} is larger than its screen "
+                         f"{native[0]}x{native[1]}: ignored")
+        else:
+            size = (video.width, video.height)
+            fps = min(fps, video.fps)
+            if size != native or video.fps < config_fps:
+                notes.append(f"Device decodes {video.width}x{video.height} at {video.fps} fps")
+    limits = ENCODER_LIMITS.get(encoder)
+    if limits is not None:
+        name = ENCODER_NAMES[encoder]
+        if limits.max_fps is not None and fps > limits.max_fps:
+            fps = limits.max_fps
+            notes.append(f"{name} runs on the processor: {fps} fps at most")
+        if limits.max_width is not None and size[0] > limits.max_width:
+            size = fit_width(size, limits.max_width)
+            notes.append(f"{name} runs on the processor: {size[0]}x{size[1]} at most")
+    return StreamPlan(size, fps, notes)
+
+
 def probe_encoder(ffmpeg: str, encoder: str, run: Run = subprocess.run) -> bool:
-    """True if this hardware encoder can encode one frame right now (driver present, GPU awake)."""
+    """True if this encoder can encode one frame right now (driver present, GPU awake; x264 needs neither)."""
     try:
         result = run(
             [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
              "-f", "lavfi", "-i", "color=c=black:s=256x256:r=1", "-frames:v", "1",
-             *ENCODERS[encoder], "-f", "null", "-"],
+             *encoder_args(encoder), "-f", "null", "-"],
             capture_output=True, creationflags=tools.NO_WINDOW, timeout=ENCODER_PROBE_TIMEOUT_S,
             cwd=tools.tool_cwd(ffmpeg),
         )
@@ -265,7 +375,7 @@ def probe_encoder(ffmpeg: str, encoder: str, run: Run = subprocess.run) -> bool:
 
 def resolve_encoder(ffmpeg: str, choice: str, run: Run = subprocess.run,
                     should_stop: Callable[[], bool] = lambda: False) -> tuple[str, str]:
-    """(encoder, English log line). 'auto' probes NVENC then AMF; a forced encoder is trusted as is.
+    """(encoder, English log line). 'auto' probes AUTO_ORDER; a forced encoder is trusted as is.
 
     Raises _Stopped instead of running the next probe once should_stop() turns true.
     """
@@ -681,11 +791,14 @@ class RelayEngine:
     def _uses_display(self) -> bool:
         return self._display is not None and self._config.mode == "extend"
 
-    def _choose_capture(self, hello: protocol.Hello, outputs: Outputs,
-                        should_stop: Callable[[], bool]) -> tuple[int, Rect | None] | None:
-        """(ddagrab index, Windows rect of that screen if known), or None if stopped or the tablet left."""
+    def _choose_capture(self, hello: protocol.Hello, outputs: Outputs, should_stop: Callable[[], bool],
+                        size: tuple[int, int]) -> tuple[int, Rect | None] | None:
+        """(ddagrab index, Windows rect of that screen if known), or None if stopped or the tablet left.
+
+        size: the stream size wanted (plan_stream); only the virtual screen is made that size.
+        """
         if self._uses_display():
-            return self._prepare_display(hello, should_stop)
+            return self._prepare_display(hello, should_stop, size)
         if self._config.mode == "duplicate" and self._config.output == "auto":
             return self._main_screen_output(should_stop)
         output = pick_output(self._config.output, outputs, hello.width, hello.height)
@@ -693,17 +806,18 @@ class RelayEngine:
             self._log(f"Captured screen: #{output} ({hello.width}x{hello.height}, picked automatically)")
         return output, None
 
-    def _prepare_display(self, hello: protocol.Hello,
-                         should_stop: Callable[[], bool]) -> tuple[int, Rect] | None:
+    def _prepare_display(self, hello: protocol.Hello, should_stop: Callable[[], bool],
+                         size: tuple[int, int]) -> tuple[int, Rect] | None:
         assert self._display is not None
+        width, height = size
         self._set_state(State.PREPARING_DISPLAY, PREPARING_DISPLAY_DETAIL)
         self._prepared_layout = None
         with self._layout_lock:
             position, scale = self._config.position, self._config.scale
         first_time = self._first_time()
         self._display_used = True
-        prepared = self._display.prepare(hello.width, hello.height, hello.dpi, position, scale, first_time,
-                                         should_stop)
+        prepared = self._display.prepare(width, height, self._display_dpi(hello, width), position, scale,
+                                         first_time, should_stop)
         if prepared is None:
             return None
         # Un changement fait pendant la préparation est appliqué dès que la session est en place (_session).
@@ -712,11 +826,11 @@ class RelayEngine:
             self._layout_applied(position, scale)
         mode = prepared.mode
         if not prepared.exact:
-            self._log(f"Virtual screen: no {hello.width}x{hello.height} mode, nearest is {mode[0]}x{mode[1]} "
+            self._log(f"Virtual screen: no {width}x{height} mode, nearest is {mode[0]}x{mode[1]} "
                       "(black bars on the tablet)")
         on_display = getattr(self._listener, "on_display", None)
         if on_display is not None:
-            self._notify(on_display, DisplayInfo((hello.width, hello.height), mode, prepared.exact, prepared.rect))
+            self._notify(on_display, DisplayInfo((width, height), mode, prepared.exact, prepared.rect))
         listed = self._list_monitors()
         output, outputs = self._find_output(prepared.rect, self._name_of(prepared.rect, listed), listed, should_stop)
         if should_stop():
@@ -726,6 +840,16 @@ class RelayEngine:
                                  outputs=describe_outputs(outputs)))
         self._log(f"Captured screen: #{output} (virtual screen {prepared.rect.width}x{prepared.rect.height})")
         return output, prepared.rect
+
+    @staticmethod
+    def _display_dpi(hello: protocol.Hello, width: int) -> int:
+        """The dpi the virtual screen's Auto scale is worked out from: the tablet's, times capture / native width.
+
+        A tablet shown a smaller picture needs a smaller Windows scale for the text to keep its physical size
+        (274 dpi, 200 % natively, 150 % at 3/4 of the width). Rounded down, which loses nothing: every step of
+        display_layout.auto_scale sits on a whole dpi.
+        """
+        return hello.dpi * width // hello.width if hello.width > 0 else hello.dpi
 
     def _main_screen_output(self, should_stop: Callable[[], bool]) -> tuple[int, Rect | None]:
         """Duplicate mode: the ddagrab output of the main Windows screen, else #0."""
@@ -1020,14 +1144,23 @@ class RelayEngine:
                     except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fin de la session
                         self._log(f"Actions: hub stop failed: {e}")
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
-            capture = self._choose_capture(hello, outputs, should_stop)
+            plan = plan_stream((hello.width, hello.height), info.video if info is not None else None, encoder,
+                               self._config.fps)
+            for note in plan.notes:
+                self._log(note)
+            capture = self._choose_capture(hello, outputs, should_stop, plan.size)
             if capture is None or should_stop():
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
             with injector_lock:
                 output, target_rect = capture
+            fps = plan.fps
+            scale_to, stream_hint = self._capture_scaling(encoder, target_rect, (hello.width, hello.height))
+            bitrate = resolve_bitrate(self._config.bitrate, stream_hint[0], stream_hint[1], fps)
+            if self._config.bitrate == "auto":
+                self._log(f"Bitrate: {int(bitrate) / 1e6:.1f} Mb/s (auto)")
             if self._uses_display() and self._prepared_layout is not None and target_rect is not None:
                 with self._relayout_lock, self._lock:
-                    self._display_session = _DisplaySession(hello.dpi, retarget, restart_capture,
+                    self._display_session = _DisplaySession(self._display_dpi(hello, plan.size[0]), retarget, restart_capture,
                                                             self._prepared_layout, target_rect)
                 # Position/échelle changées pendant la préparation (relayout a renvoyé False) : appliquées maintenant.
                 self._apply_latest_layout()
@@ -1045,7 +1178,7 @@ class RelayEngine:
                         break
                 stderr_tail = collections.deque(maxlen=20)
                 run_video = threading.Event()
-                command = ffmpeg_command(self._ffmpeg, encoder, output, self._config.fps, self._config.bitrate)
+                command = ffmpeg_command(self._ffmpeg, encoder, output, fps, bitrate, scale_to)
                 process = self._deps.popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, creationflags=tools.NO_WINDOW,
                                            cwd=tools.tool_cwd(self._ffmpeg))
@@ -1068,7 +1201,7 @@ class RelayEngine:
                                                  name="ffmpeg-stderr", daemon=True)
                 stderr_thread.start()
                 try:
-                    stream(process.stdout, send, self._config.fps, disconnected, on_stream_size, self._log)
+                    stream(process.stdout, send, fps, disconnected, on_stream_size, self._log)
                 except OSError as e:
                     send_failed = True  # sendall a échoué : la tablette est partie
                     if not self._stop_event.is_set():  # stop() ferme le socket : ce n'est pas un départ
@@ -1129,6 +1262,23 @@ class RelayEngine:
                 else:
                     self._release_display(immediate=False)
         return SessionResult(died, sent_video.is_set(), list(stderr_tail), failures)
+
+    def _capture_scaling(self, encoder: str, rect: Rect | None,
+                         native: tuple[int, int]) -> tuple[tuple[int, int] | None, tuple[int, int]]:
+        """(size to scale the capture to or None, the stream's expected size).
+
+        The captured screen is reduced only when its Windows rect is known (an encoder's width limit, Duplicate
+        mode): touch then covers that rect whatever the stream size. A capture found by its size (CLI) never is.
+        """
+        if rect is None:
+            return None, native
+        size = (rect.width, rect.height)
+        limits = ENCODER_LIMITS.get(encoder)
+        if limits is not None and limits.max_width is not None and size[0] > limits.max_width:
+            target = fit_width(size, limits.max_width)
+            self._log(f"Scaling the capture {size[0]}x{size[1]} to {target[0]}x{target[1]}")
+            return target, target
+        return None, size
 
     def _end_capture(self, process: Any, stderr_thread: threading.Thread) -> None:
         """A capture that ended while the tablet stays: reaped before the next one, its stderr read to the end."""
