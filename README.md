@@ -179,6 +179,20 @@ cd android; .\gradlew.bat :app:installDebug
 ```
 Le fichier est `android\app\build\outputs\apk\debug\app-debug.apk`.
 
+### Publier une version
+
+Le dépôt GitHub est **privé** : https://github.com/animaappcontact-stack/orizon-x. Les fichiers à distribuer sont dans ses Releases.
+
+1. Change `__version__` dans `host-prototype/version.py` (seule source de version, PC et APK), puis commite.
+2. Compile : `.uild-pc.ps1`, puis `.uild-android.ps1`.
+3. Publie, avec le CLI GitHub (`gh auth login` une fois) :
+   ```powershell
+   git push
+   gh release create v0.7.0 dist\OrizonX-Setup.exe dist\OrizonX.apk --title "Orizon X 0.7.0" --notes "…"
+   ```
+
+Le dossier de signature n'est jamais publié (le `.gitignore` refuse `*.jks` et `keystore.properties`).
+
 ### Clé de signature Android
 
 L'APK release est signée avec une clé personnelle, **hors du dépôt** : `%USERPROFILE%\OrizonX-signing\` (`orizonx-release.jks` et `keystore.properties`, qui contient les mots de passe). La variable d'environnement `ORIZONX_SIGNING_DIR` permet de pointer vers un autre dossier. Sans ce dossier, seule la compilation release échoue ; la debug marche.
