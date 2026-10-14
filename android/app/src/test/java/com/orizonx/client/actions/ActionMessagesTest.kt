@@ -1,5 +1,6 @@
 package com.orizonx.client.actions
 
+import com.orizonx.client.i18n.Lang
 import com.orizonx.client.protocol.FrameWriter
 import com.orizonx.client.protocol.TabletMessage
 import org.junit.Assert.assertEquals
@@ -29,6 +30,12 @@ class ActionMessagesTest {
     @Test
     fun contextPress() {
         assertEquals("""{"id":"context.press","button":"ppt.prev"}""", wire(ActionMessages.contextPress("ppt.prev")))
+    }
+
+    @Test
+    fun contextLang() {
+        assertEquals("""{"id":"context.lang","lang":"en"}""", wire(ActionMessages.contextLang(Lang.EN)))
+        assertEquals("""{"id":"context.lang","lang":"fr"}""", wire(ActionMessages.contextLang(Lang.FR)))
     }
 
     @Test

@@ -107,6 +107,10 @@ import com.orizonx.client.actions.UsbKind
 import com.orizonx.client.actions.VolumeIcon
 import com.orizonx.client.actions.WifiIcon
 import com.orizonx.client.actions.WifiState
+import com.orizonx.client.i18n.LangPref
+import com.orizonx.client.i18n.LocalLang
+import com.orizonx.client.i18n.S
+import com.orizonx.client.i18n.tr
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -137,6 +141,8 @@ fun ActionsScreen(
     artwork: Pair<String, ImageBitmap>?,
     onAction: (JSONObject) -> Unit,
     onSwitchMode: () -> Unit,
+    langPref: LangPref,
+    onLangPref: (LangPref) -> Unit,
 ) {
     val view = LocalView.current
     DisposableEffect(view) {
@@ -152,18 +158,28 @@ fun ActionsScreen(
     val update: (ActionsState.() -> ActionsState) -> Unit = { change -> shown = shown?.change() }
 
     // A notice arrives in exactly one state: show it for ~3 s even though newer states keep coming.
-    var noticeText by remember { mutableStateOf<String?>(null) }
+    val lang = LocalLang.current
+    var noticeCode by remember { mutableStateOf<String?>(null) }
     var noticeSeq by remember { mutableIntStateOf(0) }
     LaunchedEffect(parsed) {
         parsed?.notice?.let {
-            noticeText = ActionsFormat.notice(it.code)
+            noticeCode = it.code
             noticeSeq++
         }
     }
     LaunchedEffect(noticeSeq) {
         if (noticeSeq > 0) {
             delay(NOTICE_MS)
-            noticeText = null
+            noticeCode = null
+        }
+    }
+
+    // The PC learns the new language when it changes during the session (its first value went out in DEVICE_INFO).
+    var announcedLang by remember { mutableStateOf(lang) }
+    LaunchedEffect(lang) {
+        if (lang != announcedLang) {
+            announcedLang = lang
+            send(ActionMessages.contextLang(lang))
         }
     }
 
@@ -188,11 +204,13 @@ fun ActionsScreen(
             Column(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp)) {
                     Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-                        Pill("Changer de mode", selected = false, onClick = { tap(); onSwitchMode() })
+                        LangPill(langPref, onLangPref)
+                        Spacer(Modifier.width(10.dp))
+                        Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
                     }
                     if (state == null) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            GlassText("Connexion au PC…", size = 16.sp, alpha = 0.8f)
+                            GlassText(tr(S.CONNECTING_TO_PC), size = 16.sp, alpha = 0.8f)
                         }
                     } else {
                         ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
@@ -202,14 +220,14 @@ fun ActionsScreen(
                 if (contextBar != null) ContextBarStrip(contextBar, controls, landscape)
             }
             AnimatedVisibility(
-                visible = noticeText != null,
+                visible = noticeCode != null,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = if (contextBar != null) 24.dp + ContextBarHeight + ContextBarBottomMargin else 24.dp, start = 16.dp, end = 16.dp),
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
-                GlassPanel { GlassText(noticeText ?: "", size = 15.sp, color = Amber) }
+                GlassPanel { GlassText(noticeCode?.let { ActionsFormat.notice(it, lang) } ?: "", size = 15.sp, color = Amber) }
             }
         }
     }
@@ -483,7 +501,7 @@ private fun ClockBlock(clock: ClockState?, battery: BatteryState?, clockSp: Floa
                     Modifier.padding(bottom = (clockSp * 0.16f).dp),
                 )
             }
-            GlassText(ActionsFormat.date(now, offset), size = dateSp.sp, alpha = 0.9f)
+            GlassText(ActionsFormat.date(now, offset, LocalLang.current), size = dateSp.sp, alpha = 0.9f)
         }
         if (battery != null) {
             Spacer(Modifier.height(10.dp))
@@ -632,10 +650,10 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
                 tint = if (muted) MuteRed else Color.White,
             )
             Spacer(Modifier.width(8.dp))
-            GlassText("Son", size = 16.sp, weight = FontWeight.SemiBold)
+            GlassText(tr(S.SOUND), size = 16.sp, weight = FontWeight.SemiBold)
             if (audio != null && !keys) {
                 Spacer(Modifier.weight(1f))
-                GlassText(if (audio.muted) "Muet" else "${(audio.volume * 100).roundToInt()} %", size = 16.sp)
+                GlassText(if (audio.muted) tr(S.MUTED) else tr(S.PERCENT, "value" to (audio.volume * 100).roundToInt()), size = 16.sp)
             }
         }
         if (audio != null && !keys) {
@@ -657,7 +675,7 @@ private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Mod
                     VolumeSlider(audio, c, Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp))
                     Box(Modifier.width(52.dp), contentAlignment = Alignment.CenterEnd) {
-                        GlassText(if (audio.muted) "Muet" else "${(audio.volume * 100).roundToInt()} %", size = 16.sp)
+                        GlassText(if (audio.muted) tr(S.MUTED) else tr(S.PERCENT, "value" to (audio.volume * 100).roundToInt()), size = 16.sp)
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -717,7 +735,7 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                 }
             }
             Column(Modifier.weight(1f)) {
-                OneLine(now.title.ifBlank { "Lecture en cours" }, 18.sp, FontWeight.Bold, 1f)
+                OneLine(now.title.ifBlank { tr(S.NOW_PLAYING) }, 18.sp, FontWeight.Bold, 1f)
                 val details = listOf(now.artist, now.album).filter { it.isNotBlank() }.joinToString(" · ")
                 if (details.isNotEmpty()) OneLine(details, 14.sp, FontWeight.Normal, 0.8f)
                 if (now.app.isNotBlank()) OneLine(now.app, 12.sp, FontWeight.Normal, 0.55f)
@@ -753,7 +771,7 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
         Row(verticalAlignment = Alignment.CenterVertically) {
             Picto(brightnessRes(brightness), 28.dp)
             Spacer(Modifier.width(8.dp))
-            GlassText("Luminosité", size = 16.sp, weight = FontWeight.SemiBold)
+            GlassText(tr(S.BRIGHTNESS), size = 16.sp, weight = FontWeight.SemiBold)
         }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -771,7 +789,7 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
             )
             Spacer(Modifier.width(12.dp))
             Box(Modifier.width(52.dp), contentAlignment = Alignment.CenterEnd) {
-                GlassText("${(brightness.value * 100).roundToInt()} %", size = 16.sp)
+                GlassText(tr(S.PERCENT, "value" to (brightness.value * 100).roundToInt()), size = 16.sp)
             }
         }
     }
@@ -781,21 +799,21 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
 private fun RadioTiles(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         state.wifi?.let { wifi: WifiState ->
-            Tile(wifiRes(wifi), "Wi-Fi", wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f).fillMaxHeight()) {
+            Tile(wifiRes(wifi), tr(S.WIFI), wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(wifi = wifi.copy(on = !wifi.on)) }
                 c.send(ActionMessages.wifiSet(!wifi.on))
             }
         }
         state.bluetooth?.let { bt: BluetoothState ->
-            Tile(R.drawable.ox_bluetooth, "Bluetooth", bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f).fillMaxHeight()) {
+            Tile(R.drawable.ox_bluetooth, tr(S.BLUETOOTH), bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(bluetooth = BluetoothState(!bt.on, bt.connected)) }
                 c.send(ActionMessages.bluetoothSet(!bt.on))
             }
         }
         state.airplane?.let { plane: AirplaneState ->
-            Tile(R.drawable.ic_action_airplane, "Avion", onOff(plane.on), plane.on, Modifier.weight(1f).fillMaxHeight()) {
+            Tile(R.drawable.ic_action_airplane, tr(S.AIRPLANE), onOff(plane.on), plane.on, Modifier.weight(1f).fillMaxHeight()) {
                 c.tap()
                 c.update { copy(airplane = AirplaneState(!plane.on)) }
                 c.send(ActionMessages.airplaneSet(!plane.on))
@@ -804,7 +822,8 @@ private fun RadioTiles(state: ActionsState, c: Controls, modifier: Modifier = Mo
     }
 }
 
-private fun onOff(on: Boolean) = if (on) "Activé" else "Désactivé"
+@Composable
+private fun onOff(on: Boolean) = tr(if (on) S.STATE_ON else S.STATE_OFF)
 
 /**
  * Compact USB chip: pictogram, "label  E:" with "12 Go libres" under it, then the open-folder and eject buttons.
@@ -825,14 +844,14 @@ private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
             BasicText(
-                drive.label.ifBlank { "Clé USB" } + "  " + drive.drive,
+                drive.label.ifBlank { tr(S.USB_DRIVE) } + "  " + drive.drive,
                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             drive.freeBytes?.let {
                 BasicText(
-                    ActionsFormat.freeSpace(it),
+                    ActionsFormat.freeSpace(it, LocalLang.current),
                     style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -840,12 +859,12 @@ private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier)
             }
         }
         Spacer(Modifier.width(6.dp))
-        ChipIconButton(R.drawable.ox_dossier, "Ouvrir ${drive.drive}") {
+        ChipIconButton(R.drawable.ox_dossier, tr(S.USB_OPEN_DESC, "drive" to drive.drive)) {
             c.tap()
             c.send(ActionMessages.usbOpen(drive.drive))
         }
         Spacer(Modifier.width(6.dp))
-        ChipIconButton(R.drawable.ox_eject, "Éjecter ${drive.drive}") {
+        ChipIconButton(R.drawable.ox_eject, tr(S.USB_EJECT_DESC, "drive" to drive.drive)) {
             c.tap()
             c.send(ActionMessages.usbEject(drive.drive))
         }
@@ -871,7 +890,7 @@ private fun ChipIconButton(icon: Int, description: String, onClick: () -> Unit) 
 // --- Controls ------------------------------------------------------------------------------
 
 @Composable
-private fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier
             .heightIn(min = 44.dp)
@@ -895,11 +914,12 @@ private fun MuteButton(audio: AudioState, onClick: () -> Unit, compact: Boolean 
     val muted = audio.muted
     val tint = if (muted) MuteRed else Color.White
     val shape = if (compact) RoundedCornerShape(16.dp) else TileShape
+    val description = tr(if (muted) S.UNMUTE_DESC else S.MUTE_DESC)
     val base = Modifier
         .clip(shape)
         .background(if (muted) MuteRed.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
         .border(if (muted) 2.dp else 1.dp, if (muted) MuteRed.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.25f), shape)
-        .semantics { contentDescription = if (muted) "Réactiver le son" else "Couper le son" }
+        .semantics { contentDescription = description }
         .clickable(onClick = onClick)
     if (compact) {
         Box(base.size(56.dp), contentAlignment = Alignment.Center) {
@@ -908,7 +928,7 @@ private fun MuteButton(audio: AudioState, onClick: () -> Unit, compact: Boolean 
     } else {
         Column(base.padding(horizontal = 16.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Picto(volumeRes(audio), 32.dp, tint = tint)
-            GlassText(if (muted) "Muet" else "Son", size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
+            GlassText(tr(if (muted) S.MUTED else S.SOUND), size = 12.sp, color = tint, weight = if (muted) FontWeight.SemiBold else FontWeight.Normal)
         }
     }
 }

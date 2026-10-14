@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
 import android.util.Log
+import com.orizonx.client.i18n.Msg
+import com.orizonx.client.i18n.S
 import android.view.Surface
 import com.orizonx.client.protocol.PcMessage
 import java.util.concurrent.LinkedBlockingQueue
@@ -17,7 +19,8 @@ import java.util.concurrent.TimeUnit
 class DecoderFailure(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /** Raised when no decoder can be created or configured. Deliberately not an IOException: it is not a network error. */
-class DecoderUnavailable(message: String, cause: Throwable? = null) : Exception(message, cause)
+/** [reason] is the same problem as a translatable text for the waiting screen; [message] stays a diagnostic for the logs. */
+class DecoderUnavailable(message: String, cause: Throwable? = null, val reason: Msg? = null) : Exception(message, cause)
 
 /**
  * Hardware H.264 decoder rendering straight to [surface], in async mode.
@@ -36,7 +39,7 @@ class VideoDecoder(
         MediaCodec.createDecoderByType(MIME)
     } catch (e: Exception) {
         thread.quitSafely()
-        throw DecoderUnavailable("aucun décodeur H.264 disponible", e)
+        throw DecoderUnavailable("aucun décodeur H.264 disponible", e, Msg(S.DETAIL_NO_DECODER))
     }
     @Volatile private var failure: MediaCodec.CodecException? = null
     private var waitingForKey = true
@@ -47,7 +50,8 @@ class VideoDecoder(
     } catch (e: Exception) {
         runCatching { codec.release() }
         thread.quitSafely()
-        throw DecoderUnavailable("configuration du décodeur impossible : ${e.message ?: e.javaClass.simpleName}", e)
+        val detail = e.message ?: e.javaClass.simpleName
+        throw DecoderUnavailable("configuration du décodeur impossible : $detail", e, Msg(S.DETAIL_DECODER_CONFIG, "detail" to detail))
     }
 
     private fun start(

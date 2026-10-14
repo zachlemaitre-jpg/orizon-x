@@ -1,5 +1,6 @@
 package com.orizonx.client.protocol
 
+import com.orizonx.client.i18n.Msg
 import org.json.JSONObject
 import java.io.IOException
 
@@ -48,7 +49,8 @@ object Protocol {
     const val CODEC_H264 = 1
 }
 
-class ProtocolException(message: String) : IOException(message)
+/** [reason] is the same problem as a translatable text, for the waiting screen; [message] stays a diagnostic for the logs. */
+class ProtocolException(message: String, val reason: Msg? = null) : IOException(message)
 
 /** One finger or the pen in an INPUT frame. Coordinates 0..65535 over the video image (spec phase 4 §3). */
 data class InputContact(
@@ -113,6 +115,8 @@ sealed interface TabletMessage {
         val app: String,
         /** Best size/rate the hardware decoder handles (screen role); null = unknown, the PC keeps its defaults. */
         val video: VideoCaps? = null,
+        /** Effective interface language ("en" or "fr"): the PC labels its context bar with it; null = not announced (PC assumes "fr"). */
+        val lang: String? = null,
     ) : TabletMessage
 
     /** One user action for the PC; [json] must carry a string "id" (spec actions-mode §2.2). */

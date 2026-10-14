@@ -2,6 +2,8 @@ package com.orizonx.client
 
 import android.util.Log
 import android.view.Surface
+import com.orizonx.client.i18n.Msg
+import com.orizonx.client.i18n.S
 import com.orizonx.client.protocol.ActionsStateMessage
 import com.orizonx.client.protocol.FrameReader
 import com.orizonx.client.protocol.FrameWriter
@@ -109,7 +111,11 @@ class Session(
                                     try {
                                         fresh.submit(message)
                                     } catch (e2: DecoderFailure) {
-                                        throw DecoderUnavailable("échec juste après recréation : ${e2.message}", e2)
+                                        throw DecoderUnavailable(
+                                            "échec juste après recréation : ${e2.message}",
+                                            e2,
+                                            Msg(S.DETAIL_DECODER_RECREATE, "detail" to e2.message.orEmpty()),
+                                        )
                                     }
                                 } else {
                                     tracker.onFrameDropped()
@@ -142,9 +148,11 @@ class Session(
     }
 
     private fun validate(config: PcMessage.Config) {
-        if (config.codec != Protocol.CODEC_H264) throw ProtocolException("codec non supporté : ${config.codec}")
+        if (config.codec != Protocol.CODEC_H264) {
+            throw ProtocolException("codec non supporté : ${config.codec}", Msg(S.DETAIL_CODEC_UNSUPPORTED, "codec" to config.codec))
+        }
         if (config.width <= 0 || config.height <= 0 || config.fps <= 0) {
-            throw ProtocolException("CONFIG invalide : $config")
+            throw ProtocolException("CONFIG invalide : $config", Msg(S.DETAIL_CONFIG_INVALID, "config" to config))
         }
     }
 

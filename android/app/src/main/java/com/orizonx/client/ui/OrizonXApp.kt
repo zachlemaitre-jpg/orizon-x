@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +29,10 @@ import com.orizonx.client.ConnectionState
 import com.orizonx.client.DeviceRole
 import com.orizonx.client.ScreenInfo
 import com.orizonx.client.UiModel
+import com.orizonx.client.i18n.LangPref
+import com.orizonx.client.i18n.LocalLang
+import com.orizonx.client.i18n.S
+import com.orizonx.client.i18n.tr
 import kotlinx.coroutines.delay
 
 /** Root: letterboxed video, waiting screen on top while disconnected, optional HUD while streaming. */
@@ -39,37 +44,44 @@ fun OrizonXApp(
     onSurfaceCreated: (Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onRoleChosen: (DeviceRole) -> Unit,
+    onLangPrefChosen: (LangPref) -> Unit,
     onAction: (org.json.JSONObject) -> Unit,
 ) {
     val streaming = model.state is ConnectionState.Streaming
     val actionsActive = model.role == DeviceRole.ACTIONS && model.connectedRole == DeviceRole.ACTIONS
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black),
-        contentAlignment = Alignment.Center,
-    ) {
-        // Ne jamais envelopper VideoSurface dans un graphicsLayer, un alpha ou un AnimatedVisibility :
-        // un calque hors écran casse le « trou » du SurfaceView et la vidéo devient noire.
-        val size = model.lastStream
-        val videoModifier = if (size != null) {
-            Modifier.aspectRatio(size.width.toFloat() / size.height)
-        } else {
-            Modifier.fillMaxSize()
-        }
-        VideoSurface(videoModifier, onVideoView, onSurfaceCreated, onSurfaceDestroyed)
+    CompositionLocalProvider(LocalLang provides model.lang) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Ne jamais envelopper VideoSurface dans un graphicsLayer, un alpha ou un AnimatedVisibility :
+            // un calque hors écran casse le « trou » du SurfaceView et la vidéo devient noire.
+            val size = model.lastStream
+            val videoModifier = if (size != null) {
+                Modifier.aspectRatio(size.width.toFloat() / size.height)
+            } else {
+                Modifier.fillMaxSize()
+            }
+            VideoSurface(videoModifier, onVideoView, onSurfaceCreated, onSurfaceDestroyed)
 
-        AnimatedVisibility(visible = !streaming && !actionsActive, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
-            WaitingScreen(model.waitingReason, screen, model.role, model.connectedRole, onRoleChosen)
-        }
+            AnimatedVisibility(visible = !streaming && !actionsActive, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
+                WaitingScreen(model.waitingReason, screen, model.role, model.connectedRole, onRoleChosen, model.langPref, onLangPrefChosen)
+            }
 
-        // VideoSurface stays composed underneath: it owns the Receiver's lifecycle (Surface created/destroyed).
-        AnimatedVisibility(visible = actionsActive, enter = fadeIn(tween(300)), exit = fadeOut(tween(300))) {
-            ActionsScreen(model.actionsState, model.artwork, onAction, onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) })
-        }
+            // VideoSurface stays composed underneath: it owns the Receiver's lifecycle (Surface created/destroyed).
+            AnimatedVisibility(visible = actionsActive, enter = fadeIn(tween(300)), exit = fadeOut(tween(300))) {
+                ActionsScreen(
+                    model.actionsState, model.artwork, onAction,
+                    onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) },
+                    langPref = model.langPref, onLangPref = onLangPrefChosen,
+                )
+            }
 
-        if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))
-        GestureHint(streaming, model.streamGeneration, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp))
+            if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))
+            GestureHint(streaming, model.streamGeneration, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp))
+        }
     }
 }
 
@@ -94,7 +106,7 @@ private fun GestureHint(streaming: Boolean, generation: Int, modifier: Modifier)
         }
     }
     AnimatedVisibility(visible = visible, modifier = modifier, enter = fadeIn(tween(300)), exit = fadeOut(tween(600))) {
-        GlassPanel { GlassText("Appui long à 4 doigts : infos", size = 13.sp) }
+        GlassPanel { GlassText(tr(S.HINT_HUD_SHORT), size = 13.sp) }
     }
 }
 

@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.orizonx.client.HudData
+import com.orizonx.client.i18n.S
+import com.orizonx.client.i18n.tr
 
 /** SurfaceView whose Surface feeds MediaCodec; [onView] receives it once (touch forwarding). */
 @Composable
@@ -40,9 +42,9 @@ fun VideoSurface(
 fun HudOverlay(hud: HudData, modifier: Modifier = Modifier) {
     GlassPanel(modifier) {
         GlassText("${hud.fps} fps", size = 12.sp, mono = true)
-        GlassText("envoi→aff. %.1f / max %.1f ms".format(hud.avgMs, hud.maxMs), size = 12.sp, mono = true)
+        GlassText(tr(S.HUD_LATENCY, "avg" to "%.1f".format(hud.avgMs), "max" to "%.1f".format(hud.maxMs)), size = 12.sp, mono = true)
         GlassText("p50 ${hud.p50Ms} / p99 ${hud.p99Ms} ms", size = 12.sp, mono = true)
-        GlassText(hud.offsetMs?.let { "offset %+.1f ms".format(it) } ?: "offset : synchro…", size = 12.sp, mono = true)
+        GlassText(hud.offsetMs?.let { tr(S.HUD_OFFSET, "value" to "%+.1f".format(it)) } ?: tr(S.HUD_OFFSET_SYNC), size = 12.sp, mono = true)
         GlassText(hud.decoder, size = 11.sp, alpha = 0.7f, mono = true)
     }
 }

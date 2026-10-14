@@ -1,5 +1,6 @@
 package com.orizonx.client.actions
 
+import com.orizonx.client.i18n.Lang
 import org.json.JSONObject
 import kotlin.math.roundToLong
 
@@ -22,4 +23,5 @@ object ActionMessages {
     fun usbOpen(drive: String): JSONObject = id("usb.open").put("drive", drive)
     fun usbEject(drive: String): JSONObject = id("usb.eject").put("drive", drive)
     fun contextPress(buttonId: String): JSONObject = id("context.press").put("button", buttonId)
+    fun contextLang(lang: Lang): JSONObject = id("context.lang").put("lang", lang.wire)
 }

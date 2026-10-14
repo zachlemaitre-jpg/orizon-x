@@ -1,6 +1,8 @@
 package com.orizonx.client
 
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.os.LocaleList
 import android.os.Bundle
 import android.os.Build
 import android.view.Surface
@@ -12,6 +14,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.orizonx.client.i18n.LangPref
+import com.orizonx.client.i18n.LangStore
 import com.orizonx.client.input.TouchForwarder
 import com.orizonx.client.video.DecoderCaps
 import com.orizonx.client.ui.OrizonXApp
@@ -20,10 +24,15 @@ class MainActivity : ComponentActivity() {
     private val model = UiModel()
     private var receiver: Receiver? = null
     private lateinit var roleStore: RoleStore
+    private lateinit var langStore: LangStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        roleStore = RoleStore(getSharedPreferences("orizonx", MODE_PRIVATE), smallestWidthDp())
+        val prefs = getSharedPreferences("orizonx", MODE_PRIVATE)
+        roleStore = RoleStore(prefs, smallestWidthDp())
+        langStore = LangStore(prefs)
+        model.chooseLangPref(langStore.load())
+        model.updateSystemLanguage(LocaleList.getDefault()[0].language)
         model.chooseRole(roleStore.load())
         applyOrientation(model.role)
         enableEdgeToEdge(
@@ -32,7 +41,16 @@ class MainActivity : ComponentActivity() {
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val screen = screenInfo()
-        setContent { OrizonXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed, ::onRoleChosen, ::onAction) }
+        setContent {
+            OrizonXApp(model, screen, ::onVideoView, ::onSurfaceCreated, ::onSurfaceDestroyed, ::onRoleChosen, ::onLangPrefChosen, ::onAction)
+        }
+    }
+
+    /** The activity handles `locale` itself (see the manifest): follow the system language without being recreated. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val locales = newConfig.locales
+        model.updateSystemLanguage(if (locales.isEmpty) LocaleList.getDefault()[0].language else locales[0].language)
     }
 
     override fun onResume() {
@@ -63,7 +81,7 @@ class MainActivity : ComponentActivity() {
         DecoderCaps.best(screen.width, screen.height, DecoderCaps.system())
     }
 
-    private fun currentDeviceInfo() = deviceInfoFor(model.role, smallestWidthDp(), Build.MODEL, appVersion(), videoCaps)
+    private fun currentDeviceInfo() = deviceInfoFor(model.role, smallestWidthDp(), Build.MODEL, appVersion(), videoCaps, model.lang)
 
     private fun appVersion(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
@@ -78,6 +96,12 @@ class MainActivity : ComponentActivity() {
         model.chooseRole(role)
         applyOrientation(role)
         receiver?.closeConnection()
+    }
+
+    /** Language pill: persist the choice; the UI follows at once and Actions sessions tell the PC (see ActionsScreen). */
+    private fun onLangPrefChosen(pref: LangPref) {
+        langStore.save(pref)
+        model.chooseLangPref(pref)
     }
 
     private fun onAction(json: org.json.JSONObject) {

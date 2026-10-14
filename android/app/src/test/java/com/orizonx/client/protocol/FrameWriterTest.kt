@@ -51,6 +51,30 @@ class FrameWriterTest {
     }
 
     @Test
+    fun deviceInfoWithLangEndsWithIt() {
+        val plain = FrameWriter.encode(TabletMessage.DeviceInfo("actions", "phone", "Pixel 8", "0.7.0", lang = "en"))
+        assertEquals(
+            """{"role":"actions","kind":"phone","name":"Pixel 8","app":"0.7.0","lang":"en"}""",
+            String(plain, 8, plain.size - 8, Charsets.UTF_8),
+        )
+        val withVideo = FrameWriter.encode(
+            TabletMessage.DeviceInfo("screen", "tablet", "Tab", "0.7.0", VideoCaps(2104, 1312, 60), "fr"),
+        )
+        assertEquals(
+            """{"role":"screen","kind":"tablet","name":"Tab","app":"0.7.0","video":{"width":2104,"height":1312,"fps":60},"lang":"fr"}""",
+            String(withVideo, 8, withVideo.size - 8, Charsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun writerDeviceInfoCarriesLang() {
+        val sink = java.io.ByteArrayOutputStream()
+        FrameWriter(sink).deviceInfo("actions", "phone", "Pixel 8", "0.7.0", lang = "en")
+        val expected = FrameWriter.encode(TabletMessage.DeviceInfo("actions", "phone", "Pixel 8", "0.7.0", lang = "en"))
+        assertEquals(expected.toHex(), sink.toByteArray().toHex())
+    }
+
+    @Test
     fun writerDeviceInfoCarriesVideo() {
         val sink = java.io.ByteArrayOutputStream()
         FrameWriter(sink).deviceInfo("screen", "tablet", "Tab", "0.6.0", VideoCaps(1920, 1200, 30))

@@ -3,6 +3,8 @@ package com.orizonx.client
 import android.os.Process
 import android.util.Log
 import android.view.Surface
+import com.orizonx.client.i18n.Msg
+import com.orizonx.client.i18n.S
 import com.orizonx.client.net.Server
 import com.orizonx.client.protocol.Protocol
 import com.orizonx.client.protocol.ProtocolException
@@ -47,7 +49,7 @@ class Receiver(
 
     private fun loop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
-        var reason: String? = null
+        var reason: Msg? = null
         try {
             while (running) {
                 roleSwitch = false
@@ -70,30 +72,30 @@ class Receiver(
                         session = null
                     }
                 } catch (e: BindException) {
-                    reason = "Port ${Protocol.PORT} déjà utilisé, nouvel essai…"
+                    reason = Msg(S.REASON_PORT_BUSY, "port" to Protocol.PORT)
                     model.showWaiting(reason)
                     if (!pause()) break
                 } catch (e: SocketTimeoutException) {
-                    reason = "Le PC ne répond plus"
+                    reason = Msg(S.REASON_PC_UNRESPONSIVE)
                 } catch (e: ProtocolException) {
-                    reason = "Protocole invalide : ${e.message}"
+                    reason = Msg(S.REASON_PROTOCOL, "detail" to (e.reason ?: e.message.orEmpty()))
                 } catch (e: DecoderUnavailable) {
                     Log.e(TAG, "décodeur indisponible", e)
-                    reason = "Décodeur indisponible : ${e.message}"
+                    reason = Msg(S.REASON_DECODER, "detail" to (e.reason ?: e.message.orEmpty()))
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: IOException) {
                     if (!running) break
                     if (server == null) {
-                        reason = "Écoute impossible : ${e.message ?: e.javaClass.simpleName}"
+                        reason = Msg(S.REASON_LISTEN, "detail" to (e.message ?: e.javaClass.simpleName))
                         if (!pause()) break
                     } else {
-                        reason = if (roleSwitch) null else "PC déconnecté"
+                        reason = if (roleSwitch) null else Msg(S.REASON_PC_DISCONNECTED)
                     }
                 } catch (e: Exception) {
                     if (!running) break
                     Log.e(TAG, "session interrompue", e)
-                    reason = "Erreur : ${e.message ?: e.javaClass.simpleName}"
+                    reason = Msg(S.REASON_ERROR, "detail" to (e.message ?: e.javaClass.simpleName))
                 }
             }
         } finally {

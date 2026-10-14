@@ -1,5 +1,8 @@
 package com.orizonx.client.actions
 
+import com.orizonx.client.i18n.Lang
+import com.orizonx.client.i18n.S
+import com.orizonx.client.i18n.Strings
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.Locale
@@ -7,12 +10,17 @@ import java.util.Locale
 /** How alarming the battery pictogram should look. */
 enum class BatteryLevel { NORMAL, LOW, CRITICAL }
 
-/** French display strings for the Actions screen. Pure, so they are unit-tested. */
+/** Display strings for the Actions screen, in the interface language. Pure, so they are unit-tested. */
 object ActionsFormat {
-    private val DAYS = listOf("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
-    private val MONTHS = listOf(
+    private val DAYS_FR = listOf("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche")
+    private val MONTHS_FR = listOf(
         "janvier", "février", "mars", "avril", "mai", "juin",
         "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    )
+    private val DAYS_EN = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    private val MONTHS_EN = listOf(
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
     )
 
     /** PC wall-clock time for [epochMs] in the PC's zone (fixed [utcOffsetMin]). */
@@ -29,14 +37,20 @@ object ActionsFormat {
     fun seconds(epochMs: Long, utcOffsetMin: Int): String =
         String.format(Locale.ROOT, "%02d", local(epochMs, utcOffsetMin).second)
 
-    /** "Samedi 11 octobre" */
-    fun date(epochMs: Long, utcOffsetMin: Int): String {
+    /** "Samedi 11 octobre" / "Saturday, October 11" */
+    fun date(epochMs: Long, utcOffsetMin: Int, lang: Lang): String {
         val t = local(epochMs, utcOffsetMin)
-        return "${DAYS[t.dayOfWeek.value - 1]} ${t.dayOfMonth} ${MONTHS[t.monthValue - 1]}"
+        val day = t.dayOfWeek.value - 1
+        val month = t.monthValue - 1
+        return when (lang) {
+            Lang.FR -> "${DAYS_FR[day]} ${t.dayOfMonth} ${MONTHS_FR[month]}"
+            Lang.EN -> "${DAYS_EN[day]}, ${MONTHS_EN[month]} ${t.dayOfMonth}"
+        }
     }
 
-    /** "PC 76 % · en charge" */
-    fun battery(b: BatteryState): String = "PC ${b.percent} %" + if (b.charging) " · en charge" else ""
+    /** "PC 76 % · en charge" / "PC 76% · charging" */
+    fun battery(b: BatteryState, lang: Lang): String =
+        Strings.get(if (b.charging) S.BATTERY_CHARGING else S.BATTERY, lang, "percent" to b.percent)
 
     /** Green above 20 %, amber at 20 % or less, red at 10 % or less. */
     fun batteryLevel(percent: Int): BatteryLevel = when {
@@ -48,21 +62,28 @@ object ActionsFormat {
     /** Filled share of the battery body, 0..1. */
     fun batteryFill(percent: Int): Float = percent.coerceIn(0, 100) / 100f
 
-    /** "12 Go libres", "1,5 Go libres", "512 Mo libres". */
-    fun freeSpace(bytes: Long): String {
+    /** "12 Go libres", "1,5 Go libres", "512 Mo libres" / "12 GB free", "1.5 GB free", "512 MB free". */
+    fun freeSpace(bytes: Long, lang: Lang): String {
         val gib = bytes / (1024.0 * 1024 * 1024)
-        val body = when {
-            gib >= 10 -> "${Math.round(gib)} Go"
-            gib >= 1 -> String.format(Locale.ROOT, "%.1f", gib).replace('.', ',').removeSuffix(",0") + " Go"
-            else -> "${Math.round(bytes / (1024.0 * 1024))} Mo"
+        val point = if (lang == Lang.FR) ',' else '.'
+        val size = when {
+            gib >= 10 -> Strings.get(S.SIZE_GB, lang, "value" to Math.round(gib))
+            gib >= 1 -> Strings.get(
+                S.SIZE_GB, lang,
+                "value" to String.format(Locale.ROOT, "%.1f", gib).replace('.', point).removeSuffix("${point}0"),
+            )
+            else -> Strings.get(S.SIZE_MB, lang, "value" to Math.round(bytes / (1024.0 * 1024)))
         }
-        return "$body libres"
+        return Strings.get(S.FREE_SPACE, lang, "size" to size)
     }
 
-    fun notice(code: String): String = when (code) {
-        "usb_busy" -> "La clé est utilisée, ferme les fichiers ouverts"
-        "usb_failed" -> "Impossible d'éjecter la clé"
-        "radio_denied" -> "Windows refuse de changer cette radio"
-        else -> "Action impossible"
-    }
+    fun notice(code: String, lang: Lang): String = Strings.get(
+        when (code) {
+            "usb_busy" -> S.NOTICE_USB_BUSY
+            "usb_failed" -> S.NOTICE_USB_FAILED
+            "radio_denied" -> S.NOTICE_RADIO_DENIED
+            else -> S.NOTICE_DEFAULT
+        },
+        lang,
+    )
 }

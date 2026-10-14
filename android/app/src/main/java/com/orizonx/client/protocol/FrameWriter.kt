@@ -17,8 +17,8 @@ class FrameWriter(output: OutputStream) {
         stream.flush()
     }
 
-    fun deviceInfo(role: String, kind: String, name: String, app: String, video: VideoCaps? = null) =
-        write(TabletMessage.DeviceInfo(role, kind, name, app, video))
+    fun deviceInfo(role: String, kind: String, name: String, app: String, video: VideoCaps? = null, lang: String? = null) =
+        write(TabletMessage.DeviceInfo(role, kind, name, app, video, lang))
 
     fun action(json: JSONObject) = write(TabletMessage.Action(json))
 
@@ -93,6 +93,7 @@ class FrameWriter(output: OutputStream) {
                                 message.video?.let {
                                     "video" to RawJson("{\"width\":${it.width},\"height\":${it.height},\"fps\":${it.fps}}")
                                 },
+                                message.lang?.let { "lang" to it },
                             ),
                         ),
                     )

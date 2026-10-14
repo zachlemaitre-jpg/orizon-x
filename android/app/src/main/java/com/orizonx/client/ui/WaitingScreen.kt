@@ -9,6 +9,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -42,6 +46,10 @@ import androidx.compose.ui.unit.sp
 import com.orizonx.client.DeviceRole
 import com.orizonx.client.R
 import com.orizonx.client.ScreenInfo
+import com.orizonx.client.i18n.LangPref
+import com.orizonx.client.i18n.Msg
+import com.orizonx.client.i18n.S
+import com.orizonx.client.i18n.tr
 import com.orizonx.client.protocol.Protocol
 
 private val Night = Color(0xFF0B0B1A)
@@ -52,11 +60,13 @@ private val Amber = Color(0xFFFAC775)
 
 @Composable
 fun WaitingScreen(
-    reason: String?,
+    reason: Msg?,
     screen: ScreenInfo,
     role: DeviceRole,
     connectedRole: DeviceRole?,
     onRoleChosen: (DeviceRole) -> Unit,
+    langPref: LangPref,
+    onLangPref: (LangPref) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         BlobBackground()
@@ -69,7 +79,7 @@ fun WaitingScreen(
             ) {
                 Image(
                     painterResource(R.drawable.ic_orizonx_logo),
-                    contentDescription = "Logo Orizon X",
+                    contentDescription = tr(S.LOGO_DESC),
                     modifier = Modifier.size(120.dp),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -81,23 +91,23 @@ fun WaitingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     PulsingDot()
                     Spacer(Modifier.width(10.dp))
-                    GlassText(if (actionsConnected) "PC connecté — mode Actions" else "En attente du PC…", size = 16.sp)
+                    GlassText(tr(if (actionsConnected) S.PC_CONNECTED_ACTIONS else S.WAITING_FOR_PC), size = 16.sp)
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    GlassButton("Écran", selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_screen)
+                    GlassButton(tr(S.ROLE_SCREEN), selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_screen)
                     Spacer(Modifier.width(12.dp))
-                    GlassButton("Actions", selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_actions)
+                    GlassButton(tr(S.ROLE_ACTIONS), selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_actions)
                 }
                 if (reason != null) {
                     Spacer(Modifier.height(8.dp))
-                    GlassText(reason, size = 13.sp, color = Amber, align = TextAlign.Center)
+                    GlassText(tr(reason), size = 13.sp, color = Amber, align = TextAlign.Center)
                 }
                 Spacer(Modifier.height(14.dp))
-                if (!actionsConnected) GlassText("Lance Orizon X sur le PC.", size = 13.sp, alpha = 0.85f)
+                if (!actionsConnected) GlassText(tr(S.HINT_LAUNCH_PC), size = 13.sp, alpha = 0.85f)
                 if (role == DeviceRole.SCREEN) {
                     Spacer(Modifier.height(10.dp))
-                    GlassText("Appui long à 4 doigts : infos de connexion", size = 12.sp, alpha = 0.75f)
+                    GlassText(tr(S.HINT_HUD_LONG), size = 12.sp, alpha = 0.75f)
                 }
                 Spacer(Modifier.height(18.dp))
                 Row {
@@ -105,10 +115,15 @@ fun WaitingScreen(
                     Spacer(Modifier.width(20.dp))
                     GlassText("127.0.0.1:${Protocol.PORT}", size = 12.sp, alpha = 0.7f)
                     Spacer(Modifier.width(20.dp))
-                    GlassText("protocole v${Protocol.VERSION}", size = 12.sp, alpha = 0.7f)
+                    GlassText(tr(S.PROTOCOL_VERSION, "version" to Protocol.VERSION), size = 12.sp, alpha = 0.7f)
                 }
             }
         }
+        LangPill(
+            langPref,
+            onLangPref,
+            Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp),
+        )
     }
 }
 

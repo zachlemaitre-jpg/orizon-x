@@ -1,6 +1,7 @@
 package com.orizonx.client
 
 import android.content.SharedPreferences
+import com.orizonx.client.i18n.Lang
 import com.orizonx.client.protocol.TabletMessage
 import com.orizonx.client.protocol.VideoCaps
 
@@ -27,13 +28,21 @@ enum class DeviceRole(val wire: String) {
 }
 
 /** Builds the DEVICE_INFO announced right after HELLO. */
-fun deviceInfoFor(role: DeviceRole, smallestWidthDp: Int, model: String, appVersion: String, video: VideoCaps? = null) =
+fun deviceInfoFor(
+    role: DeviceRole,
+    smallestWidthDp: Int,
+    model: String,
+    appVersion: String,
+    video: VideoCaps? = null,
+    lang: Lang? = null,
+) =
     TabletMessage.DeviceInfo(
         role.wire,
         DeviceRole.kindFor(smallestWidthDp),
         model,
         appVersion,
         video.takeIf { role == DeviceRole.SCREEN }, // decoder limits only matter for the second-screen role
+        lang?.wire,
     )
 
 /** Persists the chosen [DeviceRole]; falls back to the width-based default until the user picks one. */

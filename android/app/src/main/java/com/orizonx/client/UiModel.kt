@@ -6,13 +6,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.orizonx.client.actions.ArtworkDecoder
+import com.orizonx.client.i18n.Lang
+import com.orizonx.client.i18n.LangPref
+import com.orizonx.client.i18n.Msg
 import com.orizonx.client.protocol.PcMessage
 import com.orizonx.client.stats.LatencyTracker
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
 sealed interface ConnectionState {
-    data class Waiting(val reason: String?) : ConnectionState
+    data class Waiting(val reason: Msg?) : ConnectionState
     data class Streaming(val width: Int, val height: Int) : ConnectionState
 }
 
@@ -36,7 +39,7 @@ class UiModel : Session.Listener {
         private set
 
     /** Last reason shown on the waiting screen; kept while the screen fades out. */
-    var waitingReason by mutableStateOf<String?>(null)
+    var waitingReason by mutableStateOf<Msg?>(null)
         private set
 
     /** Size of the last stream; kept after a disconnect so the letterbox doesn't jump. */
@@ -50,6 +53,17 @@ class UiModel : Session.Listener {
     /** Role chosen on the waiting screen (persisted by the activity). */
     var role by mutableStateOf(DeviceRole.SCREEN)
         private set
+
+    /** Language choice made with the pill (persisted by the activity). */
+    var langPref by mutableStateOf(LangPref.SYSTEM)
+        private set
+
+    /** Language code of the system (first locale), refreshed on configuration change. */
+    var systemLanguage by mutableStateOf("en")
+        private set
+
+    /** Interface language in use: the choice, or the system language while the choice is "system". */
+    val lang: Lang get() = LangPref.effective(langPref, systemLanguage)
 
     /** Role announced to the PC on the open connection; null while no PC is connected. */
     var connectedRole by mutableStateOf<DeviceRole?>(null)
@@ -75,6 +89,14 @@ class UiModel : Session.Listener {
         role = value
     }
 
+    fun chooseLangPref(value: LangPref) {
+        langPref = value
+    }
+
+    fun updateSystemLanguage(value: String) {
+        systemLanguage = value
+    }
+
     override fun onConnected(role: DeviceRole) {
         connectedRole = role
     }
@@ -93,7 +115,7 @@ class UiModel : Session.Listener {
         }
     }
 
-    fun showWaiting(reason: String?) {
+    fun showWaiting(reason: Msg?) {
         connectedRole = null
         actionsState = null
         artworkEpoch++

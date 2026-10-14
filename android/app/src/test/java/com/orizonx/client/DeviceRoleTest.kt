@@ -1,5 +1,6 @@
 package com.orizonx.client
 
+import com.orizonx.client.i18n.Lang
 import com.orizonx.client.protocol.FrameWriter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -49,5 +50,16 @@ class DeviceRoleTest {
         assertEquals(video, deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.6.0", video).video)
         assertNull(deviceInfoFor(DeviceRole.ACTIONS, 800, "Tab", "0.6.0", video).video)
         assertNull(deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.6.0").video)
+    }
+
+    @Test
+    fun deviceInfoForAnnouncesTheEffectiveLanguage() {
+        assertEquals("en", deviceInfoFor(DeviceRole.ACTIONS, 411, "Pixel 8", "0.7.0", lang = Lang.EN).lang)
+        assertEquals("fr", deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.7.0", lang = Lang.FR).lang)
+        val bytes = FrameWriter.encode(deviceInfoFor(DeviceRole.ACTIONS, 411, "Pixel 8", "0.7.0", lang = Lang.FR))
+        assertEquals(
+            """{"role":"actions","kind":"phone","name":"Pixel 8","app":"0.7.0","lang":"fr"}""",
+            String(bytes, 8, bytes.size - 8, Charsets.UTF_8),
+        )
     }
 }
