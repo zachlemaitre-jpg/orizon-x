@@ -36,7 +36,7 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x83 | KEYFRAME_REQ | vide |
 | 0x84 | STATS | fps u16, latency_avg_us u32, latency_max_us u32, dropped u32, rtt_us u32 (chaque seconde) |
 | 0x85 | INPUT | device u8 (1 tactile, 2 stylet), count u8 (≤ 10 tactile, ≤ 1 stylet), puis count × contact de 10 octets (voir ci-dessous) |
-| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"[,"video":{"width":<int>,"height":<int>,"fps":60\|30}]}`. Au plus 65 536 octets |
+| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"[,"video":{"width":<int>,"height":<int>,"fps":60\|30}][,"lang":"en"\|"fr"]}`. Au plus 65 536 octets |
 | 0x87 | ACTION | JSON UTF-8 : `{"id":"<action>", …}` ; `id` est une chaîne obligatoire. Au plus 65 536 octets |
 
 ## INPUT (phase 4)
@@ -63,6 +63,10 @@ Les messages 0x04, 0x86 et 0x87 portent un **objet JSON encodé en UTF-8**, de 6
 ### Capacités vidéo (`video`, facultatif)
 
 En rôle `screen`, `DEVICE_INFO` peut porter `"video":{"width":W,"height":H,"fps":F}` en dernière clé : la plus grande taille (paysage, format de l'écran) que le décodeur AVC matériel de la tablette sait décoder à 60 i/s, sinon à 30 i/s (`fps` vaut 60 ou 30). Le champ est omis quand la tablette ne peut pas le déterminer ; il n'est pas envoyé en rôle `actions`. Le PC s'en sert pour choisir la taille de l'écran virtuel, les i/s et le débit ; sans lui, il garde la taille native et 60 i/s. Un ancien PC ignore ce champ (les champs inconnus sont ignorés).
+
+### Langue de l'appareil (`lang`, facultatif)
+
+`DEVICE_INFO` peut porter `"lang":"en"` ou `"lang":"fr"` : la langue effective de l'interface de l'appareil. Le PC la lit avec tolérance : un champ absent, d'une autre valeur ou qui n'est pas une chaîne vaut `fr` (le comportement d'avant ce champ), sans erreur de protocole. Elle sert à traduire ce que le PC fait afficher à l'appareil (la barre contextuelle). L'ordre des clés n'a pas d'importance pour le PC ; un ancien PC ignore le champ. En rôle `actions`, un changement de langue pendant la session est signalé par l'action `context.lang` (voir plus bas) ; en rôle `screen`, le PC n'affiche aucun texte sur l'appareil et rien n'est envoyé.
 
 ### Pochette (`MEDIA_ARTWORK`, 0x05)
 
@@ -93,10 +97,12 @@ Le bloc `context` décrit l'app au premier plan sur le PC et les boutons que la 
 
 - `available: false` (ou section absente) tant qu'aucune app n'a été vue : la barre est cachée.
 - `app` : le nom à afficher (chaîne non vide). `profile` : l'identifiant du profil (`spotify`, `powerpoint`, `browser`, `word`, `excel`, `vscode`, `explorer`, `generic`), informatif.
-- `buttons` : au plus 8 éléments `{"id","icon","label"}`. `icon` est un nom d'icône connu de la tablette (un nom inconnu donne une icône neutre) ; `label` est en français. Le raccourci clavier ne quitte jamais le PC.
+- `buttons` : au plus 8 éléments `{"id","icon","label"}`. `icon` est un nom d'icône connu de la tablette (un nom inconnu donne une icône neutre) ; `label` est dans la langue de l'appareil (`DEVICE_INFO.lang`, français par défaut), de même que `app` pour les noms qui varient (« Explorer » / « Explorateur »). Le raccourci clavier ne quitte jamais le PC.
 - Le bloc est relevé toutes les 250 ms avec l'audio ; un changement de profil est diffusé aussitôt (état complet).
 
 Action associée : `{"id":"context.press","button":"<id du bouton>"}`. Le PC regarde l'app au premier plan **à cet instant** et n'envoie le raccourci que si le bouton appartient à son profil ; sinon l'action est ignorée et journalisée (la tablette n'a pas encore redessiné sa barre). Un raccourci qui ne peut pas être injecté (app élevée au premier plan, touche absente de la disposition) donne un `notice` `{"code":"action_failed"}`.
+
+Action `{"id":"context.lang","lang":"en"|"fr"}` : l'appareil change de langue pendant une session Actions. Le PC retraduit aussitôt la barre (état complet diffusé, comme après tout `ACTION`). Une valeur inconnue est ignorée et journalisée ; aucune `notice` n'est produite.
 
 ### Compatibilité
 

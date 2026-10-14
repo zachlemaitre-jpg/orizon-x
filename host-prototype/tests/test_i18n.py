@@ -45,6 +45,32 @@ class TextsTest(unittest.TestCase):
         self.assertEqual(sorted(set(messages.TEXTS) - used), [])
 
 
+class AdbGuidanceTest(unittest.TestCase):
+    def test_no_device_guides_the_first_connection(self):
+        self.assertEqual(
+            tr("adb.no_device", "en"),
+            "No device found. 1. Install Orizon X on the device and open it: it shows how to turn on USB "
+            "debugging. 2. Plug it in with a USB cable that carries data.")
+        self.assertEqual(
+            tr("adb.no_device", "fr"),
+            "Aucun appareil trouvé. 1. Installe Orizon X sur l'appareil et ouvre-le : il explique comment "
+            "activer le débogage USB. 2. Branche-le avec un câble USB qui transmet des données.")
+
+    def test_unauthorized_keeps_its_sentence_and_adds_always_allow(self):
+        en, fr = tr("adb.unauthorized", "en"), tr("adb.unauthorized", "fr")
+        self.assertTrue(en.startswith("Tablet not authorized. Accept the USB debugging prompt on the tablet."))
+        self.assertTrue(en.endswith(" Tick “Always allow” to skip this next time."))
+        self.assertTrue(fr.startswith(
+            "Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la tablette."))
+        self.assertTrue(fr.endswith(" Coche « Toujours autoriser » pour ne plus avoir à le faire."))
+
+    def test_every_adb_message_exists_in_both_languages(self):
+        keys = [k for k in messages.TEXTS if k.startswith("adb.")]
+        self.assertGreaterEqual(len(keys), 6)
+        for key in keys:
+            self.assertTrue(messages.TEXTS[key]["en"].strip() and messages.TEXTS[key]["fr"].strip(), key)
+
+
 class TrTest(unittest.TestCase):
     def test_translates_with_arguments(self):
         self.assertEqual(tr("state.streaming", "en", width=2880, height=1800), "Stream 2880×1800")

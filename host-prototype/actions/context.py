@@ -1,7 +1,11 @@
 """The context bar's provider (spec 2026-10-13 §3): the profile of the app in front on the PC, and its buttons.
 
 Snapshot: ``{"available": True, "app": <name>, "profile": <profile id>, "buttons": [{"id", "icon", "label"}]}``
-(the shortcuts stay on the PC), or ``{"available": False}`` while no app has been in front yet.
+(the shortcuts stay on the PC), or ``{"available": False}`` while no app has been in front yet. Labels and the app
+name are in the device's language (``lang``, "en" or "fr"; French when unknown).
+
+``handle({"id": "context.lang", "lang": "en"})`` switches that language (an unknown value is ignored and logged); the
+hub re-polls after any handled action, so the translated bar is broadcast at once.
 
 ``handle({"id": "context.press", "button": <id>})`` looks at the app in front NOW, and presses the shortcut of the
 button only if that button belongs to its profile: when the foreground changed since the device drew its bar, the
@@ -19,12 +23,14 @@ from actions.foreground import ForegroundTracker
 _log = logging.getLogger("orizonx.actions.context")
 
 PRESS_ID = "context.press"
+LANG_ID = "context.lang"
 ACTION_FAILED = "action_failed"
 
 
 class ContextProvider:
     def __init__(self, tracker: Any = None, send_shortcut: Optional[Callable[[str], bool]] = None,
-                 log: Optional[Callable[[str], None]] = None) -> None:
+                 log: Optional[Callable[[str], None]] = None, lang: str = context_profiles.DEFAULT_LANG) -> None:
+        self.lang = context_profiles.normalize_lang(lang)
         self._tracker = tracker if tracker is not None else ForegroundTracker()
         self._send_shortcut = send_shortcut or keys.send_shortcut
         self._log = log or _log.info
@@ -36,12 +42,19 @@ class ContextProvider:
         profile = context_profiles.match(app)
         return {
             "available": True,
-            "app": context_profiles.display_name(app),
+            "app": context_profiles.display_name(app, self.lang),
             "profile": profile.id,
-            "buttons": [{"id": b.id, "icon": b.icon, "label": b.label} for b in profile.buttons],
+            "buttons": [{"id": b.id, "icon": b.icon, "label": b.label(self.lang)} for b in profile.buttons],
         }
 
     def handle(self, action: dict) -> Optional[str]:
+        if action.get("id") == LANG_ID:
+            lang = action.get("lang")
+            if lang in context_profiles.LANGS:
+                self.lang = lang
+            else:
+                self._log(f"context: language {lang!r} ignored, only {', '.join(context_profiles.LANGS)} are known")
+            return None
         if action.get("id") != PRESS_ID:
             self._log(f"context: unknown action {action.get('id')!r}")
             return ACTION_FAILED

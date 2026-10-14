@@ -26,10 +26,15 @@ TEXTS: dict[str, dict[str, str]] = {
     # --- adb ---
     "adb.timeout": {"en": "adb is not responding (timed out).", "fr": "adb ne répond pas (délai dépassé)."},
     "adb.failed": {"en": "adb is not responding: {error}", "fr": "adb ne répond pas : {error}"},
-    "adb.no_device": {"en": "No tablet found. Plug in the USB cable and turn on USB debugging.",
-                      "fr": "Aucune tablette détectée : branche le câble USB et active le débogage USB."},
-    "adb.unauthorized": {"en": "Tablet not authorized. Accept the USB debugging prompt on the tablet.",
-                         "fr": "Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la tablette."},
+    "adb.no_device": {"en": "No device found. 1. Install Orizon X on the device and open it: it shows how to turn "
+                            "on USB debugging. 2. Plug it in with a USB cable that carries data.",
+                      "fr": "Aucun appareil trouvé. 1. Installe Orizon X sur l'appareil et ouvre-le : il explique "
+                            "comment activer le débogage USB. 2. Branche-le avec un câble USB qui transmet des "
+                            "données."},
+    "adb.unauthorized": {"en": "Tablet not authorized. Accept the USB debugging prompt on the tablet. "
+                               "Tick “Always allow” to skip this next time.",
+                         "fr": "Tablette non autorisée : accepte la demande de débogage USB sur l'écran de la "
+                               "tablette. Coche « Toujours autoriser » pour ne plus avoir à le faire."},
     "adb.not_exactly_one": {"en": "Exactly one ready tablet is needed. Current state: {states}",
                             "fr": "Il faut exactement une tablette prête. État actuel : {states}"},
     "adb.forward_failed": {"en": "adb forward failed: {error}", "fr": "adb forward a échoué : {error}"},

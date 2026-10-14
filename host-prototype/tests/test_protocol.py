@@ -172,6 +172,23 @@ class DeviceInfoTest(unittest.TestCase):
         self.assertEqual(len(payload), protocol.MAX_JSON)
         self.assertEqual(self.decode(payload).name, name)
 
+    def test_lang_defaults_to_french(self):
+        self.assertEqual(self.decode(json.dumps(self.GOOD).encode("utf-8")).lang, "fr")
+        self.assertEqual(protocol.DeviceInfo("actions", "phone", "x", "1").lang, "fr")
+
+    def test_decodes_the_device_language(self):
+        for lang in ("en", "fr"):
+            with self.subTest(lang):
+                info = self.decode(json.dumps({**self.GOOD, "lang": lang}).encode("utf-8"))
+                self.assertEqual(info.lang, lang)
+
+    def test_unknown_or_malformed_lang_is_french_not_an_error(self):
+        for bad in ("de", "EN", "", " en", None, 3, True, ["en"], {"en": 1}):
+            with self.subTest(bad=bad):
+                info = self.decode(json.dumps({**self.GOOD, "lang": bad}).encode("utf-8"))
+                self.assertEqual(info.lang, "fr")
+                self.assertEqual(info.role, "actions")
+
     def test_video_is_absent_by_default(self):
         self.assertIsNone(self.decode(json.dumps(self.GOOD).encode("utf-8")).video)
         self.assertIsNone(protocol.DeviceInfo("actions", "phone", "x", "1").video)

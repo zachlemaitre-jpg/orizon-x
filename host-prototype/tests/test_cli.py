@@ -49,7 +49,8 @@ class PrintListenerTest(unittest.TestCase):
             listener.on_state(engine.State.ERROR, msg("error.protocol_mismatch", tablet=9, pc=1))
             listener.on_state(engine.State.STOPPED, msg("state.stopped"))  # doublon de « Stopping. »
         self.assertEqual(out.getvalue().splitlines(), [
-            "No tablet found. Plug in the USB cable and turn on USB debugging.",
+            "No device found. 1. Install Orizon X on the device and open it: it shows how to turn on USB "
+            "debugging. 2. Plug it in with a USB cable that carries data.",
             "Incompatible protocol: tablet v9, PC v1. Update the app or the relay.",
         ])
 

@@ -358,9 +358,9 @@ class ActionsHub:
         self._last_sent_at = now
 
 
-def default_providers(log: Optional[Callable[[str], None]] = None) -> dict:
+def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "fr") -> dict:
     """The real providers; one that cannot be built (missing library, not Windows) is left out and the hub
-    reports its section as unavailable."""
+    reports its section as unavailable. ``lang`` is the device's language ("en" or "fr"), for the context bar."""
     log = log or _logger.info
     providers: dict = {}
 
@@ -419,7 +419,7 @@ def default_providers(log: Optional[Callable[[str], None]] = None) -> dict:
 
     def context() -> Any:
         from actions.context import ContextProvider
-        return ContextProvider(log=log)
+        return ContextProvider(log=log, lang=lang)
 
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),

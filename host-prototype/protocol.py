@@ -119,6 +119,7 @@ class DeviceInfo:
     name: str
     app: str
     video: VideoCaps | None = None  # absent on older apps, or invalid
+    lang: str = "fr"  # the device's language, "en" or "fr"; absent or unknown: "fr"
 
 
 @dataclass(frozen=True)
@@ -252,7 +253,9 @@ def _decode_device_info(payload: bytes) -> DeviceInfo:
     for key in ("role", "kind", "name", "app"):
         if not isinstance(obj.get(key), str):
             raise ProtocolError(f"DEVICE_INFO: field {key!r} missing or not a string")
-    return DeviceInfo(obj["role"], obj["kind"], obj["name"], obj["app"], _decode_video(obj.get("video")))
+    lang = obj.get("lang")
+    return DeviceInfo(obj["role"], obj["kind"], obj["name"], obj["app"], _decode_video(obj.get("video")),
+                      lang if lang in ("en", "fr") else "fr")
 
 
 def _decode_video(value: object) -> VideoCaps | None:

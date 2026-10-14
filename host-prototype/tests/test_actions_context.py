@@ -55,6 +55,18 @@ class DisplayNameTest(unittest.TestCase):
 
     def test_explorer(self):
         self.assertEqual(cp.display_name(app("explorer.exe", "CabinetWClass")), "Explorateur")
+        self.assertEqual(cp.display_name(app("explorer.exe", "CabinetWClass"), "fr"), "Explorateur")
+        self.assertEqual(cp.display_name(app("explorer.exe", "CabinetWClass"), "en"), "Explorer")
+
+    def test_names_that_do_not_vary_are_the_same_in_english(self):
+        for exe, name in (("Spotify.exe", "Spotify"), ("POWERPNT.EXE", "PowerPoint"), ("WINWORD.EXE", "Word"),
+                          ("EXCEL.EXE", "Excel"), ("Code.exe", "VS Code"), ("chrome.exe", "Chrome")):
+            with self.subTest(exe):
+                self.assertEqual(cp.display_name(app(exe), "en"), name)
+
+    def test_unknown_language_is_french(self):
+        self.assertEqual(cp.display_name(app("explorer.exe", "CabinetWClass"), "de"), "Explorateur")
+        self.assertEqual(cp.display_name(None, "de"), "Application")
 
     def test_browsers_use_their_real_name(self):
         for exe, name in (("chrome.exe", "Chrome"), ("msedge.exe", "Edge"), ("firefox.exe", "Firefox"),
@@ -72,6 +84,9 @@ class DisplayNameTest(unittest.TestCase):
     def test_generic_with_nothing_at_all(self):
         self.assertEqual(cp.display_name(app("", title="")), "Application")
         self.assertEqual(cp.display_name(None), "Application")
+        self.assertEqual(cp.display_name(app("", title=""), "en"), "App")
+        self.assertEqual(cp.display_name(None, "en"), "App")
+        self.assertEqual(cp.DEFAULT_APP_NAME, {"en": "App", "fr": "Application"})
 
 
 class TableTest(unittest.TestCase):
@@ -85,7 +100,7 @@ class TableTest(unittest.TestCase):
             with self.subTest(profile.id):
                 self.assertTrue(1 <= len(profile.buttons) <= 8)
                 for b in profile.buttons:
-                    self.assertTrue(b.id and b.icon and b.label and b.shortcut)
+                    self.assertTrue(b.id and b.icon and b.labels["fr"] and b.shortcut)
                     self.assertNotIn(b.id, seen)
                     seen.add(b.id)
 
@@ -103,7 +118,7 @@ class TableTest(unittest.TestCase):
 
     def test_shortcuts_follow_the_spec(self):
         def table(pid):
-            return [(b.icon, b.label, b.shortcut) for b in cp.profile_by_id(pid).buttons]
+            return [(b.icon, b.labels["fr"], b.shortcut) for b in cp.profile_by_id(pid).buttons]
         self.assertEqual([s for _, _, s in table("spotify")],
                          ["Ctrl+Left", "Space", "Ctrl+Right", "Alt+Shift+B", "Ctrl+S", "Ctrl+R"])
         self.assertEqual([s for _, _, s in table("powerpoint")], ["F5", "Shift+F5", "Left", "Right", "B", "Esc"])
@@ -121,11 +136,48 @@ class TableTest(unittest.TestCase):
                          ["Ctrl+C", "Ctrl+V", "Ctrl+Z", "Win+Shift+S", "Win+D", "Alt+Tab"])
 
     def test_labels_are_french(self):
-        labels = {p.id: [b.label for b in p.buttons] for p in cp.PROFILES}
+        labels = {p.id: [b.labels["fr"] for b in p.buttons] for p in cp.PROFILES}
         self.assertEqual(labels["spotify"][:3], ["Précédent", "Lecture/Pause", "Suivant"])
         self.assertIn("Écran noir", labels["powerpoint"])
         self.assertIn("Nouvel onglet", labels["browser"])
         self.assertIn("Dossier parent", labels["explorer"])
+
+    def test_every_button_has_english_and_french_labels(self):
+        for profile in cp.PROFILES:
+            for b in profile.buttons:
+                with self.subTest(b.id):
+                    self.assertEqual(set(b.labels), {"en", "fr"})
+                    self.assertTrue(b.labels["en"].strip() and b.labels["fr"].strip())
+
+    def test_labels_are_english(self):
+        expected = {
+            "spotify": ["Previous", "Play/Pause", "Next", "Like", "Shuffle", "Repeat"],
+            "powerpoint": ["Slideshow", "From slide", "Previous", "Next", "Black screen", "Exit"],
+            "browser": ["Back", "Forward", "Reload", "New tab", "Close tab", "Zoom −", "Zoom +"],
+            "word": ["Undo", "Redo", "Bold", "Italic", "Underline", "Save"],
+            "excel": ["Undo", "Redo", "Bold", "AutoSum", "Filter", "Save"],
+            "vscode": ["Palette", "Search", "Terminal", "Comment", "Save", "Explorer"],
+            "explorer": ["Back", "Up", "New folder", "Rename", "Refresh"],
+            "generic": ["Copy", "Paste", "Undo", "Screenshot", "Desktop", "Switch app"],
+        }
+        for pid, labels in expected.items():
+            with self.subTest(pid):
+                self.assertEqual([b.labels["en"] for b in cp.profile_by_id(pid).buttons], labels)
+
+    def test_french_labels_are_the_complete_original_table(self):
+        expected = {
+            "spotify": ["Précédent", "Lecture/Pause", "Suivant", "J'aime", "Aléatoire", "Répéter"],
+            "powerpoint": ["Diaporama", "Depuis la diapo", "Précédent", "Suivant", "Écran noir", "Quitter"],
+            "browser": ["Retour", "Avance", "Actualiser", "Nouvel onglet", "Fermer l'onglet", "Zoom −", "Zoom +"],
+            "word": ["Annuler", "Rétablir", "Gras", "Italique", "Souligné", "Enregistrer"],
+            "excel": ["Annuler", "Rétablir", "Gras", "Somme auto", "Filtre", "Enregistrer"],
+            "vscode": ["Palette", "Rechercher", "Terminal", "Commenter", "Enregistrer", "Explorateur"],
+            "explorer": ["Retour", "Dossier parent", "Nouveau dossier", "Renommer", "Actualiser"],
+            "generic": ["Copier", "Coller", "Annuler", "Capture", "Bureau", "Changer d'app"],
+        }
+        for pid, labels in expected.items():
+            with self.subTest(pid):
+                self.assertEqual([b.labels["fr"] for b in cp.profile_by_id(pid).buttons], labels)
 
     def test_profile_by_id(self):
         self.assertEqual(cp.profile_by_id("word").id, "word")
@@ -220,6 +272,43 @@ class ContextProviderTest(unittest.TestCase):
     def test_press_without_a_known_app_sends_nothing(self):
         self.assertIsNone(self.provider.handle({"id": "context.press", "button": "gen.copy"}))
         self.assertEqual(self.sent, [])
+
+    def test_default_language_is_french(self):
+        self.assertEqual(self.provider.lang, "fr")
+
+    def test_english_snapshot(self):
+        provider = ContextProvider(lang="en", tracker=self.tracker, send_shortcut=self._send, log=self.logs.append)
+        self.tracker.app = app("POWERPNT.EXE")
+        snap = provider.snapshot()
+        self.assertEqual(snap["buttons"][0], {"id": "ppt.slideshow", "icon": "slideshow", "label": "Slideshow"})
+        self.tracker.app = app("explorer.exe", "CabinetWClass")
+        self.assertEqual(provider.snapshot()["app"], "Explorer")
+        self.tracker.app = app("", title="")
+        self.assertEqual(provider.snapshot()["app"], "App")
+
+    def test_unknown_constructor_language_is_french(self):
+        self.assertEqual(ContextProvider(lang="de", tracker=self.tracker).lang, "fr")
+
+    def test_context_lang_switches_the_snapshot_language(self):
+        self.tracker.app = app("POWERPNT.EXE")
+        self.assertEqual(self.provider.snapshot()["buttons"][0]["label"], "Diaporama")
+        self.assertIsNone(self.provider.handle({"id": "context.lang", "lang": "en"}))
+        self.assertEqual(self.provider.snapshot()["buttons"][0]["label"], "Slideshow")
+        self.assertIsNone(self.provider.handle({"id": "context.lang", "lang": "fr"}))
+        self.assertEqual(self.provider.snapshot()["buttons"][0]["label"], "Diaporama")
+        self.assertEqual(self.sent, [])  # nothing is typed
+
+    def test_context_lang_ignores_unknown_values_and_logs_them(self):
+        self.tracker.app = app("POWERPNT.EXE")
+        self.provider.handle({"id": "context.lang", "lang": "en"})
+        for action in ({"id": "context.lang", "lang": "de"}, {"id": "context.lang"},
+                       {"id": "context.lang", "lang": 3}, {"id": "context.lang", "lang": None}):
+            with self.subTest(action=action):
+                self.logs.clear()
+                self.assertIsNone(self.provider.handle(action))
+                self.assertEqual(self.provider.lang, "en")
+                self.assertEqual(len(self.logs), 1)
+        self.assertEqual(self.provider.snapshot()["buttons"][0]["label"], "Slideshow")
 
     def test_unknown_action_id_fails(self):
         self.tracker.app = app("chrome.exe")

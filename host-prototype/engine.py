@@ -481,14 +481,15 @@ class ActionsHub(Protocol):
 
 
 def default_actions_hub(send: Callable[[dict], None], log: Callable[[str], None],
-                        send_artwork: Callable[[str, bytes], None] | None = None) -> ActionsHub:
+                        send_artwork: Callable[[str, bytes], None] | None = None, lang: str = "fr") -> ActionsHub:
     """The real hub over the real providers (a provider whose library is missing is reported unavailable).
 
     send_artwork(id, image) sends a MEDIA_ARTWORK; the hub calls it before the state that references the cover.
+    lang is the device's language (DEVICE_INFO.lang), for the context bar.
     Imported here, not at module level: the screen role (and the CLI) never loads pycaw, comtypes or winrt.
     """
     from actions.hub import ActionsHub as _ActionsHub, default_providers
-    return _ActionsHub(default_providers(log), send, send_artwork=send_artwork, log=log)
+    return _ActionsHub(default_providers(log, lang=lang), send, send_artwork=send_artwork, log=log)
 
 
 @dataclass
@@ -1130,7 +1131,8 @@ class RelayEngine:
                 self._log(f"Device role: {info.role} ({info.name}, {info.kind}): unknown, screen role used")
             if info is not None and info.role == ROLE_ACTIONS:
                 actions_session = True
-                hub = self._deps.actions_hub_factory(send_actions_state, self._log, send_media_artwork)
+                hub = self._deps.actions_hub_factory(send_actions_state, self._log, send_media_artwork,
+                                                      lang=info.lang)
                 try:
                     actions_hub = hub
                     hub.start()

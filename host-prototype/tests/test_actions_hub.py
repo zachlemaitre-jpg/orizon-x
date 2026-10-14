@@ -949,7 +949,44 @@ class ContextBarThroughTheHubTest(unittest.TestCase):
         self.assertEqual(self.h.sent[-1]["notice"], {"code": "action_failed"})
 
 
+class ContextLangThroughTheHubTest(unittest.TestCase):
+    def setUp(self):
+        from actions.context import ContextProvider
+        from actions.foreground import ForegroundApp
+
+        class Tracker:
+            def current(self):
+                return ForegroundApp("POWERPNT.EXE", "Cls", "Window", 1)
+
+        providers = make_providers()
+        providers["context"] = ContextProvider(lang="en", tracker=Tracker(), send_shortcut=lambda _s: True,
+                                               log=lambda _l: None)
+        self.h = Harness(providers)
+
+    def test_the_bar_is_built_in_the_language_given_to_the_provider(self):
+        self.h.tick()
+        self.assertEqual(self.h.sent[0]["context"]["buttons"][0]["label"], "Slideshow")
+
+    def test_context_lang_is_routed_to_the_provider_and_broadcast_at_once(self):
+        self.h.tick()
+        count = len(self.h.sent)
+        self.h.hub.handle({"id": "context.lang", "lang": "fr"})
+        self.h.hub._tick(self.h.clock.t)  # same instant: only the action forces the poll
+        self.assertEqual(len(self.h.sent), count + 1)
+        self.assertEqual(self.h.sent[-1]["context"]["buttons"][0]["label"], "Diaporama")
+        self.assertNotIn("notice", self.h.sent[-1])
+
+
 class DefaultProvidersTest(unittest.TestCase):
+    def test_the_context_provider_gets_the_language(self):
+        for lang in ("en", "fr"):
+            with self.subTest(lang):
+                providers = default_providers(lambda _l: None, lang=lang)
+                self.assertEqual(providers["context"].lang, lang)
+
+    def test_the_language_defaults_to_french(self):
+        self.assertEqual(default_providers(lambda _l: None)["context"].lang, "fr")
+
     def test_builds_the_known_provider_names_without_calling_any_action(self):
         logs = []
         providers = default_providers(logs.append)

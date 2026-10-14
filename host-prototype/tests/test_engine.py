@@ -42,10 +42,12 @@ def touch_frame(*contacts):
     return protocol._frame(protocol.INPUT, 0, payload)
 
 
-def device_info_frame(role="actions", kind="phone", name="Pixel 8", app="1.0", video=None):
+def device_info_frame(role="actions", kind="phone", name="Pixel 8", app="1.0", video=None, lang=None):
     fields = {"role": role, "kind": kind, "name": name, "app": app}
     if video is not None:
         fields["video"] = video
+    if lang is not None:
+        fields["lang"] = lang
     payload = json.dumps(fields).encode()
     return protocol._frame(protocol.DEVICE_INFO, 0, payload)
 
@@ -293,7 +295,8 @@ class FakeInjectors:
 class FakeHub:
     """actions.hub.ActionsHub stand-in: records start/stop and the actions; the test calls `send` itself."""
 
-    def __init__(self, send, log, handle_error=None, send_artwork=None):
+    def __init__(self, send, log, handle_error=None, send_artwork=None, lang="fr"):
+        self.lang = lang
         self.send = send
         self.send_artwork = send_artwork
         self.log = log
@@ -321,8 +324,8 @@ class FakeHubs:
         self.handle_error = handle_error
         self.created = []
 
-    def __call__(self, send, log, send_artwork=None):
-        hub = FakeHub(send, log, self.handle_error, send_artwork)
+    def __call__(self, send, log, send_artwork=None, lang="fr"):
+        hub = FakeHub(send, log, self.handle_error, send_artwork, lang)
         self.created.append(hub)
         return hub
 
@@ -1595,9 +1598,23 @@ class DeviceRoleTest(unittest.TestCase):
         with mock.patch("actions.hub.default_providers", return_value={"clock": "c"}) as providers, \
                 mock.patch("actions.hub.ActionsHub") as hub_class:
             hub = engine.Deps().actions_hub_factory(send, log, send_artwork)
-        providers.assert_called_once_with(log)
+        providers.assert_called_once_with(log, lang="fr")
         hub_class.assert_called_once_with({"clock": "c"}, send, send_artwork=send_artwork, log=log)
         self.assertIs(hub, hub_class.return_value)
+
+    def test_default_hub_factory_passes_the_language_to_the_providers(self):
+        send, log = (lambda state: None), (lambda line: None)
+        with mock.patch("actions.hub.default_providers", return_value={"clock": "c"}) as providers, \
+                mock.patch("actions.hub.ActionsHub"):
+            engine.Deps().actions_hub_factory(send, log, lang="en")
+        providers.assert_called_once_with(log, lang="en")
+
+    def test_hub_factory_gets_the_device_language(self):
+        for sent, expected in (("en", "en"), ("fr", "fr"), ("de", "fr"), (None, "fr")):
+            with self.subTest(sent=sent):
+                relay, rec, connect, hubs, *_ = self.actions_engine(after_hello=device_info_frame(lang=sent))
+                self.assertEqual(hubs.first().lang, expected)
+                relay.stop()
 
     def test_default_hub_factory_send_artwork_is_optional(self):
         send, log = (lambda state: None), (lambda line: None)
@@ -1650,7 +1667,7 @@ class DeviceRoleTest(unittest.TestCase):
 
         hubs = []
 
-        def factory(send, log, send_artwork=None):
+        def factory(send, log, send_artwork=None, lang="fr"):
             hub = ActionsHub({"now_playing": NowPlaying()}, send, send_artwork=send_artwork, log=log,
                              com_init=lambda: None, poll_fast_s=0.05, poll_slow_s=0.05)
             hubs.append(hub)

@@ -245,9 +245,11 @@ class WireTest(unittest.TestCase):
         with self.assertLogs("orizonx", "INFO") as logs:
             self.controller.state_changed.emit(State.WAITING_DEVICE, msg("adb.no_device"))
         self.assertEqual(logs.records[-1].getMessage(),
-                         "State: waiting_device — No tablet found. Plug in the USB cable and turn on USB debugging.")
+                         "State: waiting_device — No device found. 1. Install Orizon X on the device and open it: it "
+                         "shows how to turn on USB debugging. 2. Plug it in with a USB cable that carries data.")
         self.assertEqual(self.window.detail_text(),
-                         "Aucune tablette détectée : branche le câble USB et active le débogage USB.")
+                         "Aucun appareil trouvé. 1. Installe Orizon X sur l'appareil et ouvre-le : il explique "
+                         "comment activer le débogage USB. 2. Branche-le avec un câble USB qui transmet des données.")
 
     def test_close_hint_is_in_the_current_language_and_shown_once(self):
         i18n.set_language("en")
