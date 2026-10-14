@@ -17,3 +17,10 @@ dist/
 # Dev env PC app
 host-prototype/.venv/
 build/
+
+# Signing secrets: never in the repo (kept in %USERPROFILE%\OrizonX-signing)
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
