@@ -14,14 +14,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.orizonx.client.frame.FrameController
+import com.orizonx.client.frame.FrameStore
 import com.orizonx.client.i18n.LangPref
 import com.orizonx.client.i18n.LangStore
 import com.orizonx.client.input.TouchForwarder
 import com.orizonx.client.video.DecoderCaps
 import com.orizonx.client.ui.OrizonXApp
+import java.io.File
 
 class MainActivity : ComponentActivity() {
-    private val model = UiModel()
+    private val model by lazy { UiModel(FrameController(FrameStore(File(cacheDir, "frame"))) { receiver?.sendAction(it) }) }
     private var receiver: Receiver? = null
     private lateinit var roleStore: RoleStore
     private lateinit var langStore: LangStore

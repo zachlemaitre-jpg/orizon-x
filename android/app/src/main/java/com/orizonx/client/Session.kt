@@ -39,6 +39,8 @@ class Session(
         /** HELLO and DEVICE_INFO were sent; [role] is the role announced to the PC. */
         fun onConnected(role: DeviceRole)
         fun onActionsState(json: org.json.JSONObject)
+        fun onFrameState(state: PcMessage.FrameState)
+        fun onFrameFile(chunk: PcMessage.FrameFile)
 
         /** Cover art for `now_playing.artwork == id`; [bytes] is the raw JPEG/PNG. Called on the reader thread: do not decode here. */
         fun onMediaArtwork(id: String, bytes: ByteArray)
@@ -78,8 +80,8 @@ class Session(
             writer.write(deviceInfo) // immediately after HELLO: the PC waits at most 1 s for it, then assumes "screen"
             listener.onConnected(DeviceRole.fromWire(deviceInfo.role) ?: DeviceRole.SCREEN)
             timers.every(PING_INTERVAL_MS, initialDelayMs = 0) { writer.write(TabletMessage.Ping(nowUs())) }
-            // The Actions remote has no video, so there is nothing to measure: no STATS.
-            if (deviceInfo.role != DeviceRole.ACTIONS.wire) {
+            // Only the second-screen role has video to measure: Actions and Frame send no STATS.
+            if (deviceInfo.role == DeviceRole.SCREEN.wire) {
                 timers.every(STATS_INTERVAL_MS, initialDelayMs = STATS_INTERVAL_MS) { sendStats(writer) }
             }
             try {
@@ -125,8 +127,8 @@ class Session(
                         is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
                         is ActionsStateMessage -> listener.onActionsState(message.json)
                         is MediaArtworkMessage -> listener.onMediaArtwork(message.id, message.bytes)
-                        // Frame mode: decoded by the protocol layer, wired to the store and the player in a later task.
-                        is PcMessage.FrameState, is PcMessage.FrameFile -> Unit
+                        is PcMessage.FrameState -> listener.onFrameState(message)
+                        is PcMessage.FrameFile -> listener.onFrameFile(message)
                     }
                 }
             } catch (e: SocketException) {

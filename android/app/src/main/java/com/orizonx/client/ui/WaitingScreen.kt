@@ -171,11 +171,7 @@ private fun MainCardContent(
         GlassText(tr(if (actionsConnected) S.PC_CONNECTED_ACTIONS else S.WAITING_FOR_PC), size = 16.sp)
     }
     Spacer(Modifier.height(16.dp))
-    Row(Modifier.fillMaxWidth()) {
-        GlassButton(tr(S.ROLE_SCREEN), selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_screen)
-        Spacer(Modifier.width(12.dp))
-        GlassButton(tr(S.ROLE_ACTIONS), selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = Modifier.weight(1f), icon = R.drawable.ox_mode_actions)
-    }
+    RoleButtons(role, onRoleChosen)
     if (reason != null) {
         Spacer(Modifier.height(8.dp))
         GlassText(tr(reason), size = 13.sp, color = Amber, align = TextAlign.Center)
@@ -199,6 +195,43 @@ private fun MainCardContent(
         GlassText(tr(S.PROTOCOL_VERSION, "version" to Protocol.VERSION), size = 12.sp, alpha = 0.7f)
     }
 }
+
+/** Screen, Actions and Frame side by side when the card is wide enough; otherwise Frame goes on a second line. */
+@Composable
+private fun RoleButtons(role: DeviceRole, onRoleChosen: (DeviceRole) -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val screenButton: @Composable (Modifier) -> Unit = {
+            GlassButton(tr(S.ROLE_SCREEN), selected = role == DeviceRole.SCREEN, onClick = { onRoleChosen(DeviceRole.SCREEN) }, modifier = it, icon = R.drawable.ox_mode_screen)
+        }
+        val actionsButton: @Composable (Modifier) -> Unit = {
+            GlassButton(tr(S.ROLE_ACTIONS), selected = role == DeviceRole.ACTIONS, onClick = { onRoleChosen(DeviceRole.ACTIONS) }, modifier = it, icon = R.drawable.ox_mode_actions)
+        }
+        val frameButton: @Composable (Modifier) -> Unit = {
+            GlassButton(tr(S.ROLE_FRAME), selected = role == DeviceRole.FRAME, onClick = { onRoleChosen(DeviceRole.FRAME) }, modifier = it, icon = R.drawable.ox_mode_frame)
+        }
+        if (maxWidth >= THREE_ROLES_MIN_WIDTH) {
+            Row(Modifier.fillMaxWidth()) {
+                screenButton(Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                actionsButton(Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                frameButton(Modifier.weight(1f))
+            }
+        } else {
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth()) {
+                    screenButton(Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp))
+                    actionsButton(Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(12.dp))
+                frameButton(Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+private val THREE_ROLES_MIN_WIDTH = 560.dp
 
 /** Dark background with three slowly drifting colour blobs, blurred (real blur, API 31+). */
 @Composable

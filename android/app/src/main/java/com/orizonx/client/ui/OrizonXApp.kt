@@ -49,6 +49,7 @@ fun OrizonXApp(
 ) {
     val streaming = model.state is ConnectionState.Streaming
     val actionsActive = model.role == DeviceRole.ACTIONS && model.connectedRole == DeviceRole.ACTIONS
+    val frameActive = model.role == DeviceRole.FRAME && model.connectedRole == DeviceRole.FRAME
     CompositionLocalProvider(LocalLang provides model.lang) {
         Box(
             Modifier
@@ -66,7 +67,7 @@ fun OrizonXApp(
             }
             VideoSurface(videoModifier, onVideoView, onSurfaceCreated, onSurfaceDestroyed)
 
-            AnimatedVisibility(visible = !streaming && !actionsActive, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
+            AnimatedVisibility(visible = !streaming && !actionsActive && !frameActive, enter = fadeIn(tween(400)), exit = fadeOut(tween(400))) {
                 WaitingScreen(model.waitingReason, screen, model.role, model.connectedRole, onRoleChosen, model.langPref, onLangPrefChosen)
             }
 
@@ -77,6 +78,10 @@ fun OrizonXApp(
                     onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) },
                     langPref = model.langPref, onLangPref = onLangPrefChosen,
                 )
+            }
+
+            AnimatedVisibility(visible = frameActive, enter = fadeIn(tween(300)), exit = fadeOut(tween(300))) {
+                FrameScreen(model.frame, onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) })
             }
 
             if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))

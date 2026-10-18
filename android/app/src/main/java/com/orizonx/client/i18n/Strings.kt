@@ -10,6 +10,7 @@ enum class S {
     PC_CONNECTED_ACTIONS,
     ROLE_SCREEN,
     ROLE_ACTIONS,
+    ROLE_FRAME,
     HINT_LAUNCH_PC,
     HINT_HUD_LONG,
     HINT_HUD_SHORT,
@@ -81,6 +82,23 @@ enum class S {
     SETUP_OPEN_ABOUT,
     SETUP_OPEN_DEV,
     SETUP_DONE_DESC,
+
+    // Frame mode
+    FRAME_NO_FOLDER,
+    FRAME_EMPTY,
+    FRAME_UNREADABLE,
+    FRAME_LOADING,
+    FRAME_PAUSE_DESC,
+    FRAME_PLAY_DESC,
+    FRAME_NEXT_DESC,
+    FRAME_CROP,
+    FRAME_FIT,
+    FRAME_DISPLAY_DESC,
+    FRAME_INTERVAL_LESS_DESC,
+    FRAME_INTERVAL_MORE_DESC,
+    FRAME_SECONDS,
+    FRAME_MINUTES,
+    FRAME_HOURS,
 }
 
 /** A text to translate later: key plus arguments, so a language switch can re-translate what is already on screen. */
@@ -97,6 +115,7 @@ object Strings {
         S.PC_CONNECTED_ACTIONS to t("PC connected — Actions mode", "PC connecté — mode Actions"),
         S.ROLE_SCREEN to t("Screen", "Écran"),
         S.ROLE_ACTIONS to t("Actions", "Actions"),
+        S.ROLE_FRAME to t("Frame", "Tableau"),
         S.HINT_LAUNCH_PC to t("Open Orizon X on the PC.", "Lance Orizon X sur le PC."),
         S.HINT_HUD_LONG to t("Long-press with 4 fingers: connection info", "Appui long à 4 doigts : infos de connexion"),
         S.HINT_HUD_SHORT to t("Long-press with 4 fingers: info", "Appui long à 4 doigts : infos"),
@@ -162,6 +181,22 @@ object Strings {
         S.SETUP_OPEN_ABOUT to t("Open About", "Ouvrir À propos"),
         S.SETUP_OPEN_DEV to t("Open developer options", "Ouvrir les options développeur"),
         S.SETUP_DONE_DESC to t("Done", "Fait"),
+
+        S.FRAME_NO_FOLDER to t("Choose a folder in Orizon X on the PC", "Choisis un dossier dans Orizon X sur le PC"),
+        S.FRAME_EMPTY to t("No images or videos in this folder", "Aucune image ni vidéo dans ce dossier"),
+        S.FRAME_UNREADABLE to t("Cannot read the folder", "Impossible de lire le dossier"),
+        S.FRAME_LOADING to t("Loading…", "Chargement…"),
+        S.FRAME_PAUSE_DESC to t("Pause", "Pause"),
+        S.FRAME_PLAY_DESC to t("Play", "Lecture"),
+        S.FRAME_NEXT_DESC to t("Next", "Suivant"),
+        S.FRAME_CROP to t("Crop", "Rogner"),
+        S.FRAME_FIT to t("Fit", "Ajuster"),
+        S.FRAME_DISPLAY_DESC to t("Display: {value}", "Affichage : {value}"),
+        S.FRAME_INTERVAL_LESS_DESC to t("Shorter interval", "Intervalle plus court"),
+        S.FRAME_INTERVAL_MORE_DESC to t("Longer interval", "Intervalle plus long"),
+        S.FRAME_SECONDS to t("{n} s", "{n} s"),
+        S.FRAME_MINUTES to t("{n} min", "{n} min"),
+        S.FRAME_HOURS to t("{n} h", "{n} h"),
     )
 
     /** The en/fr pair of [key]; exposed for the completeness test. */

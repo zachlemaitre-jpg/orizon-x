@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.orizonx.client.actions.ArtworkDecoder
+import com.orizonx.client.frame.FrameController
 import com.orizonx.client.i18n.Lang
 import com.orizonx.client.i18n.LangPref
 import com.orizonx.client.i18n.Msg
@@ -30,7 +31,7 @@ data class HudData(
 )
 
 /** Compose-observable app state. Written from background threads, read by the UI. */
-class UiModel : Session.Listener {
+class UiModel(val frame: FrameController) : Session.Listener {
     var state by mutableStateOf<ConnectionState>(ConnectionState.Waiting(null))
         private set
     var hud by mutableStateOf<HudData?>(null)
@@ -98,8 +99,13 @@ class UiModel : Session.Listener {
     }
 
     override fun onConnected(role: DeviceRole) {
+        frame.reset() // session start: no leftover file of a previous run
         connectedRole = role
     }
+
+    override fun onFrameState(state: PcMessage.FrameState) = frame.onState(state)
+
+    override fun onFrameFile(chunk: PcMessage.FrameFile) = frame.onFile(chunk)
 
     override fun onActionsState(json: JSONObject) {
         actionsState = json
@@ -117,6 +123,7 @@ class UiModel : Session.Listener {
 
     fun showWaiting(reason: Msg?) {
         connectedRole = null
+        frame.reset() // session end: forget the queue and empty the cache
         actionsState = null
         artworkEpoch++
         artwork = null
