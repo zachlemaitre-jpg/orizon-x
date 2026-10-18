@@ -3,6 +3,7 @@ package com.orizonx.client.protocol
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.EOFException
@@ -185,5 +186,195 @@ class FrameReaderTest {
     @Test(expected = ProtocolException::class)
     fun rejectsMediaArtworkWithNonAsciiId() {
         read(jsonFrame(Protocol.TYPE_MEDIA_ARTWORK, byteArrayOf(2, 0xC3.toByte(), 0xA9.toByte(), 1, 2)))
+    }
+
+    // --- FRAME_STATE (0x06) ---
+
+    private fun stateJson(
+        epoch: String = "3",
+        status: String = "\"ok\"",
+        folder: String = "\"Photos\"",
+        interval: String = "30",
+        fit: String = "\"crop\"",
+        paused: String = "false",
+    ) = """{"epoch":$epoch,"status":$status,"folder":$folder,"interval_s":$interval,"fit":$fit,"paused":$paused}"""
+
+    private fun readState(json: String) = read(jsonFrame(Protocol.TYPE_FRAME_STATE, json)) as PcMessage.FrameState
+
+    @Test
+    fun decodesFrameState() {
+        assertEquals(PcMessage.FrameState(3, "ok", "Photos", 30, "crop", false), readState(stateJson()))
+    }
+
+    @Test
+    fun decodesFrameStateWithNoFolderAndAccents() {
+        assertEquals(
+            PcMessage.FrameState(0xFFFF_FFFFL, "no_folder", null, 5, "fit", true),
+            readState(stateJson(epoch = "4294967295", status = "\"no_folder\"", folder = "null", interval = "5", fit = "\"fit\"", paused = "true")),
+        )
+        assertEquals("Été", readState(stateJson(folder = "\"Été\"")).folder)
+    }
+
+    @Test
+    fun frameStateIgnoresUnknownFields() {
+        val json = stateJson().dropLast(1) + ""","future":{"a":[1]}}"""
+        assertEquals(PcMessage.FrameState(3, "ok", "Photos", 30, "crop", false), readState(json))
+    }
+
+    @Test
+    fun frameStateKnowsEveryStatusAndMapsAnUnknownOneToUnreadable() {
+        for (status in listOf("ok", "no_folder", "empty", "unreadable")) {
+            assertEquals(status, readState(stateJson(status = "\"$status\"")).status)
+        }
+        for (bad in listOf("\"bogus\"", "\"OK\"", "\"\"", "null", "3", "true")) {
+            assertEquals(bad, "unreadable", readState(stateJson(status = bad)).status)
+        }
+        assertEquals("unreadable", readState("""{"epoch":3,"interval_s":30}""").status)
+    }
+
+    @Test
+    fun frameStateIsTolerantForFolderFitAndPaused() {
+        assertEquals(null, readState(stateJson(folder = "3")).folder)
+        assertEquals("crop", readState(stateJson(fit = "\"stretch\"")).fit)
+        assertEquals("crop", readState(stateJson(fit = "null")).fit)
+        assertEquals(false, readState(stateJson(paused = "\"yes\"")).paused)
+        assertEquals(false, readState(stateJson(paused = "1")).paused)
+    }
+
+    @Test
+    fun frameStateIsFollowedByNextMessage() {
+        val reader = FrameReader(ByteArrayInputStream(hex(jsonFrame(Protocol.TYPE_FRAME_STATE, stateJson()) + pongHex)))
+        assertTrue(reader.read() is PcMessage.FrameState)
+        assertEquals(PcMessage.Pong(123456789, 987654321), reader.read())
+    }
+
+    @Test
+    fun rejectsFrameStateWithInvalidEpochOrInterval() {
+        for (epoch in listOf("-1", "4294967296", "1.5", "\"3\"", "null", "true")) {
+            try {
+                readState(stateJson(epoch = epoch))
+                fail("epoch $epoch accepted")
+            } catch (_: ProtocolException) {
+            }
+        }
+        for (interval in listOf("0", "-5", "2.5", "\"30\"", "null", "true")) {
+            try {
+                readState(stateJson(interval = interval))
+                fail("interval_s $interval accepted")
+            } catch (_: ProtocolException) {
+            }
+        }
+        try {
+            readState("""{"status":"ok","interval_s":30}""")
+            fail("missing epoch accepted")
+        } catch (_: ProtocolException) {
+        }
+    }
+
+    @Test
+    fun rejectsMalformedFrameState() {
+        for (payload in listOf("", "{not json", "[1,2]", "\"ok\"")) {
+            try {
+                read(jsonFrame(Protocol.TYPE_FRAME_STATE, payload))
+                fail("payload $payload accepted")
+            } catch (_: ProtocolException) {
+            }
+        }
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsFrameStateWithInvalidUtf8() {
+        read(jsonFrame(Protocol.TYPE_FRAME_STATE, byteArrayOf('{'.code.toByte(), '"'.code.toByte(), 0xFF.toByte(), '"'.code.toByte(), '}'.code.toByte())))
+    }
+
+    @Test(expected = ProtocolException::class)
+    fun rejectsFrameStateOverSixtyFourKib() {
+        read(jsonFrame(Protocol.TYPE_FRAME_STATE, stateJson(folder = "\"${"x".repeat(Protocol.MAX_JSON)}\"")))
+    }
+
+    // --- FRAME_FILE (0x07) ---
+
+    private fun filePayload(
+        epoch: Long = 3, id: Long = 7, kind: Int = 1, total: Long = 10, offset: Long = 0, data: ByteArray = byteArrayOf(1, 2, 3, 4, 5),
+    ): ByteArray = java.nio.ByteBuffer.allocate(25 + data.size)
+        .putInt(epoch.toInt()).putInt(id.toInt()).put(kind.toByte()).putLong(total).putLong(offset).put(data).array()
+
+    private fun readFile(payload: ByteArray) = read(jsonFrame(Protocol.TYPE_FRAME_FILE, payload)) as PcMessage.FrameFile
+
+    private fun assertFileRejected(label: String, payload: ByteArray) {
+        try {
+            read(jsonFrame(Protocol.TYPE_FRAME_FILE, payload))
+            fail("$label accepted")
+        } catch (_: ProtocolException) {
+        }
+    }
+
+    @Test
+    fun decodesFrameFile() {
+        val message = readFile(filePayload(offset = 5, data = byteArrayOf(6, 7, 8, 9, 10)))
+        assertEquals(PcMessage.FrameFile(3, 7, 1, 10, 5, byteArrayOf(6, 7, 8, 9, 10)), message)
+        assertEquals(10L, message.total)
+    }
+
+    @Test
+    fun frameFileReadsUnsignedFields() {
+        val message = readFile(filePayload(epoch = 0xFFFF_FFFFL, id = 0x8000_0001L, kind = 2, total = 1, data = byteArrayOf(-1)))
+        assertEquals(0xFFFF_FFFFL, message.epoch)
+        assertEquals(0x8000_0001L, message.id)
+        assertEquals(2, message.kind)
+        assertArrayEquals(byteArrayOf(-1), message.data)
+    }
+
+    @Test
+    fun frameFileIsFollowedByNextMessage() {
+        val reader = FrameReader(ByteArrayInputStream(hex(jsonFrame(Protocol.TYPE_FRAME_FILE, filePayload()) + pongHex)))
+        assertTrue(reader.read() is PcMessage.FrameFile)
+        assertEquals(PcMessage.Pong(123456789, 987654321), reader.read())
+    }
+
+    @Test
+    fun acceptsFrameFileChunkOfExactlyOneMiB() {
+        val data = ByteArray(Protocol.MAX_FRAME_CHUNK) { 7 }
+        val message = readFile(filePayload(kind = 2, total = data.size.toLong(), data = data))
+        assertEquals(Protocol.MAX_FRAME_CHUNK, message.data.size)
+    }
+
+    @Test
+    fun acceptsFrameFileChunkEndingExactlyAtTotal() {
+        assertEquals(9L, readFile(filePayload(total = 10, offset = 9, data = byteArrayOf(1))).offset)
+    }
+
+    @Test
+    fun rejectsFrameFileOverOneMiB() {
+        val data = ByteArray(Protocol.MAX_FRAME_CHUNK + 1)
+        assertFileRejected("1 MiB + 1", filePayload(total = 2L * Protocol.MAX_FRAME_CHUNK, data = data))
+    }
+
+    @Test
+    fun rejectsFrameFileWithoutData() {
+        assertFileRejected("empty data", filePayload(data = ByteArray(0)))
+        assertFileRejected("short header", filePayload().copyOf(24))
+        assertFileRejected("empty payload", ByteArray(0))
+    }
+
+    @Test
+    fun rejectsFrameFileWithUnknownKind() {
+        for (kind in listOf(0, 3, 255)) assertFileRejected("kind $kind", filePayload(kind = kind))
+    }
+
+    @Test
+    fun rejectsFrameFileRunningPastTotal() {
+        assertFileRejected("past total", filePayload(total = 10, offset = 6, data = ByteArray(5)))
+        assertFileRejected("shorter total", filePayload(total = 4, offset = 0, data = ByteArray(5)))
+        assertFileRejected("at total", filePayload(total = 10, offset = 10, data = ByteArray(1)))
+        assertFileRejected("zero total", filePayload(total = 0, offset = 0, data = ByteArray(1)))
+    }
+
+    @Test
+    fun rejectsFrameFileWithNegativeOrHugeOffsetAndTotal() {
+        // u64 values with the high bit set read as negative longs: never valid here.
+        assertFileRejected("huge total", filePayload(total = Long.MIN_VALUE, offset = 0))
+        assertFileRejected("huge offset", filePayload(total = Long.MAX_VALUE, offset = Long.MIN_VALUE))
+        assertFileRejected("overflowing offset", filePayload(total = Long.MAX_VALUE, offset = Long.MAX_VALUE))
     }
 }

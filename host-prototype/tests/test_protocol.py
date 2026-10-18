@@ -34,6 +34,12 @@ def encode_vector(vector: dict) -> bytes:
         return protocol.encode_actions_state(f["state"])
     if vector["type"] == "MEDIA_ARTWORK":
         return protocol.encode_media_artwork(f["id"], bytes.fromhex(f["data"]))
+    if vector["type"] == "FRAME_STATE":
+        return protocol.encode_frame_state(
+            f["epoch"], f["status"], f["folder"], f["interval_s"], f["fit"], f["paused"])
+    if vector["type"] == "FRAME_FILE":
+        return protocol.encode_frame_file(
+            f["epoch"], f["id"], f["kind"], f["total"], f["offset"], bytes.fromhex(f["data"]))
     raise AssertionError(f"type inattendu : {vector['type']}")
 
 
@@ -364,6 +370,118 @@ class EncodeMediaArtworkTest(unittest.TestCase):
         stream = io.BytesIO(protocol.encode_media_artwork(self.ID, b"img") + protocol.HEADER.pack(0x82, 0, 0, 8)
                             + (7).to_bytes(8, "big"))
         self.assertEqual(protocol.read_message(stream), protocol.Ping(7))
+
+
+class EncodeFrameStateTest(unittest.TestCase):
+    def test_constants(self):
+        self.assertEqual((protocol.FRAME_STATE, protocol.FRAME_FILE), (0x06, 0x07))
+        self.assertEqual(protocol.MAX_FRAME_CHUNK, 1024 * 1024)
+
+    def test_frame_is_compact_json_in_the_documented_key_order(self):
+        frame = protocol.encode_frame_state(3, "ok", "Café", 30, "fit", True)
+        payload = '{"epoch":3,"status":"ok","folder":"Café","interval_s":30,"fit":"fit","paused":true}'.encode("utf-8")
+        self.assertEqual(frame, bytes([0x06, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload)
+
+    def test_no_folder_is_json_null(self):
+        frame = protocol.encode_frame_state(1, "no_folder", None, 5, "crop", False)
+        self.assertIn(b'"folder":null', frame)
+
+    def test_accepts_every_status_and_fit(self):
+        for status in ("ok", "no_folder", "empty", "unreadable"):
+            for fit in ("crop", "fit"):
+                with self.subTest(status=status, fit=fit):
+                    protocol.encode_frame_state(0, status, None, 30, fit, False)
+
+    def test_accepts_the_largest_epoch(self):
+        self.assertIn(b'"epoch":4294967295', protocol.encode_frame_state(0xFFFFFFFF, "ok", "x", 30, "crop", False))
+
+    def test_rejects_invalid_fields(self):
+        good = dict(epoch=1, status="ok", folder="x", interval_s=30, fit="crop", paused=False)
+        bad_values = {
+            "epoch": (-1, 0x1_0000_0000, 1.5, "1", True, None),
+            "status": ("bogus", "OK", "", None, 1),
+            "folder": (3, b"x", ["x"]),
+            "interval_s": (0, -5, 2.5, "30", True, None),
+            "fit": ("stretch", "Crop", "", None, 1),
+            "paused": (0, 1, "false", None),
+        }
+        for key, values in bad_values.items():
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    protocol.encode_frame_state(**{**good, key: value})
+
+    def test_rejects_over_64_kib(self):
+        base = len(protocol.encode_frame_state(1, "ok", "", 30, "crop", False)) - 8
+        folder = "x" * (protocol.MAX_JSON - base)
+        self.assertEqual(len(protocol.encode_frame_state(1, "ok", folder, 30, "crop", False)) - 8, protocol.MAX_JSON)
+        with self.assertRaises(ValueError):
+            protocol.encode_frame_state(1, "ok", folder + "x", 30, "crop", False)
+
+    def test_vectors_are_present(self):
+        names = {v["name"] for v in VECTORS["pc_to_tablet"] if v["type"] == "FRAME_STATE"}
+        self.assertEqual(names, {"frame_state_ok", "frame_state_no_folder"})
+
+
+class EncodeFrameFileTest(unittest.TestCase):
+    def test_layout_is_big_endian_epoch_id_kind_total_offset_then_data(self):
+        frame = protocol.encode_frame_file(0x01020304, 0x0A0B0C0D, 2, 0x1122334455667788, 0x0102, b"\xaa\xbb")
+        payload = (bytes.fromhex("01020304" "0a0b0c0d" "02" "1122334455667788" "0000000000000102") + b"\xaa\xbb")
+        self.assertEqual(len(payload), 25 + 2)
+        self.assertEqual(frame, bytes([0x07, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload)
+
+    def test_accepts_a_chunk_of_exactly_1_mib(self):
+        data = b"\x00" * protocol.MAX_FRAME_CHUNK
+        frame = protocol.encode_frame_file(1, 1, 2, protocol.MAX_FRAME_CHUNK, 0, data)
+        self.assertEqual(len(frame) - 8, 25 + protocol.MAX_FRAME_CHUNK)
+
+    def test_accepts_a_chunk_that_ends_exactly_at_total(self):
+        protocol.encode_frame_file(1, 1, 1, 10, 9, b"x")
+
+    def test_accepts_bytearray_and_memoryview_data(self):
+        expected = protocol.encode_frame_file(1, 1, 1, 3, 0, b"abc")
+        self.assertEqual(protocol.encode_frame_file(1, 1, 1, 3, 0, bytearray(b"abc")), expected)
+        self.assertEqual(protocol.encode_frame_file(1, 1, 1, 3, 0, memoryview(b"abc")), expected)
+
+    def test_rejects_empty_data(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_frame_file(1, 1, 1, 10, 0, b"")
+
+    def test_rejects_data_over_1_mib(self):
+        with self.assertRaises(ValueError):
+            protocol.encode_frame_file(1, 1, 1, 2 * 1024 * 1024, 0, b"\x00" * (protocol.MAX_FRAME_CHUNK + 1))
+
+    def test_rejects_a_chunk_running_past_total(self):
+        for total, offset, data in ((10, 6, b"12345"), (4, 0, b"12345"), (0, 0, b"x"), (10, 10, b"x")):
+            with self.subTest(total=total, offset=offset), self.assertRaises(ValueError):
+                protocol.encode_frame_file(1, 1, 1, total, offset, data)
+
+    def test_rejects_an_unknown_kind(self):
+        for kind in (0, 3, 255, -1, True, "1", None):
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                protocol.encode_frame_file(1, 1, kind, 10, 0, b"x")
+
+    def test_rejects_out_of_range_numbers(self):
+        for args in ((-1, 1, 1, 10, 0), (0x1_0000_0000, 1, 1, 10, 0), (1, -1, 1, 10, 0), (1, 0x1_0000_0000, 1, 10, 0),
+                     (1, 1, 1, 2 ** 64, 0), (1, 1, 1, 10, -1), (1, 1, 1, 10.0, 0), (1.0, 1, 1, 10, 0), (True, 1, 1, 10, 0)):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                protocol.encode_frame_file(*args, b"x")
+
+    def test_vectors_are_present(self):
+        names = {v["name"] for v in VECTORS["pc_to_tablet"] if v["type"] == "FRAME_FILE"}
+        self.assertEqual(names, {"frame_file_first_chunk", "frame_file_last_chunk"})
+
+    def test_pc_side_reader_skips_both_as_unknown_types(self):
+        stream = io.BytesIO(protocol.encode_frame_state(1, "ok", "x", 30, "crop", False)
+                            + protocol.encode_frame_file(1, 1, 1, 1, 0, b"x")
+                            + protocol.HEADER.pack(0x82, 0, 0, 8) + (7).to_bytes(8, "big"))
+        self.assertEqual(protocol.read_message(stream), protocol.Ping(7))
+
+
+class DeviceInfoFrameRoleTest(unittest.TestCase):
+    def test_the_frame_role_is_decoded_as_is(self):
+        payload = b'{"role":"frame","kind":"tablet","name":"Tab","app":"0.8.0","lang":"en"}'
+        info = protocol.read_message(_json_frame(protocol.DEVICE_INFO, payload))
+        self.assertEqual(info, protocol.DeviceInfo("frame", "tablet", "Tab", "0.8.0", None, "en"))
 
 
 if __name__ == "__main__":

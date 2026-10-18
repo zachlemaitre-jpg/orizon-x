@@ -5,10 +5,11 @@ import com.orizonx.client.i18n.Lang
 import com.orizonx.client.protocol.TabletMessage
 import com.orizonx.client.protocol.VideoCaps
 
-/** What this device does for the PC: second screen or Actions remote. */
+/** What this device does for the PC: second screen, Actions remote or picture Frame. */
 enum class DeviceRole(val wire: String) {
     SCREEN("screen"),
     ACTIONS("actions"),
+    FRAME("frame"),
     ;
 
     companion object {

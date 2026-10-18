@@ -63,9 +63,59 @@ class FrameReader(input: InputStream) {
                     stream.readFully(image)
                     return MediaArtworkMessage(String(idBytes, Charsets.US_ASCII), image)
                 }
+                Protocol.TYPE_FRAME_STATE -> {
+                    if (size > Protocol.MAX_JSON) throw ProtocolException("FRAME_STATE trop gros : $size octets")
+                    val bytes = ByteArray(size)
+                    stream.readFully(bytes)
+                    return frameState(parseJsonObject("FRAME_STATE", bytes))
+                }
+                Protocol.TYPE_FRAME_FILE -> {
+                    val headerSize = Protocol.FRAME_FILE_HEADER_SIZE
+                    if (size <= headerSize) throw ProtocolException("FRAME_FILE : $size octets, aucune donnée")
+                    val dataSize = size - headerSize
+                    if (dataSize > Protocol.MAX_FRAME_CHUNK) throw ProtocolException("FRAME_FILE : $dataSize octets de données")
+                    val epoch = stream.readInt().toLong() and 0xFFFF_FFFFL
+                    val id = stream.readInt().toLong() and 0xFFFF_FFFFL
+                    val kind = stream.readUnsignedByte()
+                    val total = stream.readLong()
+                    val offset = stream.readLong()
+                    if (kind != Protocol.FRAME_KIND_IMAGE && kind != Protocol.FRAME_KIND_VIDEO) {
+                        throw ProtocolException("FRAME_FILE : type de fichier $kind inconnu")
+                    }
+                    // u64 values with the high bit set read as negative: far beyond any real file, so invalid.
+                    if (total < 0 || offset < 0 || offset > total - dataSize) {
+                        throw ProtocolException("FRAME_FILE : morceau $offset+$dataSize hors du total $total")
+                    }
+                    val data = ByteArray(dataSize)
+                    stream.readFully(data)
+                    return PcMessage.FrameFile(epoch, id, kind, total, offset, data)
+                }
                 else -> skip(size)
             }
         }
+    }
+
+    /** FRAME_STATE is read tolerantly (unknown fields ignored); only an unusable epoch or interval is an error. */
+    private fun frameState(json: JSONObject): PcMessage.FrameState {
+        val epoch = (json.opt("epoch") as? Number)?.takeIf { it is Int || it is Long }?.toLong()
+        if (epoch == null || epoch !in 0..0xFFFF_FFFFL) throw ProtocolException("FRAME_STATE : epoch manquant ou invalide")
+        val interval = (json.opt("interval_s") as? Number)?.takeIf { it is Int || it is Long }?.toLong()
+        if (interval == null || interval !in 1..Int.MAX_VALUE.toLong()) {
+            throw ProtocolException("FRAME_STATE : interval_s manquant ou invalide")
+        }
+        val status = (json.opt("status") as? String)?.takeIf { it in FRAME_STATUSES } ?: "unreadable"
+        return PcMessage.FrameState(
+            epoch = epoch,
+            status = status,
+            folder = json.opt("folder") as? String,
+            intervalS = interval.toInt(),
+            fit = if (json.opt("fit") == "fit") "fit" else "crop",
+            paused = json.opt("paused") == true,
+        )
+    }
+
+    private companion object {
+        val FRAME_STATUSES = setOf("ok", "no_folder", "empty", "unreadable")
     }
 
     private fun parseJsonObject(name: String, bytes: ByteArray): JSONObject {

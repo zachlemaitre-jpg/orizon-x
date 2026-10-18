@@ -52,6 +52,26 @@ class ProtocolVectorsTest {
                     assertEquals(f.getString("id"), message.id)
                     assertArrayEquals(hex(f.getString("data")), message.bytes)
                 }
+                "FRAME_STATE" -> assertEquals(
+                    vector.getString("name"),
+                    PcMessage.FrameState(
+                        epoch = f.getLong("epoch"),
+                        status = f.getString("status"),
+                        folder = if (f.isNull("folder")) null else f.getString("folder"),
+                        intervalS = f.getInt("interval_s"),
+                        fit = f.getString("fit"),
+                        paused = f.getBoolean("paused"),
+                    ),
+                    message,
+                )
+                "FRAME_FILE" -> assertEquals(
+                    vector.getString("name"),
+                    PcMessage.FrameFile(
+                        f.getLong("epoch"), f.getLong("id"), f.getInt("kind"),
+                        f.getLong("total"), f.getLong("offset"), hex(f.getString("data")),
+                    ),
+                    message,
+                )
                 else -> fail("type inattendu : ${vector.getString("type")}")
             }
         }

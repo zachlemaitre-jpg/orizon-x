@@ -26,6 +26,8 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x03 | PONG | t_tab_us u64 (renvoyé tel quel), t_pc_us u64 |
 | 0x04 | ACTIONS_STATE | JSON UTF-8 : l'état complet du mode Actions (voir « Mode Actions »). Au plus 65 536 octets |
 | 0x05 | MEDIA_ARTWORK | `n` u8 (longueur de l'id, 1..255), puis l'id (`n` octets ASCII, sha1 hexadécimal : 40 caractères), puis l'image brute (JPEG ou PNG, au moins 1 octet). Payload total de 524 288 octets (512 Kio) au plus |
+| 0x06 | FRAME_STATE | JSON UTF-8 : les réglages et l'état du mode Tableau (voir « Mode Tableau »). Au plus 65 536 octets |
+| 0x07 | FRAME_FILE | epoch u32, id u32, kind u8 (1 = image JPEG, 2 = vidéo), total u64, offset u64 (25 octets), puis 1 à 1 048 576 octets de données du fichier (voir « Mode Tableau ») |
 
 ## Tablette → PC
 
@@ -36,7 +38,7 @@ La taille du payload d'un type connu est exacte : une taille différente est une
 | 0x83 | KEYFRAME_REQ | vide |
 | 0x84 | STATS | fps u16, latency_avg_us u32, latency_max_us u32, dropped u32, rtt_us u32 (chaque seconde) |
 | 0x85 | INPUT | device u8 (1 tactile, 2 stylet), count u8 (≤ 10 tactile, ≤ 1 stylet), puis count × contact de 10 octets (voir ci-dessous) |
-| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"[,"video":{"width":<int>,"height":<int>,"fps":60\|30}][,"lang":"en"\|"fr"]}`. Au plus 65 536 octets |
+| 0x86 | DEVICE_INFO | JSON UTF-8 : `{"role":"screen"\|"actions"\|"frame","kind":"phone"\|"tablet","name":"<modèle>","app":"<version>"[,"video":{"width":<int>,"height":<int>,"fps":60\|30}][,"lang":"en"\|"fr"]}`. Au plus 65 536 octets |
 | 0x87 | ACTION | JSON UTF-8 : `{"id":"<action>", …}` ; `id` est une chaîne obligatoire. Au plus 65 536 octets |
 
 ## INPUT (phase 4)
@@ -56,7 +58,7 @@ Les messages 0x04, 0x86 et 0x87 portent un **objet JSON encodé en UTF-8**, de 6
 ### Séquence
 
 1. La tablette envoie `HELLO`, puis **immédiatement** `DEVICE_INFO`.
-2. Le PC attend `DEVICE_INFO` **1 s au plus** après le `HELLO`. Sans réponse (ancienne application), ou si `role` n'est pas `actions`, le rôle vaut `screen` : le comportement est celui de la version précédente (`CONFIG`, `VIDEO`, `INPUT`).
+2. Le PC attend `DEVICE_INFO` **1 s au plus** après le `HELLO`. Sans réponse (ancienne application), ou si `role` est inconnu, le rôle vaut `screen` : le comportement est celui de la version précédente (`CONFIG`, `VIDEO`, `INPUT`). Les rôles connus sont `screen`, `actions` et `frame` ; un PC antérieur au mode Tableau traite `frame` comme un rôle inconnu, donc comme `screen`.
 3. En rôle `actions`, le PC n'envoie ni `CONFIG` ni `VIDEO` : il envoie un `ACTIONS_STATE` complet, puis un nouveau à chaque changement (l'état complet, pas de diff) et au moins toutes les 30 s. La tablette envoie des `ACTION`. `PING`/`PONG` ne changent pas.
 4. Pour changer de rôle, la tablette ferme la connexion et se reconnecte avec le nouveau `DEVICE_INFO`.
 
@@ -107,6 +109,62 @@ Action `{"id":"context.lang","lang":"en"|"fr"}` : l'appareil change de langue pe
 ### Compatibilité
 
 Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.
+
+## Mode Tableau (`frame`)
+
+Le rôle `frame` fait de l'appareil un cadre photo : le PC possède la liste de lecture (images et vidéos d'un dossier) et envoie les fichiers ; l'appareil les affiche en diaporama. En rôle `frame`, le PC n'envoie ni `CONFIG` ni `VIDEO`, et `DEVICE_INFO` n'a pas de `video`. `PING`/`PONG` ne changent pas. Les octets de chaque message sont fixés par les vecteurs `frame_state_*` et `frame_file_*` de `test-vectors.json`.
+
+### FRAME_STATE (0x06, PC → appareil)
+
+JSON UTF-8 compact de 65 536 octets au plus, clés dans cet ordre :
+
+```json
+{"epoch":3,"status":"ok","folder":"Photos","interval_s":30,"fit":"crop","paused":false}
+```
+
+- `epoch` : entier de 0 à 4 294 967 295. Il augmente à chaque changement de dossier ; l'appareil jette alors tous les fichiers d'une autre époque, déjà reçus ou en cours de réception.
+- `status` : `"ok"`, `"no_folder"` (aucun dossier choisi), `"empty"` (aucune image ni vidéo) ou `"unreadable"` (dossier illisible ou supprimé).
+- `folder` : le nom du dossier à afficher (chaîne), ou `null` sans dossier.
+- `interval_s` : la durée d'affichage d'une image en secondes, entier ≥ 1 (valeurs proposées : 5, 10, 30, 60, 300, 900, 3600).
+- `fit` : `"crop"` (l'image remplit l'écran, rognée) ou `"fit"` (l'image entière, bandes noires).
+- `paused` : booléen.
+
+Le PC l'envoie au début de la session, puis à chaque changement de réglage ou d'état. Lecture tolérante côté appareil : un champ inconnu est ignoré, un `status` inconnu ou absent vaut `unreadable`, un `fit` inconnu vaut `crop`, un `folder` qui n'est pas une chaîne vaut `null`, un `paused` qui n'est pas un booléen vaut `false`. Un JSON invalide, un `epoch` absent ou hors de 0..4 294 967 295 et un `interval_s` absent ou qui n'est pas un entier ≥ 1 sont des erreurs de protocole.
+
+### FRAME_FILE (0x07, PC → appareil)
+
+Un morceau de fichier. Le payload est l'en-tête suivant (25 octets, big-endian), puis les données :
+
+| Champ | Type | Description |
+|---|---|---|
+| epoch | u32 | L'époque du `FRAME_STATE` sous laquelle le fichier a été choisi |
+| id | u32 | L'identifiant du fichier ; il augmente dans une session |
+| kind | u8 | 1 = image JPEG, 2 = vidéo (telle quelle) |
+| total | u64 | La taille du fichier complet, en octets |
+| offset | u64 | La position de ce morceau dans le fichier |
+| data | octets | De 1 à 1 048 576 octets |
+
+- Les morceaux d'un même fichier arrivent dans l'ordre, sans trou ni chevauchement ; le premier a `offset` 0.
+- Le fichier est complet quand `offset` + taille des données = `total`.
+- Sont des erreurs de protocole : un payload d'au plus 25 octets (aucune donnée), plus de 1 048 576 octets de données, un `kind` autre que 1 ou 2, un morceau qui dépasse `total` (`offset` + taille > `total`).
+- Un `offset` ou un `total` dont le bit de poids fort est à 1 dépasse tout fichier réel : erreur de protocole.
+- Une rupture dans l'ordre des morceaux n'est pas une erreur de protocole : l'appareil rejette le fichier et ignore ses morceaux (voir `frame.failed`).
+
+### Actions `frame.*` (appareil → PC, dans un `ACTION`)
+
+- `{"id":"frame.next"}` : l'élément affiché est fini (minuterie, fin de vidéo ou bouton Suivant).
+- `{"id":"frame.pause","paused":true|false}`.
+- `{"id":"frame.fit","fit":"crop"|"fit"}`.
+- `{"id":"frame.interval","interval_s":<int>}` : le PC ignore une valeur hors de la liste proposée.
+- `{"id":"frame.failed","file":<id>}` : l'appareil n'a pas pu afficher ce fichier. Le PC le retire de la liste pour la session et envoie le suivant.
+
+Après une action de réglage, le PC renvoie un `FRAME_STATE` à jour.
+
+### Avance d'un fichier
+
+- Le PC envoie le fichier n° 1, puis le n° 2 aussitôt après.
+- À chaque `frame.next` ou `frame.failed`, il envoie le fichier suivant de la liste.
+- L'appareil garde donc toujours un fichier d'avance. Un changement de dossier (nouvelle `epoch`) repart de zéro avec deux fichiers de la nouvelle époque.
 
 ## Horloges
 

@@ -45,6 +45,30 @@
       "type": "MEDIA_ARTWORK",
       "fields": {"id": "0123456789abcdef0123456789abcdef01234567", "data": "89504e470d0a1a0a"},
       "hex": "0500000000000031283031323334353637383961626364656630313233343536373839616263646566303132333435363789504e470d0a1a0a"
+    },
+    {
+      "name": "frame_state_ok",
+      "type": "FRAME_STATE",
+      "fields": {"epoch": 3, "status": "ok", "folder": "Photos", "interval_s": 30, "fit": "crop", "paused": false},
+      "hex": "06000000000000577b2265706f6368223a332c22737461747573223a226f6b222c22666f6c646572223a2250686f746f73222c22696e74657276616c5f73223a33302c22666974223a2263726f70222c22706175736564223a66616c73657d"
+    },
+    {
+      "name": "frame_state_no_folder",
+      "type": "FRAME_STATE",
+      "fields": {"epoch": 3, "status": "no_folder", "folder": null, "interval_s": 30, "fit": "crop", "paused": false},
+      "hex": "060000000000005a7b2265706f6368223a332c22737461747573223a226e6f5f666f6c646572222c22666f6c646572223a6e756c6c2c22696e74657276616c5f73223a33302c22666974223a2263726f70222c22706175736564223a66616c73657d"
+    },
+    {
+      "name": "frame_file_first_chunk",
+      "type": "FRAME_FILE",
+      "fields": {"epoch": 3, "id": 7, "kind": 1, "total": 10, "offset": 0, "data": "0102030405"},
+      "hex": "070000000000001e000000030000000701000000000000000a00000000000000000102030405"
+    },
+    {
+      "name": "frame_file_last_chunk",
+      "type": "FRAME_FILE",
+      "fields": {"epoch": 3, "id": 7, "kind": 1, "total": 10, "offset": 5, "data": "060708090a"},
+      "hex": "070000000000001e000000030000000701000000000000000a0000000000000005060708090a"
     }
   ],
   "tablet_to_pc": [

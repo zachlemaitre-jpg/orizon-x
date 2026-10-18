@@ -125,6 +125,8 @@ class Session(
                         is PcMessage.Pong -> tracker.onPong(message.tTabUs, message.tPcUs, nowUs())
                         is ActionsStateMessage -> listener.onActionsState(message.json)
                         is MediaArtworkMessage -> listener.onMediaArtwork(message.id, message.bytes)
+                        // Frame mode: decoded by the protocol layer, wired to the store and the player in a later task.
+                        is PcMessage.FrameState, is PcMessage.FrameFile -> Unit
                     }
                 }
             } catch (e: SocketException) {

@@ -25,6 +25,8 @@ class DeviceRoleTest {
     fun wireNamesRoundTrip() {
         assertEquals(DeviceRole.SCREEN, DeviceRole.fromWire("screen"))
         assertEquals(DeviceRole.ACTIONS, DeviceRole.fromWire("actions"))
+        assertEquals(DeviceRole.FRAME, DeviceRole.fromWire("frame"))
+        assertEquals("frame", DeviceRole.FRAME.wire)
         assertNull(DeviceRole.fromWire("bogus"))
         assertNull(DeviceRole.fromWire(null))
     }
@@ -50,6 +52,16 @@ class DeviceRoleTest {
         assertEquals(video, deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.6.0", video).video)
         assertNull(deviceInfoFor(DeviceRole.ACTIONS, 800, "Tab", "0.6.0", video).video)
         assertNull(deviceInfoFor(DeviceRole.SCREEN, 800, "Tab", "0.6.0").video)
+    }
+
+    @Test
+    fun deviceInfoForTheFrameRoleHasNoVideoCaps() {
+        val video = com.orizonx.client.protocol.VideoCaps(2104, 1312, 60)
+        val bytes = FrameWriter.encode(deviceInfoFor(DeviceRole.FRAME, 800, "Tab", "0.8.0", video))
+        assertEquals(
+            """{"role":"frame","kind":"tablet","name":"Tab","app":"0.8.0"}""",
+            String(bytes, 8, bytes.size - 8, Charsets.UTF_8),
+        )
     }
 
     @Test

@@ -13,6 +13,11 @@ MAX_PAYLOAD = 16 * 1024 * 1024
 MAX_JSON = 64 * 1024  # largest JSON payload (DEVICE_INFO, ACTION, ACTIONS_STATE)
 MAX_ARTWORK = 512 * 1024  # largest MEDIA_ARTWORK payload (id length byte + id + image)
 MAX_ARTWORK_ID = 255
+MAX_FRAME_CHUNK = 1024 * 1024  # largest data part of one FRAME_FILE
+FRAME_KIND_IMAGE = 1  # FRAME_FILE kind: JPEG image
+FRAME_KIND_VIDEO = 2  # FRAME_FILE kind: video, as is
+FRAME_STATUSES = ("ok", "no_folder", "empty", "unreadable")
+FRAME_FITS = ("crop", "fit")
 HEADER = struct.Struct(">BBHI")
 
 # PC -> tablet
@@ -21,6 +26,8 @@ VIDEO = 0x02
 PONG = 0x03
 ACTIONS_STATE = 0x04
 MEDIA_ARTWORK = 0x05
+FRAME_STATE = 0x06
+FRAME_FILE = 0x07
 # tablet -> PC
 HELLO = 0x81
 PING = 0x82
@@ -50,6 +57,9 @@ _HELLO = struct.Struct(">4sHHHH")
 _STATS = struct.Struct(">HIIII")
 _INPUT_HEAD = struct.Struct(">BB")
 _CONTACT = struct.Struct(">BBHHHbb")
+_FRAME_FILE_HEAD = struct.Struct(">IIBQQ")  # epoch, id, kind, total, offset: 25 bytes before the data
+_U32_MAX = 0xFFFF_FFFF
+_U64_MAX = 0xFFFF_FFFF_FFFF_FFFF
 
 
 class ProtocolError(Exception):
@@ -186,6 +196,53 @@ def encode_media_artwork(artwork_id: str, image: bytes) -> bytes:
     if size > MAX_ARTWORK:
         raise ValueError(f"MEDIA_ARTWORK too large: {size} bytes (max {MAX_ARTWORK})")
     return _frame(MEDIA_ARTWORK, 0, bytes([len(raw_id)]) + raw_id + image)
+
+
+def _uint(name: str, value: object, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
+        raise ValueError(f"{name} must be an integer in 0..{maximum}, not {value!r}")
+    return value
+
+
+def encode_frame_state(epoch: int, status: str, folder: str | None, interval_s: int, fit: str, paused: bool) -> bytes:
+    """Frames the Frame mode settings and status as compact UTF-8 JSON, keys in the documented order.
+
+    ValueError for a field that is out of its domain, or a payload over MAX_JSON."""
+    _uint("FRAME_STATE epoch", epoch, _U32_MAX)
+    if status not in FRAME_STATUSES:
+        raise ValueError(f"FRAME_STATE status must be one of {FRAME_STATUSES}, not {status!r}")
+    if folder is not None and not isinstance(folder, str):
+        raise ValueError(f"FRAME_STATE folder must be a str or None, not {type(folder).__name__}")
+    if isinstance(interval_s, bool) or not isinstance(interval_s, int) or interval_s < 1:
+        raise ValueError(f"FRAME_STATE interval_s must be a positive integer, not {interval_s!r}")
+    if fit not in FRAME_FITS:
+        raise ValueError(f"FRAME_STATE fit must be one of {FRAME_FITS}, not {fit!r}")
+    if not isinstance(paused, bool):
+        raise ValueError(f"FRAME_STATE paused must be a bool, not {paused!r}")
+    state = {"epoch": epoch, "status": status, "folder": folder, "interval_s": interval_s, "fit": fit, "paused": paused}
+    payload = json.dumps(state, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if len(payload) > MAX_JSON:
+        raise ValueError(f"FRAME_STATE too large: {len(payload)} bytes (max {MAX_JSON})")
+    return _frame(FRAME_STATE, 0, payload)
+
+
+def encode_frame_file(epoch: int, file_id: int, kind: int, total: int, offset: int, data: bytes) -> bytes:
+    """Frames one chunk of a Frame mode file: payload = u32 epoch, u32 id, u8 kind, u64 total, u64 offset, the data.
+
+    ValueError for a kind other than 1 (JPEG image) or 2 (video), data that is not 1..MAX_FRAME_CHUNK bytes,
+    a chunk running past `total`, or a number outside its field."""
+    _uint("FRAME_FILE epoch", epoch, _U32_MAX)
+    _uint("FRAME_FILE id", file_id, _U32_MAX)
+    if isinstance(kind, bool) or not isinstance(kind, int) or kind not in (FRAME_KIND_IMAGE, FRAME_KIND_VIDEO):
+        raise ValueError(f"FRAME_FILE kind must be 1 (image) or 2 (video), not {kind!r}")
+    _uint("FRAME_FILE total", total, _U64_MAX)
+    _uint("FRAME_FILE offset", offset, _U64_MAX)
+    data = bytes(data)
+    if not 1 <= len(data) <= MAX_FRAME_CHUNK:
+        raise ValueError(f"FRAME_FILE data is {len(data)} bytes (1..{MAX_FRAME_CHUNK})")
+    if offset + len(data) > total:
+        raise ValueError(f"FRAME_FILE chunk {offset}+{len(data)} runs past the total of {total}")
+    return _frame(FRAME_FILE, 0, _FRAME_FILE_HEAD.pack(epoch, file_id, kind, total, offset) + data)
 
 
 def decode_payload(msg_type: int, payload: bytes) -> TabletMessage | None:

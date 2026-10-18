@@ -16,6 +16,14 @@ object Protocol {
 
     /** Largest MEDIA_ARTWORK payload: id length byte + id + raw image (JPEG or PNG). */
     const val MAX_ARTWORK = 512 * 1024
+
+    /** Largest data part of one FRAME_FILE. */
+    const val MAX_FRAME_CHUNK = 1024 * 1024
+
+    /** FRAME_FILE header before the data: epoch u32, id u32, kind u8, total u64, offset u64. */
+    const val FRAME_FILE_HEADER_SIZE = 25
+    const val FRAME_KIND_IMAGE = 1
+    const val FRAME_KIND_VIDEO = 2
     val MAGIC: ByteArray = "TABX".toByteArray(Charsets.US_ASCII)
 
     // PC -> tablet
@@ -24,6 +32,8 @@ object Protocol {
     const val TYPE_PONG = 0x03
     const val TYPE_ACTIONS_STATE = 0x04
     const val TYPE_MEDIA_ARTWORK = 0x05
+    const val TYPE_FRAME_STATE = 0x06
+    const val TYPE_FRAME_FILE = 0x07
 
     // tablet -> PC
     const val TYPE_HELLO = 0x81
@@ -73,6 +83,48 @@ sealed interface PcMessage {
     }
 
     data class Pong(val tTabUs: Long, val tPcUs: Long) : PcMessage
+
+    /**
+     * Frame mode settings and status (FRAME_STATE). [epoch] is a u32; [status] is "ok", "no_folder", "empty" or
+     * "unreadable" (anything else read as "unreadable"); [fit] is "crop" or "fit" (anything else read as "crop").
+     */
+    data class FrameState(
+        val epoch: Long,
+        val status: String,
+        val folder: String?,
+        val intervalS: Int,
+        val fit: String,
+        val paused: Boolean,
+    ) : PcMessage
+
+    /**
+     * One chunk of a Frame mode file (FRAME_FILE). [epoch] and [id] are u32, [kind] is [Protocol.FRAME_KIND_IMAGE]
+     * or [Protocol.FRAME_KIND_VIDEO]; [total] and [offset] are in bytes and the chunk always fits in [total].
+     */
+    class FrameFile(
+        val epoch: Long,
+        val id: Long,
+        val kind: Int,
+        val total: Long,
+        val offset: Long,
+        val data: ByteArray,
+    ) : PcMessage {
+        override fun equals(other: Any?): Boolean =
+            other is FrameFile && other.epoch == epoch && other.id == id && other.kind == kind &&
+                other.total == total && other.offset == offset && other.data.contentEquals(data)
+
+        override fun hashCode(): Int {
+            var h = epoch.hashCode()
+            h = 31 * h + id.hashCode()
+            h = 31 * h + kind
+            h = 31 * h + total.hashCode()
+            h = 31 * h + offset.hashCode()
+            return 31 * h + data.contentHashCode()
+        }
+
+        override fun toString(): String =
+            "FrameFile(epoch=$epoch, id=$id, kind=$kind, total=$total, offset=$offset, data=${data.size} bytes)"
+    }
 }
 
 /** The complete Actions state broadcast by the PC (ACTIONS_STATE, JSON). Parsing into a model is up to the UI layer. */

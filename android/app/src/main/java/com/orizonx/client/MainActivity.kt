@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
     private fun applyOrientation(role: DeviceRole) {
         requestedOrientation = when (role) {
             DeviceRole.SCREEN -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            DeviceRole.ACTIONS -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            DeviceRole.ACTIONS, DeviceRole.FRAME -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
         }
     }
 
