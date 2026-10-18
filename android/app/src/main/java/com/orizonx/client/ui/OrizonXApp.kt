@@ -84,7 +84,7 @@ fun OrizonXApp(
                 FrameScreen(model.frame, onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) })
             }
 
-            if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp))
+            if (streaming) HudLayer(model, Modifier.align(Alignment.TopEnd).padding(16.dp), onRoleChosen)
             GestureHint(streaming, model.streamGeneration, Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp))
         }
     }
@@ -92,10 +92,10 @@ fun OrizonXApp(
 
 /** Own restart scope: the per-second HUD updates don't recompose the root. */
 @Composable
-private fun HudLayer(model: UiModel, modifier: Modifier) {
+private fun HudLayer(model: UiModel, modifier: Modifier, onRoleChosen: (DeviceRole) -> Unit) {
     val hud = model.hud
     if (model.hudVisible && hud != null) {
-        HudOverlay(hud, modifier.windowInsetsPadding(WindowInsets.displayCutout))
+        HudOverlay(hud, modifier.windowInsetsPadding(WindowInsets.displayCutout), onRoleChosen)
     }
 }
 

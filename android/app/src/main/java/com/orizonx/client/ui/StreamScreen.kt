@@ -3,11 +3,19 @@ package com.orizonx.client.ui
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.orizonx.client.DeviceRole
 import androidx.compose.ui.viewinterop.AndroidView
 import com.orizonx.client.HudData
 import com.orizonx.client.i18n.S
@@ -39,12 +47,21 @@ fun VideoSurface(
 }
 
 @Composable
-fun HudOverlay(hud: HudData, modifier: Modifier = Modifier) {
+fun HudOverlay(hud: HudData, modifier: Modifier = Modifier, onRoleChosen: (DeviceRole) -> Unit = {}) {
+    // Les boutons sont cliquables : ils prennent leurs taps, le reste du panneau laisse passer le tactile vers le PC.
+    var choosing by remember { mutableStateOf(false) }
     GlassPanel(modifier) {
         GlassText("${hud.fps} fps", size = 12.sp, mono = true)
         GlassText(tr(S.HUD_LATENCY, "avg" to "%.1f".format(hud.avgMs), "max" to "%.1f".format(hud.maxMs)), size = 12.sp, mono = true)
         GlassText("p50 ${hud.p50Ms} / p99 ${hud.p99Ms} ms", size = 12.sp, mono = true)
         GlassText(hud.offsetMs?.let { tr(S.HUD_OFFSET, "value" to "%+.1f".format(it)) } ?: tr(S.HUD_OFFSET_SYNC), size = 12.sp, mono = true)
         GlassText(hud.decoder, size = 11.sp, alpha = 0.7f, mono = true)
+        Pill(tr(S.SWITCH_MODE), selected = choosing, onClick = { choosing = !choosing }, modifier = Modifier.padding(top = 8.dp))
+        if (choosing) {
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill(tr(S.ROLE_ACTIONS), selected = false, onClick = { onRoleChosen(DeviceRole.ACTIONS) })
+                Pill(tr(S.ROLE_FRAME), selected = false, onClick = { onRoleChosen(DeviceRole.FRAME) })
+            }
+        }
     }
 }
