@@ -30,18 +30,18 @@
 
 1. Copie `OrizonX.apk` sur l'appareil.
 2. Ouvre le fichier. Android demande d'**autoriser l'installation d'applications inconnues** pour l'application que tu utilises (Fichiers, Chrome…) : autorise-la, puis installe l'APK.
-3. Active le **débogage USB** (étapes génériques ; les menus varient selon la marque, des guides par marque suivront) :
-   1. Paramètres → À propos → Informations sur le logiciel.
-   2. Tape **7 fois** sur « Numéro de version » : le mode développeur s'active.
-   3. Reviens dans Paramètres → **Options de développement** → active **Débogage USB**.
-4. Branche l'appareil au PC avec un câble USB-C **qui transmet des données** (pas un câble de charge seul).
-5. Accepte la fenêtre « **Autoriser le débogage USB ?** » sur l'appareil (coche « Toujours autoriser » pour ne plus la revoir).
+3. Ouvre **Orizon X** sur l'appareil : son **guide de connexion** donne les menus exacts de la marque (Samsung, Xiaomi, Pixel, OnePlus/Oppo/Realme, Huawei, Honor, Motorola, Lenovo, Sony, Nothing, ou un guide générique) et coche chaque étape en direct :
+   1. activer les **options pour les développeurs** (tape **7 fois** sur « Numéro de version » ; le bouton du guide ouvre le bon écran) ;
+   2. activer le **débogage USB** ;
+   3. brancher l'appareil au PC avec un câble USB-C **qui transmet des données** (pas un câble de charge seul) ;
+   4. si l'appareil demande « **Autoriser le débogage USB ?** », cocher « Toujours autoriser » et accepter (une seule fois par PC).
+4. L'app est en anglais ou en français selon la langue de l'appareil ; le bouton **Auto / EN / FR** en haut à droite force l'une ou l'autre.
 
 L'ordre de lancement n'a pas d'importance : le PC attend l'appareil, et l'appareil attend le PC.
 
 ## Utilisation
 
-Ouvre Orizon X sur le PC, puis sur l'appareil. L'appareil affiche un écran d'attente avec deux gros boutons, **Screen** et **Actions**, pour choisir son rôle. Le rôle est mémorisé. Par défaut : Screen sur tablette, Actions sur téléphone. Changer de rôle pendant une connexion la ferme et la rouvre aussitôt.
+Ouvre Orizon X sur le PC, puis sur l'appareil. L'appareil affiche un écran d'attente avec trois gros boutons, **Screen**, **Actions** et **Frame** (Tableau), pour choisir son rôle. Le rôle est mémorisé. Par défaut : Screen sur tablette, Actions sur téléphone. Changer de rôle pendant une connexion la ferme et la rouvre aussitôt.
 
 ### Mode Écran (Screen)
 
@@ -65,7 +65,7 @@ L'appareil devient un écran en plus.
 - **Tactile et stylet** : le doigt et le S Pen pilotent Windows à l'endroit touché.
   - Doigt : tap = clic, appui long = clic droit, défilement et zoom à deux doigts. Trois doigts au plus sont transmis.
   - S Pen : survol = curseur, encre avec pression et inclinaison, bouton latéral = clic droit. Tant que le stylet est détecté, la paume est ignorée.
-- **HUD** : un **appui long à 4 doigts** (2 s, sans bouger) affiche ou masque les infos de connexion (fps, latence envoi→affichage, décodeur). Ce geste n'existe pas en mode Actions.
+- **HUD** : un **appui long à 4 doigts** (2 s, sans bouger) affiche ou masque les infos de connexion (fps, latence envoi→affichage, décodeur) et le bouton **Changer de mode** (vers Actions ou Tableau). Ce geste n'existe que dans le mode Écran.
 
 ### Mode Actions
 
@@ -78,6 +78,15 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
 - **Luminosité**.
 - **Wi-Fi** (avec barres de signal), **Bluetooth** et **mode avion**.
 - **Clés et disques USB** : **Ouvrir** dans l'Explorateur, **Éjecter** proprement. Si l'éjection est refusée (clé utilisée), un message le dit.
+
+### Mode Tableau (Frame)
+
+L'appareil fait défiler, comme un cadre photo, les images (JPG, PNG, WebP, BMP, GIF) et les vidéos (MP4, MOV, WebM, MKV en H.264, H.265, VP8 ou VP9) d'un dossier du PC, sous-dossiers compris, en ordre aléatoire.
+
+- **Réglages dans le groupe Frame de la fenêtre Orizon X** : **Folder** (bouton Choose…), **Interval** des images (5 s à 1 h) et **Display** : **Crop** (remplit l'écran, bords coupés) ou **Fit** (image entière, bandes noires).
+- Les vidéos sont lues jusqu'au bout, sans le son. Les autres formats sont ignorés (ligne dans le journal).
+- **Un tap sur l'appareil** affiche une barre : pause/lecture, suivant, Crop/Fit, intervalle −/+, et Changer de mode. Les changements sont enregistrés sur le PC.
+- Les photos de téléphone sont redressées (orientation EXIF).
 
 ### Fenêtre, zone de notification, quitter
 
