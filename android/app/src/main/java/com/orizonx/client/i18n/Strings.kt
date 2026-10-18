@@ -156,7 +156,7 @@ object Strings {
         S.SETUP_STEP_1 to t("Turn on developer options: tap 7 times on “Build number”.", "Active les options pour les développeurs : tape 7 fois sur « Numéro de version »."),
         S.SETUP_STEP_2 to t("Turn on USB debugging.", "Active le débogage USB."),
         S.SETUP_STEP_3 to t("Plug in a USB cable that carries data.", "Branche un câble USB qui transmet des données."),
-        S.SETUP_STEP_4 to t("Accept “Allow USB debugging?” and tick “Always allow”.", "Accepte « Autoriser le débogage USB ? » et coche « Toujours autoriser »."),
+        S.SETUP_STEP_4 to t("If the device asks “Allow USB debugging?”, tick “Always allow” and accept. It only asks once per PC.", "Si l’appareil demande « Autoriser le débogage USB ? », coche « Toujours autoriser » et accepte. Il ne le demande qu’une fois par PC."),
         S.SETUP_STEP_5 to t("Open Orizon X on the PC.", "Ouvre Orizon X sur le PC."),
         S.SETUP_TIP_SEARCH to t("Tip: search “build” in Settings.", "Astuce : cherche « numéro » dans la barre de recherche des Paramètres."),
         S.SETUP_OPEN_ABOUT to t("Open About", "Ouvrir À propos"),
