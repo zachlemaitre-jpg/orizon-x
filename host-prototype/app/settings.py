@@ -6,12 +6,15 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from frame.session import INTERVALS
 from messages import LANGUAGES
 
 ENCODERS = ("auto", "nvenc", "amf", "qsv", "x264")
 MODES = ("extend", "duplicate")  # Extend : écran virtuel ; Duplicate : écran principal
 POSITIONS = ("right", "left", "above", "below")  # côté de l'écran principal où se place l'écran virtuel
 SCALES = ("auto", "100", "125", "150", "175", "200", "225", "250")  # "auto" : selon la densité de la tablette
+FRAME_INTERVALS = INTERVALS  # secondes par image du Tableau : 5 s .. 1 h
+FRAME_FITS = ("crop", "fit")  # Crop remplit l'écran, Fit montre l'image entière
 
 
 @dataclass
@@ -26,6 +29,9 @@ class Settings:
     applied_scale: str | None = None
     first_close_hint_shown: bool = False  # bulle « Orizon X tourne toujours » déjà montrée
     language: str | None = None  # None : la langue choisie à l'installation (registre), sinon l'anglais
+    frame_folder: str | None = None  # dossier montré par un appareil en rôle Tableau ; None : aucun
+    frame_interval_s: int = 30
+    frame_fit: str = "crop"
 
 
 def default_path() -> Path:
@@ -62,6 +68,15 @@ def load(path: Path) -> Settings:
     language = raw.get("language")
     if language in LANGUAGES:
         result.language = language
+    folder = raw.get("frame_folder")
+    if isinstance(folder, str) and folder:
+        result.frame_folder = folder
+    interval = raw.get("frame_interval_s")
+    if isinstance(interval, int) and not isinstance(interval, bool) and interval in FRAME_INTERVALS:
+        result.frame_interval_s = interval
+    fit = raw.get("frame_fit")
+    if isinstance(fit, str) and fit in FRAME_FITS:
+        result.frame_fit = fit
     return result
 
 

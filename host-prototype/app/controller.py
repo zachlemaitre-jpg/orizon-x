@@ -21,6 +21,8 @@ class Engine(Protocol):
 
     def relayout(self, position: str, scale: str) -> bool: ...
 
+    def set_frame_config(self, folder: str | None, interval_s: int, fit: str) -> None: ...
+
 
 EngineFactory = Callable[[Config, Listener], Engine]
 
@@ -48,6 +50,9 @@ class _EngineListener:
     def on_display(self, info: DisplayInfo) -> None:
         self._controller._forward(self._generation, self._controller.on_display, info)
 
+    def on_frame_settings(self, interval_s: int, fit: str, paused: bool) -> None:
+        self._controller._forward(self._generation, self._controller.on_frame_settings, interval_s, fit, paused)
+
 
 class Controller(QObject):
     """Re-emits the current engine's Listener callbacks (received through _EngineListener) as Qt signals.
@@ -59,6 +64,7 @@ class Controller(QObject):
     log = Signal(str)
     stats = Signal(object)
     display_changed = Signal(object)  # DisplayInfo : écran virtuel de la session, une fois allumé
+    frame_settings_changed = Signal(int, str, bool)  # (intervalle, affichage, pause) changés sur l'appareil
 
     def __init__(self, factory: EngineFactory, config: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -71,6 +77,7 @@ class Controller(QObject):
         self._restarts: list[threading.Thread] = []  # redémarrages en cours, attendus par stop_blocking
         self._relayout_worker: threading.Thread | None = None  # fil qui envoie position/échelle au moteur
         self._relayout_pending = False  # une valeur plus récente que la dernière envoyée attend ce fil
+        self._frame_config: tuple[str | None, int, str] | None = None  # (dossier, intervalle, affichage) du Tableau
         # RLock : un signal émis depuis le thread Qt appelle ses slots tout de suite, et ils peuvent relancer une commande.
         self._lock = threading.RLock()
         self.state = State.STOPPED
@@ -98,6 +105,9 @@ class Controller(QObject):
 
     def on_display(self, info: DisplayInfo) -> None:
         self.display_changed.emit(info)
+
+    def on_frame_settings(self, interval_s: int, fit: str, paused: bool) -> None:
+        self.frame_settings_changed.emit(interval_s, fit, paused)
 
     def _forward(self, generation: int, emit: Callable[..., None], *args: object) -> None:
         # Vérification et émission sous le verrou : aucun nouveau moteur ne peut naître entre les deux.
@@ -183,6 +193,14 @@ class Controller(QObject):
         worker.start()
         return worker
 
+    def set_frame_config(self, folder: str | None, interval_s: int, fit: str) -> None:
+        """The Frame settings: kept for the next engines and handed to the running one (which only queues them)."""
+        with self._lock:
+            self._frame_config = (folder, interval_s, fit)
+            engine = self._engine
+        if engine is not None:
+            engine.set_frame_config(folder, interval_s, fit)
+
     def _relayout_loop(self) -> None:
         while True:
             with self._lock:
@@ -204,4 +222,6 @@ class Controller(QObject):
             self._engine = None
             self.on_state(State.ERROR, e.msg if isinstance(e, MessageError) else msg("error.unexpected", error=str(e)))
             return
+        if self._frame_config is not None:
+            self._engine.set_frame_config(*self._frame_config)  # avant le démarrage : la 1re session Tableau l'a déjà
         self._engine.start()

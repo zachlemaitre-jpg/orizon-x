@@ -202,6 +202,31 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: Sett
         keeper.update(**{name: value})
         controller.relayout(keeper.get("position"), keeper.get("scale"))
 
+    def apply_frame_config() -> None:
+        """The saved Frame settings go to the controller, which hands them to the running engine and the next ones."""
+        controller.set_frame_config(keeper.get("frame_folder"), keeper.get("frame_interval_s"),
+                                    keeper.get("frame_fit"))
+
+    def on_frame_folder(folder: str) -> None:
+        keeper.update(frame_folder=folder)
+        window.set_frame_folder(folder)
+        apply_frame_config()
+
+    def on_frame_interval(value: int) -> None:
+        keeper.update(frame_interval_s=value)
+        apply_frame_config()
+
+    def on_frame_fit(value: str) -> None:
+        keeper.update(frame_fit=value)
+        apply_frame_config()
+
+    def on_frame_settings_from_device(interval_s: int, fit: str, paused: bool) -> None:
+        """The device changed a Frame setting (Qt thread): saved and shown. The pause is never saved."""
+        keeper.update(frame_interval_s=interval_s, frame_fit=fit)
+        window.set_frame_interval(interval_s)
+        window.set_frame_fit(fit)
+        apply_frame_config()
+
     def on_language(lang: str) -> None:
         keeper.update(language=lang)  # choix explicite : il prime désormais sur celui de l'installateur
         i18n.set_language(lang)  # textes réappliqués tout de suite ; le flux continue
@@ -293,6 +318,10 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: Sett
     window.scale_changed.connect(lambda value: on_layout("scale", value))
     window.encoder_changed.connect(on_encoder)
     window.language_chosen.connect(on_language)
+    window.frame_folder_chosen.connect(on_frame_folder)
+    window.frame_interval_changed.connect(on_frame_interval)
+    window.frame_fit_changed.connect(on_frame_fit)
+    controller.frame_settings_changed.connect(on_frame_settings_from_device)
     window.primary_clicked.connect(on_toggle)
     window.quit_clicked.connect(on_quit)
     window.use_duplicate_clicked.connect(on_use_duplicate)
@@ -305,6 +334,7 @@ def wire(*, controller: Controller, window: MainWindow, tray: Tray, keeper: Sett
     tray.open_log_requested.connect(lambda: os.startfile(log_path))
     tray.autostart_toggled.connect(on_autostart)
     tray.quit_requested.connect(on_quit)
+    apply_frame_config()  # avant le premier démarrage : la première session Tableau a déjà les réglages enregistrés
 
 
 def refresh_autostart() -> None:
@@ -383,6 +413,9 @@ def main(argv: list[str] | None = None) -> int:
     window.set_position(current.position)
     window.set_scale(current.scale)
     window.set_encoder(current.encoder)
+    window.set_frame_folder(current.frame_folder)
+    window.set_frame_interval(current.frame_interval_s)
+    window.set_frame_fit(current.frame_fit)
     tray = Tray(logo, autostart_supported=autostart.supported(),
                 autostart_enabled=autostart.supported() and autostart.is_enabled())
     # Invite UAC de « Résolution exacte » rattachée à la fenêtre : au premier plan, pas un bouton qui clignote.

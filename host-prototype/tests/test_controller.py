@@ -30,6 +30,7 @@ class FakeEngine:
         self.announced = threading.Event()  # premier état transmis au listener
         self.stop_calls = []  # valeur de immediate_display_release à chaque stop()
         self.relayouts = []
+        self.frame_configs = []  # (dossier, intervalle, affichage) reçus, dans l'ordre
         FakeEngine.instances.append(self)
 
     def start(self):
@@ -56,6 +57,9 @@ class FakeEngine:
     def relayout(self, position, scale):
         self.relayouts.append((position, scale))
         return True
+
+    def set_frame_config(self, folder, interval_s, fit):
+        self.frame_configs.append((folder, interval_s, fit))
 
 
 def pump_until(predicate, timeout=3.0):
@@ -271,6 +275,55 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(self.controller.config, Config(position="below", scale="auto"))
         self.controller.start()
         self.assertEqual(FakeEngine.instances[0].config.position, "below")
+
+    def test_frame_config_reaches_the_running_engine(self):
+        self.controller.start()
+        self.controller.set_frame_config("D:\\Photos", 60, "fit")
+        self.controller.set_frame_config(None, 5, "crop")
+        self.assertEqual(FakeEngine.instances[0].frame_configs, [("D:\\Photos", 60, "fit"), (None, 5, "crop")])
+
+    def test_frame_config_is_given_to_the_next_engines_before_they_start(self):
+        self.controller.set_frame_config("D:\\Photos", 900, "fit")  # aucun moteur encore
+        started_with = []
+
+        class Recording(FakeEngine):
+            def start(self):
+                started_with.append(list(self.frame_configs))  # ce que le moteur sait au moment de son démarrage
+                super().start()
+
+        controller = Controller(Recording, Config())
+        controller.set_frame_config("D:\\Photos", 900, "fit")
+        controller.start()
+        controller.restart(Config(encoder="amf")).join(2)
+        self.assertEqual(started_with, [[("D:\\Photos", 900, "fit")], [("D:\\Photos", 900, "fit")]])
+
+    def test_an_engine_without_a_frame_config_is_not_told_one(self):
+        self.controller.start()
+        self.assertEqual(FakeEngine.instances[0].frame_configs, [])
+
+    def test_frame_settings_from_the_device_arrive_on_the_qt_thread(self):
+        received = []
+        self.controller.frame_settings_changed.connect(
+            lambda interval, fit, paused: received.append((interval, fit, paused, threading.current_thread())))
+        self.controller.start()
+        threading.Thread(target=FakeEngine.instances[0].listener.on_frame_settings, args=(300, "fit", True)).start()
+        pump_until(lambda: received)
+        self.assertEqual(received, [(300, "fit", True, threading.main_thread())])
+
+    def test_frame_settings_from_a_replaced_engine_are_ignored(self):
+        received = []
+        self.controller.frame_settings_changed.connect(lambda *args: received.append(args))
+        self.controller.start()
+        old_listener = FakeEngine.instances[0].listener
+        self.controller.restart(Config(encoder="amf")).join(2)
+        old_listener.on_frame_settings(5, "fit", False)
+        FakeEngine.instances[1].listener.on_frame_settings(10, "crop", True)
+        pump_until(lambda: received)
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        self.assertEqual(received, [(10, "crop", True)])
 
     def test_stop_during_a_restart_cancels_the_new_engine(self):
         self.controller.start()

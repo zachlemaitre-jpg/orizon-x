@@ -14,6 +14,7 @@ from unittest import mock
 import dxgi_outputs
 import engine
 import protocol
+from frame.session import FrameConfig
 import tools
 from inputstate import Rect
 from messages import msg
@@ -334,6 +335,50 @@ class FakeHubs:
         return self.created[0]
 
 
+class FakeFrameSession:
+    """frame.session.FrameSession stand-in: records start/stop, the frame.* actions and the configs it is given."""
+
+    def __init__(self, args, handle_error=None):
+        (self.send_state, self.send_file_chunk, self.log, self.config, self.screen, self.ffmpeg,
+         self.listener) = args
+        self.handle_error = handle_error
+        self.handled = []
+        self.configs = []
+        self.started = threading.Event()
+        self.stopped = threading.Event()
+
+    def start(self):
+        self.started.set()
+
+    def stop(self):
+        self.stopped.set()
+
+    def handle(self, action):
+        self.handled.append(action)
+        if self.handle_error is not None:
+            raise self.handle_error
+
+    def set_config(self, folder, interval_s, fit):
+        self.configs.append((folder, interval_s, fit))
+
+
+class FakeFrameSessions:
+    """Deps.frame_session_factory stand-in: one FakeFrameSession per Frame session."""
+
+    def __init__(self, handle_error=None):
+        self.handle_error = handle_error
+        self.created = []
+
+    def __call__(self, *args):
+        session = FakeFrameSession(args, self.handle_error)
+        self.created.append(session)
+        return session
+
+    def first(self, timeout=5.0):
+        wait_until(lambda: self.created, timeout)
+        return self.created[0]
+
+
 PRIMARY = Rect(0, 0, 2560, 1600)
 VDD_RECT = Rect(2560, 0, 2880, 1800)
 
@@ -450,11 +495,17 @@ class Recorder:
         self.logs = []
         self.stats = []
         self.displays = []
+        self.frame_settings = []
         self._cond = threading.Condition()
 
     def on_display(self, info):
         with self._cond:
             self.displays.append(info)
+            self._cond.notify_all()
+
+    def on_frame_settings(self, interval_s, fit, paused):
+        with self._cond:
+            self.frame_settings.append((interval_s, fit, paused))
             self._cond.notify_all()
 
     def on_state(self, state, detail):
@@ -508,11 +559,12 @@ def dxgi_list(*names, adapter=0):
 
 def make_engine(test, run=None, popen=None, connect=None, injectors=None, config=engine.Config(encoder="amf"),
                 recorder=None, monitors=None, dxgi=no_dxgi, retry_delay_s=0.0, hubs=None,
-                device_info_timeout_s=0.05, **engine_args):
+                device_info_timeout_s=0.05, frames=None, **engine_args):
     """engine_args: display, first_time, on_layout_applied (RelayEngine keywords).
 
     dxgi: Deps.list_outputs; the default fails, so the screen is found by probing ddagrab (FakeRun.outputs).
     hubs: Deps.actions_hub_factory (a FakeHubs by default: no test ever builds the real providers).
+    frames: Deps.frame_session_factory (a FakeFrameSessions by default: no test builds the real session).
     device_info_timeout_s: short by default, so that sessions without DEVICE_INFO (screen role) start quickly.
     """
     recorder = recorder or Recorder()
@@ -527,6 +579,7 @@ def make_engine(test, run=None, popen=None, connect=None, injectors=None, config
         poll_s=0.01,
         retry_delay_s=retry_delay_s,
         actions_hub_factory=hubs or FakeHubs(),
+        frame_session_factory=frames or FakeFrameSessions(),
         device_info_timeout_s=device_info_timeout_s,
     )
     relay = engine.RelayEngine(config, recorder, ffmpeg="ffmpeg.exe", adb="adb.exe", deps=deps, **engine_args)
@@ -1914,6 +1967,325 @@ class DeviceRoleTest(unittest.TestCase):
         rec.wait_for(lambda: rec.last_state() is State.WAITING_APP, timeout=5.0)
         self.assertEqual(popen.calls, [])
         self.assertEqual(hubs.created, [])
+
+
+class FrameRoleTest(unittest.TestCase):
+    """Role frame: a Frame session (no virtual screen, no ffmpeg, no injector); frame.* actions go to it."""
+
+    EXTEND = DeviceRoleTest.EXTEND
+
+    def frame_engine(self, frames=None, after_hello=None, listener=None, **kwargs):
+        connect = FakeConnect(after_hello=device_info_frame(role="frame", kind="tablet", name="Galaxy Tab")
+                              if after_hello is None else after_hello)
+        display, popen, injectors = FakeDisplay(), FakePopen(live), FakeInjectors()
+        frames = frames or FakeFrameSessions()
+        run = FakeRun(outputs=((0, (2560, 1600)),))
+        relay, rec = make_engine(self, run=run, popen=popen, connect=connect, injectors=injectors, config=self.EXTEND,
+                                 display=display, frames=frames, device_info_timeout_s=5.0, recorder=listener,
+                                 **kwargs)
+        relay.start()
+        return relay, rec, connect, frames, display, popen, injectors, run
+
+    def test_default_factory_builds_a_frame_session(self):
+        from frame.session import FrameConfig, FrameSession
+
+        session = engine.Deps().frame_session_factory(lambda *a: None, lambda *a: None, lambda line: None,
+                                                      FrameConfig("D:\\Photos", 60, "fit"), (2880, 1800), "ffmpeg.exe")
+        self.assertIsInstance(session, FrameSession)
+        self.assertEqual(session._screen, (2880, 1800))
+        self.assertEqual((session._folder, session._interval_s, session._fit), ("D:\\Photos", 60, "fit"))
+
+    def test_the_session_gets_the_hello_screen_size_the_config_and_ffmpeg(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        self.assertTrue(session.started.wait(5))
+        self.assertEqual(session.screen, (2880, 1800))  # HELLO of FakeTablet
+        self.assertEqual(session.ffmpeg, "ffmpeg.exe")
+        self.assertEqual(session.config, FrameConfig())  # nothing set: no folder, 30 s, crop
+        self.assertTrue(callable(session.send_state) and callable(session.send_file_chunk) and callable(session.log))
+        self.assertIsNotNone(session.listener)
+        self.assertEqual(len(frames.created), 1)
+
+    def test_state_and_log_line(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        rec.wait_state(State.FRAME)
+        self.assertEqual(rec.states[-1], (State.FRAME, msg("state.frame", name="Galaxy Tab")))
+        self.assertIn("Device role: frame (Galaxy Tab, tablet)", rec.logs)
+        self.assertTrue(relay.is_running())
+
+    def test_frame_role_never_touches_display_ffmpeg_or_injector(self):
+        relay, rec, connect, frames, display, popen, injectors, run = self.frame_engine()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        down = protocol.CONTACT_CONTACT | protocol.CONTACT_IN_RANGE
+        tablet.send(touch_frame((0, down, 10, 10, 0, 0, 0)))
+        tablet.send(keyframe_request_frame())
+        tablet.send(stats_frame())
+        tablet.send(ping_frame(7))
+        tablet.next_message(protocol.PONG)
+        self.assertEqual(display.calls, [])
+        self.assertEqual(popen.calls, [])
+        self.assertEqual(injectors.created, [])
+        self.assertEqual(ddagrab_probes(run), [])
+        seen = [s for s, _ in rec.states]
+        self.assertNotIn(State.PREPARING_DISPLAY, seen)
+        self.assertNotIn(State.STREAMING, seen)
+        self.assertNotIn(State.ACTIONS, seen)
+
+    def test_frame_actions_are_routed_to_the_session(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        tablet.send(action_frame(id="frame.next"))
+        tablet.send(action_frame(id="frame.pause", paused=True))
+        tablet.send(action_frame(id="frame.fit", fit="fit"))
+        tablet.send(action_frame(id="frame.interval", interval_s=300))
+        tablet.send(action_frame(id="frame.failed", file=4))
+        wait_until(lambda: len(session.handled) == 5)
+        self.assertEqual(session.handled, [{"id": "frame.next"}, {"id": "frame.pause", "paused": True},
+                                           {"id": "frame.fit", "fit": "fit"},
+                                           {"id": "frame.interval", "interval_s": 300},
+                                           {"id": "frame.failed", "file": 4}])
+
+    def test_other_actions_are_not_for_the_frame_session(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        tablet.send(action_frame(id="volume.set", value=0.1))
+        tablet.send(action_frame(id="volume.set", value=0.2))
+        tablet.send(ping_frame(1))
+        tablet.next_message(protocol.PONG)
+        self.assertEqual(session.handled, [])
+        self.assertEqual([line for line in rec.logs if line.startswith("ACTION ignored")],
+                         ["ACTION ignored: not an Actions session"])
+
+    def test_frame_actions_outside_a_frame_session_are_ignored_once(self):
+        hubs = FakeHubs()
+        connect = FakeConnect(after_hello=device_info_frame())  # role actions
+        relay, rec = make_engine(self, connect=connect, hubs=hubs, device_info_timeout_s=5.0)
+        relay.start()
+        hub = hubs.first()
+        rec.wait_state(State.ACTIONS)
+        tablet = first_tablet(connect)
+        tablet.send(action_frame(id="frame.next"))
+        tablet.send(action_frame(id="frame.next"))
+        tablet.send(action_frame(id="volume.set", value=0.5))
+        wait_until(lambda: len(hub.handled) == 1)
+        self.assertEqual(hub.handled, [{"id": "volume.set", "value": 0.5}])  # the hub never sees frame.*
+        self.assertEqual([line for line in rec.logs if line.startswith("ACTION ignored")],
+                         ["ACTION ignored: not a Frame session"])
+
+    def test_frame_action_in_a_screen_session_is_ignored(self):
+        connect, frames = FakeConnect(), FakeFrameSessions()
+        relay, rec = make_engine(self, connect=connect, frames=frames)
+        relay.start()
+        tablet = first_tablet(connect)
+        tablet.next_message(protocol.CONFIG)
+        tablet.send(action_frame(id="frame.next"))
+        tablet.send(ping_frame(1))
+        tablet.next_message(protocol.PONG)
+        self.assertEqual(frames.created, [])
+        self.assertIn("ACTION ignored: not a Frame session", rec.logs)
+        self.assertIs(rec.last_state(), State.STREAMING)
+
+    def test_a_failing_session_never_kills_the_reader(self):
+        frames = FakeFrameSessions(handle_error=RuntimeError("session en panne"))
+        relay, rec, connect, frames, *_ = self.frame_engine(frames=frames)
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        tablet.send(action_frame(id="frame.next"))
+        tablet.send(action_frame(id="frame.next"))
+        wait_until(lambda: len(session.handled) == 2)
+        tablet.send(ping_frame(99))
+        _type, _flags, payload = tablet.next_message(protocol.PONG)
+        self.assertEqual(protocol._PONG.unpack(payload)[0], 99)
+        self.assertEqual([line for line in rec.logs if line.startswith("Frame: action failed")],
+                         ["Frame: action failed: session en panne"])  # once per session
+        self.assertIs(rec.last_state(), State.FRAME)
+
+    def test_the_session_sends_frame_state_and_frame_file_to_the_device(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        session.send_state(3, "ok", "Photos", 30, "crop", False)
+        _type, flags, payload = tablet.next_message(protocol.FRAME_STATE)
+        self.assertEqual(flags, 0)
+        self.assertEqual(payload, protocol.encode_frame_state(3, "ok", "Photos", 30, "crop", False)[protocol.HEADER.size:])
+        session.send_file_chunk(3, 7, 1, 10, 5, bytes([6, 7, 8, 9, 10]))
+        _type, flags, payload = tablet.next_message(protocol.FRAME_FILE)
+        self.assertEqual(flags, 0)
+        self.assertEqual(payload, protocol.encode_frame_file(3, 7, 1, 10, 5, bytes([6, 7, 8, 9, 10]))[protocol.HEADER.size:])
+
+    def test_send_errors_go_back_to_the_session(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        with self.assertRaises(ValueError):
+            session.send_state(3, "weird", None, 30, "crop", False)
+        with self.assertRaises(ValueError):
+            session.send_file_chunk(3, 7, 9, 10, 0, b"x")  # unknown kind
+        with self.assertRaises(ValueError):
+            session.send_file_chunk(3, 7, 1, 10, 0, b"")
+        session.send_state(3, "empty", None, 30, "crop", False)  # the connection is still usable
+        tablet.next_message(protocol.FRAME_STATE)
+
+    def test_set_frame_config_before_the_session_is_the_sessions_config(self):
+        connect = FakeConnect(after_hello=device_info_frame(role="frame"))
+        frames = FakeFrameSessions()
+        relay, rec = make_engine(self, connect=connect, frames=frames, device_info_timeout_s=5.0)
+        relay.set_frame_config("D:\\Photos", 900, "fit")
+        relay.start()
+        session = frames.first()
+        self.assertEqual(session.config, FrameConfig("D:\\Photos", 900, "fit"))
+        self.assertEqual(session.configs, [])  # given at creation, not again
+
+    def test_set_frame_config_reaches_the_live_session_and_the_next_one(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        first = frames.first()
+        rec.wait_state(State.FRAME)
+        relay.set_frame_config("D:\\Photos", 60, "fit")
+        relay.set_frame_config(None, 5, "crop")
+        self.assertEqual(first.configs, [("D:\\Photos", 60, "fit"), (None, 5, "crop")])
+        relay.set_frame_config("E:\\Clips", 300, "fit")
+        first_tablet(connect).leave()
+        self.assertTrue(first.stopped.wait(5))
+        relay.set_frame_config("E:\\Clips", 900, "crop")  # between two sessions: nothing to tell, only kept
+        self.assertEqual(len(first.configs), 3)
+        wait_until(lambda: len(frames.created) == 2)
+        self.assertEqual(frames.created[1].config, FrameConfig("E:\\Clips", 900, "crop"))
+
+    def test_an_empty_folder_setting_means_no_folder(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        relay.set_frame_config("", 30, "crop")
+        self.assertEqual(session.configs, [(None, 30, "crop")])
+
+    def test_settings_changed_on_the_device_reach_the_listener_and_are_remembered(self):
+        relay, rec, connect, frames, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        relay.set_frame_config("D:\\Photos", 30, "crop")
+        session.listener.on_frame_settings(900, "fit", True)
+        rec.wait_for(lambda: rec.frame_settings)
+        self.assertEqual(rec.frame_settings, [(900, "fit", True)])
+        first_tablet(connect).leave()
+        self.assertTrue(session.stopped.wait(5))
+        wait_until(lambda: len(frames.created) == 2)  # the same device comes back: new session, remembered settings
+        self.assertEqual(frames.created[1].config, FrameConfig("D:\\Photos", 900, "fit"))  # not the pause
+
+    def test_a_listener_without_on_frame_settings_is_fine(self):
+        listener = NoDisplayListener()
+        connect = FakeConnect(after_hello=device_info_frame(role="frame"))
+        frames = FakeFrameSessions()
+        relay, rec = make_engine(self, connect=connect, frames=frames, device_info_timeout_s=5.0,
+                                 recorder=listener)
+        relay.start()
+        session = frames.first()
+        listener.rec.wait_state(State.FRAME)
+        session.listener.on_frame_settings(300, "fit", False)
+        tablet = first_tablet(connect)
+        tablet.send(ping_frame(5))
+        tablet.next_message(protocol.PONG)
+        self.assertIs(listener.rec.last_state(), State.FRAME)
+
+    def test_stop_stops_the_session(self):
+        relay, rec, connect, frames, display, popen, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        tablet = first_tablet(connect)
+        started = time.monotonic()
+        relay.stop()
+        self.assertLess(time.monotonic() - started, engine.STOP_TIMEOUT_S)
+        self.assertFalse(relay.is_running())
+        self.assertTrue(session.stopped.is_set())
+        self.assertEqual(rec.states[-1], (State.STOPPED, msg("state.stopped")))
+        tablet.wait_closed()
+        self.assertEqual(display.calls, [])
+        self.assertEqual(popen.calls, [])
+        relay.set_frame_config("D:\\Photos", 30, "crop")  # nobody to tell any more: no error
+        self.assertEqual(session.configs, [])
+
+    def test_quit_in_a_frame_session_releases_no_display(self):
+        relay, rec, connect, frames, display, *_ = self.frame_engine()
+        rec.wait_state(State.FRAME)
+        relay.stop(immediate_display_release=True)
+        self.assertTrue(frames.created[0].stopped.is_set())
+        self.assertEqual(display.calls, [])
+
+    def test_tablet_leaving_stops_the_session_and_waits_again(self):
+        relay, rec, connect, frames, display, popen, *_ = self.frame_engine()
+        session = frames.first()
+        rec.wait_state(State.FRAME)
+        connect.refuse = True
+        first_tablet(connect).leave()
+        self.assertTrue(session.stopped.wait(5))
+        rec.wait_for(lambda: rec.last_state() is State.WAITING_APP)
+        self.assertTrue(relay.is_running())
+        self.assertEqual(display.calls, [])
+        self.assertEqual(popen.calls, [])
+
+    def test_a_failing_session_stop_is_logged_not_fatal(self):
+        class BadStop(FakeFrameSession):
+            def stop(self):
+                super().stop()
+                raise RuntimeError("stop raté")
+
+        class BadFrames(FakeFrameSessions):
+            def __call__(self, *args):
+                session = BadStop(args)
+                self.created.append(session)
+                return session
+
+        relay, rec, connect, frames, *_ = self.frame_engine(frames=BadFrames())
+        rec.wait_state(State.FRAME)
+        relay.stop()
+        self.assertIn("Frame: session stop failed: stop raté", rec.logs)
+        self.assertIs(rec.last_state(), State.STOPPED)
+
+    def test_the_real_session_sends_the_state_then_two_files_then_one_per_next(self):
+        import random
+        import tempfile
+        from frame.session import FrameSession
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        folder = Path(temp.name) / "Photos"
+        folder.mkdir()
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
+            (folder / name).write_bytes(b"x")
+
+        def factory(send_state, send_file_chunk, log, config, screen, ffmpeg, listener):
+            return FrameSession(send_state, send_file_chunk, log, config, screen, ffmpeg, listener,
+                                prepare_image=lambda path, size: b"JPEG-" + path.name.encode(),
+                                rng=random.Random(1))
+
+        connect = FakeConnect(after_hello=device_info_frame(role="frame", kind="tablet", name="Galaxy Tab"))
+        relay, rec = make_engine(self, connect=connect, frames=factory, device_info_timeout_s=5.0)
+        relay.set_frame_config(str(folder), 60, "fit")
+        relay.start()
+        tablet = first_tablet(connect)
+        _t, _f, payload = tablet.next_message(protocol.FRAME_STATE)
+        self.assertEqual(json.loads(payload), {"epoch": 1, "status": "ok", "folder": "Photos", "interval_s": 60,
+                                               "fit": "fit", "paused": False})
+        files = []
+        for _ in range(2):
+            _t, _f, payload = tablet.next_message(protocol.FRAME_FILE)
+            files.append(protocol._FRAME_FILE_HEAD.unpack(payload[:protocol._FRAME_FILE_HEAD.size]))
+        self.assertEqual([(f[0], f[1], f[2]) for f in files], [(1, 1, 1), (1, 2, 1)])
+        tablet.send(action_frame(id="frame.next"))
+        _t, _f, payload = tablet.next_message(protocol.FRAME_FILE)
+        self.assertEqual(protocol._FRAME_FILE_HEAD.unpack(payload[:protocol._FRAME_FILE_HEAD.size])[1], 3)
+        tablet.send(action_frame(id="frame.interval", interval_s=300))
+        _t, _f, payload = tablet.next_message(protocol.FRAME_STATE)
+        self.assertEqual(json.loads(payload)["interval_s"], 300)
+        rec.wait_for(lambda: rec.frame_settings == [(300, "fit", False)])
+        relay.stop()
+        tablet.wait_closed()
 
 
 def option(command, name):

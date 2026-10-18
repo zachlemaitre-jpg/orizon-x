@@ -39,6 +39,15 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(status.detail_for(State.ACTIONS, msg("state.actions", name="Pixel 8"), "fr"),
                          "Pixel 8 connecté")
 
+    def test_frame_is_an_active_green_state_with_the_device_name(self):
+        self.assertEqual(status.title(State.FRAME, "en"), "Frame device")
+        self.assertEqual(status.title(State.FRAME, "fr"), "Appareil Tableau")
+        self.assertEqual(status.COLORS[State.FRAME], status.COLORS[State.STREAMING])
+        self.assertTrue(status.is_active(State.FRAME))
+        self.assertEqual(status.primary_label(State.FRAME, "en"), "Stop")
+        self.assertEqual(status.detail_for(State.FRAME, msg("state.frame", name="Pixel 8"), "en"), "Pixel 8 connected")
+        self.assertEqual(status.detail_for(State.FRAME, msg("state.frame", name="Pixel 8"), "fr"), "Pixel 8 connecté")
+
     def test_primary_label(self):
         self.assertEqual(status.primary_label(State.STREAMING, "fr"), "Arrêter")
         self.assertEqual(status.primary_label(State.WAITING_DEVICE, "fr"), "Arrêter")

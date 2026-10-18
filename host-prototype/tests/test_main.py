@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import json
 import sys
 import tempfile
 import threading
@@ -277,6 +278,44 @@ class WireTest(unittest.TestCase):
             restart.assert_not_called()
         settle()
         self.assertEqual((first.stop_calls, first.relayouts, len(FakeEngine.instances)), ([], [], 1))
+
+    def test_wire_hands_the_saved_frame_settings_to_the_next_engine(self):
+        self.assertEqual(self.controller._frame_config, (None, 30, "crop"))
+        self.current.frame_folder, self.current.frame_interval_s, self.current.frame_fit = "D:\\Photos", 900, "fit"
+        controller = Controller(FakeEngine, self.keeper.config())
+        logo = QPixmap(64, 64)
+        logo.fill()
+        main.wire(controller=controller, window=MainWindow(logo), tray=self.tray, keeper=self.keeper,
+                  log_path=self.settings_path, quit_app=lambda: None)
+        controller.start()
+        pump_until(lambda: FakeEngine.instances)
+        self.assertEqual(FakeEngine.instances[-1].frame_configs, [("D:\\Photos", 900, "fit")])
+        controller.stop_blocking()
+
+    def test_choosing_a_frame_folder_saves_shows_and_tells_the_engine(self):
+        engine_ = self.start_engine()
+        self.window.frame_folder_chosen.emit("D:\\Photos")
+        self.assertEqual(self.window.frame_folder_text(), "D:\\Photos")
+        self.assertEqual(self.saved().frame_folder, "D:\\Photos")
+        self.assertEqual(engine_.frame_configs[-1], ("D:\\Photos", 30, "crop"))
+        self.assertEqual((len(FakeEngine.instances), engine_.stop_calls), (1, []))  # no restart
+
+    def test_frame_interval_and_fit_choices_are_saved_and_sent(self):
+        engine_ = self.start_engine()
+        self.window.choose("frame_interval", 300)
+        self.assertEqual((self.saved().frame_interval_s, engine_.frame_configs[-1]), (300, (None, 300, "crop")))
+        self.window.choose("frame_fit", "fit")
+        self.assertEqual((self.saved().frame_fit, engine_.frame_configs[-1]), ("fit", (None, 300, "fit")))
+        self.assertEqual(engine_.stop_calls, [])
+
+    def test_frame_settings_changed_on_the_device_are_saved_and_shown(self):
+        engine_ = self.start_engine()
+        threading.Thread(target=engine_.listener.on_frame_settings, args=(3600, "fit", True)).start()
+        pump_until(lambda: self.saved().frame_interval_s == 3600)
+        self.assertEqual(self.saved().frame_fit, "fit")
+        self.assertEqual((self.window.selected("frame_interval"), self.window.selected("frame_fit")), (3600, "fit"))
+        self.assertEqual(engine_.frame_configs[-1], (None, 3600, "fit"))
+        self.assertNotIn("paused", json.loads(self.settings_path.read_text(encoding="utf-8")))  # the pause is not saved
 
     def test_quit_hides_first_then_stops_without_the_close_hint(self):
         for quit_from in ("tray", "window"):

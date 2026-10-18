@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import tempfile
 import unittest
 
 HAVE_QT = importlib.util.find_spec("PySide6") is not None
@@ -64,6 +65,15 @@ class WindowTest(unittest.TestCase):
         i18n.set_language("en")
         self.assertEqual((self.window.title_text(), self.window.detail_text(), self.window.primary_text()),
                          ("Actions device", "Pixel 8 connected", "Stop"))
+
+    def test_frame_state_shows_the_device(self):
+        self.window.set_state(State.FRAME, msg("state.frame", name="Pixel 8"))
+        self.assertEqual(self.window.title_text(), "Appareil Tableau")
+        self.assertEqual(self.window.detail_text(), "Pixel 8 connecté")
+        self.assertEqual(self.window.primary_text(), "Arrêter")
+        self.assertTrue(self.window.primary_has_icon())
+        i18n.set_language("en")
+        self.assertEqual((self.window.title_text(), self.window.detail_text()), ("Frame device", "Pixel 8 connected"))
 
     def test_mode_items_have_icons_other_combos_none(self):
         self.assertTrue(self.window.combo_item_has_icon("mode", "extend"))
@@ -296,6 +306,147 @@ class WindowTest(unittest.TestCase):
         # Hors écran il n'y a pas de police système qui lui fasse concurrence : on vérifie donc la règle elle-même.
         from app.window import build_style
         self.assertIn('QLabel#brandTitle { font-family: "MAZAGLA";', build_style("MAZAGLA"))
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 absent")
+class FrameGroupTest(unittest.TestCase):
+    """The Frame group: folder (shortened path + Choose button), interval, display."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        i18n.set_language("fr")
+        self.addCleanup(i18n.set_language, "en")
+        self.picked = []  # (title, start folder) of each dialog
+        self.answer = ""  # what the fake dialog returns ("" = cancelled)
+        pixmap = QPixmap(32, 32)
+        pixmap.fill()
+        self.window = MainWindow(pixmap, pick_folder=self.fake_dialog)
+        self.addCleanup(self.window.deleteLater)
+        self.events = []
+        self.window.frame_folder_chosen.connect(lambda v: self.events.append(("folder", v)))
+        self.window.frame_interval_changed.connect(lambda v: self.events.append(("interval", v)))
+        self.window.frame_fit_changed.connect(lambda v: self.events.append(("fit", v)))
+
+    def fake_dialog(self, parent, title, start):
+        self.assertIs(parent, self.window)
+        self.picked.append((title, start))
+        return self.answer
+
+    def test_group_title_and_fields_in_order(self):
+        self.assertEqual(self.window.frame_group_title(), "Tableau")
+        self.assertEqual(self.window.frame_field_labels(), ["Dossier", "Intervalle", "Affichage"])
+        self.assertEqual(self.window.choose_folder_text(), "Choisir…")
+        i18n.set_language("en")
+        self.assertEqual(self.window.frame_group_title(), "Frame")
+        self.assertEqual(self.window.frame_field_labels(), ["Folder", "Interval", "Display"])
+        self.assertEqual(self.window.choose_folder_text(), "Choose…")
+
+    def test_the_existing_field_labels_are_unchanged(self):
+        self.assertEqual(self.window.field_labels(), ["Mode", "Position", "Échelle", "Encodeur", "Langue"])
+
+    def test_interval_and_display_choices(self):
+        self.assertEqual(self.window.combo_items("frame_interval"),
+                         [("5 s", 5), ("10 s", 10), ("30 s", 30), ("1 min", 60), ("5 min", 300), ("15 min", 900),
+                          ("1 h", 3600)])
+        self.assertEqual(self.window.combo_items("frame_fit"), [("Rogner", "crop"), ("Ajuster", "fit")])
+        i18n.set_language("en")
+        self.assertEqual(self.window.combo_items("frame_fit"), [("Crop", "crop"), ("Fit", "fit")])
+        self.assertEqual([label for label, _v in self.window.combo_items("frame_interval")],
+                         ["5 s", "10 s", "30 s", "1 min", "5 min", "15 min", "1 h"])
+
+    def test_defaults_shown(self):
+        self.assertEqual(self.window.selected("frame_interval"), 5)  # the first until the controller sets the saved one
+        self.window.set_frame_interval(30)
+        self.window.set_frame_fit("crop")
+        self.assertEqual((self.window.selected("frame_interval"), self.window.selected("frame_fit")), (30, "crop"))
+
+    def test_no_folder_placeholder_follows_the_language(self):
+        self.assertEqual(self.window.frame_folder_text(), "Aucun dossier")
+        i18n.set_language("en")
+        self.assertEqual(self.window.frame_folder_text(), "No folder")
+        self.window.set_frame_folder(None)
+        self.assertEqual(self.window.frame_folder_text(), "No folder")
+        self.window.set_frame_folder("")
+        self.assertEqual(self.window.frame_folder_text(), "No folder")
+
+    def test_a_folder_is_shown_and_kept_across_languages(self):
+        self.window.set_frame_folder("D:\\Photos")
+        self.assertEqual(self.window.frame_folder_text(), "D:\\Photos")
+        i18n.set_language("en")
+        self.assertEqual(self.window.frame_folder_text(), "D:\\Photos")
+        self.window.set_frame_folder(None)
+        self.assertEqual(self.window.frame_folder_text(), "No folder")
+
+    def test_a_long_path_is_shortened_in_the_middle_and_fully_in_the_tooltip(self):
+        path = "C:\\Users\\zach\\Pictures\\Vacances 2026\\Corse\\Tres longues photos de famille"
+        self.window.show()
+        self.window.set_frame_folder(path)
+        QCoreApplication.processEvents()
+        shown = self.window.frame_folder_display()
+        self.assertNotEqual(shown, path)
+        self.assertTrue("…" in shown or "..." in shown, shown)  # the ellipsis glyph depends on the font
+        self.assertTrue(shown.startswith("C:\\") and shown.endswith("famille"))
+        self.assertEqual(self.window.frame_folder_text(), path)
+        self.assertEqual(self.window._frame_path.toolTip(), path)
+        self.window.set_frame_folder("D:\\Photos")
+        self.assertEqual(self.window.frame_folder_display(), "D:\\Photos")
+
+    def test_setters_do_not_emit(self):
+        self.window.set_frame_folder("D:\\Photos")
+        self.window.set_frame_interval(900)
+        self.window.set_frame_fit("fit")
+        self.assertEqual((self.window.selected("frame_interval"), self.window.selected("frame_fit")), (900, "fit"))
+        self.assertEqual(self.events, [])
+
+    def test_user_choices_emit(self):
+        self.window.choose("frame_interval", 3600)
+        self.window.choose("frame_fit", "fit")
+        self.window.choose("frame_interval", 5)
+        self.assertEqual(self.events, [("interval", 3600), ("fit", "fit"), ("interval", 5)])
+
+    def test_choose_button_opens_the_dialog_and_emits_the_folder(self):
+        self.answer = "D:/Photos/Été"  # Qt gives forward slashes
+        self.window.click_choose_folder()
+        self.assertEqual(self.events, [("folder", os.path.normpath("D:/Photos/Été"))])
+        self.assertEqual(self.picked, [("Choisir le dossier à afficher sur l'appareil", "")])
+
+    def test_dialog_title_follows_the_language(self):
+        i18n.set_language("en")
+        self.window.click_choose_folder()
+        self.assertEqual(self.picked[0][0], "Choose the folder to show on the device")
+
+    def test_a_cancelled_dialog_emits_nothing(self):
+        self.window.click_choose_folder()
+        self.assertEqual(len(self.picked), 1)
+        self.assertEqual(self.events, [])
+
+    def test_the_dialog_starts_in_the_current_folder_when_it_exists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.window.set_frame_folder(folder)
+            self.window.click_choose_folder()
+            self.window.set_frame_folder(os.path.join(folder, "gone"))
+            self.window.click_choose_folder()
+        self.assertEqual([start for _title, start in self.picked], [folder, ""])
+
+    def test_the_group_fits_in_the_window(self):
+        self.window.show()
+        QCoreApplication.processEvents()
+        for widget in (self.window._frame_title, self.window._frame_path, self.window._choose_folder,
+                       self.window._combos["frame_interval"], self.window._combos["frame_fit"]):
+            self.assertTrue(widget.isVisible())
+            bottom = widget.mapTo(self.window, widget.rect().bottomRight()).y()
+            self.assertLess(bottom, self.window.height() - 20, widget)
+        def left(widget):
+            return widget.mapTo(self.window, widget.rect().topLeft()).x()
+
+        labels = [label for label, _key in self.window._frame_field_labels]
+        self.assertEqual(len({left(label) for label in labels}), 1)
+        self.assertEqual(left(labels[0]), left(self.window._labels_by_combo["mode"]))  # same column as Mode
+        self.assertEqual(left(self.window._combos["frame_interval"]), left(self.window._combos["mode"]))
+        self.assertEqual(left(self.window._combos["frame_fit"]), left(self.window._combos["mode"]))
 
 
 if __name__ == "__main__":

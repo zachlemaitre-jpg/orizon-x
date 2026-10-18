@@ -100,6 +100,44 @@ class SettingsTest(unittest.TestCase):
             self.path.write_text(json.dumps({"language": raw}), encoding="utf-8")
             self.assertEqual(settings.load(self.path).language, expected, raw)
 
+    def test_frame_defaults(self):
+        defaults = settings.Settings()
+        self.assertEqual((defaults.frame_folder, defaults.frame_interval_s, defaults.frame_fit), (None, 30, "crop"))
+        self.assertEqual(settings.FRAME_INTERVALS, (5, 10, 30, 60, 300, 900, 3600))
+        self.assertEqual(settings.FRAME_FITS, ("crop", "fit"))
+
+    def test_frame_settings_round_trip(self):
+        saved = settings.Settings(frame_folder="D:\\Photos", frame_interval_s=900, frame_fit="fit")
+        settings.save(saved, self.path)
+        self.assertEqual(settings.load(self.path), saved)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["frame_interval_s"], 900)
+
+    def test_frame_settings_are_validated_one_by_one(self):
+        self.path.parent.mkdir(parents=True)
+        for interval in (5, 10, 30, 60, 300, 900, 3600):
+            self.path.write_text(json.dumps({"frame_interval_s": interval}), encoding="utf-8")
+            self.assertEqual(settings.load(self.path).frame_interval_s, interval)
+        for bad_interval in (7, 0, -30, "30", 30.0, None, True, [30]):
+            self.path.write_text(json.dumps({"frame_interval_s": bad_interval, "frame_fit": "fit"}), encoding="utf-8")
+            loaded = settings.load(self.path)
+            self.assertEqual((loaded.frame_interval_s, loaded.frame_fit), (30, "fit"), bad_interval)
+        for bad_fit in ("stretch", "Crop", 1, None, True):
+            self.path.write_text(json.dumps({"frame_fit": bad_fit, "frame_interval_s": 60}), encoding="utf-8")
+            loaded = settings.load(self.path)
+            self.assertEqual((loaded.frame_fit, loaded.frame_interval_s), ("crop", 60), bad_fit)
+        for bad_folder in (5, True, ["D:\\x"], {}, ""):
+            self.path.write_text(json.dumps({"frame_folder": bad_folder, "frame_fit": "fit"}), encoding="utf-8")
+            loaded = settings.load(self.path)
+            self.assertEqual((loaded.frame_folder, loaded.frame_fit), (None, "fit"), bad_folder)
+        self.path.write_text(json.dumps({"frame_folder": "D:\\Photos"}), encoding="utf-8")
+        self.assertEqual(settings.load(self.path).frame_folder, "D:\\Photos")
+
+    def test_an_old_file_without_frame_settings_gets_the_defaults(self):
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(json.dumps({"encoder": "amf", "language": "fr"}), encoding="utf-8")
+        loaded = settings.load(self.path)
+        self.assertEqual((loaded.frame_folder, loaded.frame_interval_s, loaded.frame_fit), (None, 30, "crop"))
+
     def test_non_object_json_gives_defaults(self):
         self.path.parent.mkdir(parents=True)
         self.path.write_text("[1, 2]", encoding="utf-8")

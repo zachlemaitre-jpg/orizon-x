@@ -8,6 +8,10 @@ Deps.device_info_timeout_s, 1 s; none means role "screen") → by role:
 - "actions": an Actions session. The hub (Deps.actions_hub_factory, actions.hub.ActionsHub) polls the PC and sends
   ACTIONS_STATE (preceded by MEDIA_ARTWORK when the cover changes); the reader passes every ACTION to it. No virtual
   screen, no ffmpeg, no injector. State ACTIONS until the device leaves or stop(), then the hub stops.
+- "frame": a Frame session. The session (Deps.frame_session_factory, frame.session.FrameSession) sends FRAME_STATE and
+  FRAME_FILE chunks of a PC folder's images and videos; the reader passes it every "frame." ACTION, and
+  set_frame_config() hands it the folder, interval and display chosen in the app. No virtual screen, no ffmpeg
+  capture, no injector. State FRAME until the device leaves or stop(), then the session stops.
 - anything else: the screen session below.
 
 Screen session: screen choice → ffmpeg. In Extend mode with a
@@ -41,6 +45,7 @@ import dxgi_outputs
 import injector
 import protocol
 import tools
+from frame.session import FrameConfig, FrameSession
 from inputstate import Rect
 from messages import MessageError, Msg, msg
 
@@ -52,6 +57,7 @@ class State(Enum):
     PREPARING_DISPLAY = "preparing_display"  # tablette connectée, écran virtuel en cours d'allumage
     STREAMING = "streaming"
     ACTIONS = "actions"  # appareil en rôle Actions : contrôles du PC, sans vidéo ni écran virtuel
+    FRAME = "frame"  # appareil en rôle Tableau : diaporama d'un dossier du PC, sans vidéo ni écran virtuel
     ERROR = "error"  # fatal : le moteur s'est arrêté
 
 
@@ -112,7 +118,8 @@ class Listener(Protocol):
     `detail` is a Msg the listener translates (the CLI in English, the app in its language); log lines are English.
 
     Optional: `on_display(info: DisplayInfo)`, called once per session when the virtual screen is on (Extend mode
-    with a display). A listener without it is fine.
+    with a display), and `on_frame_settings(interval_s: int, fit: str, paused: bool)`, called when the device changes
+    a Frame setting. A listener without them is fine.
     """
 
     def on_state(self, state: State, detail: Msg) -> None: ...
@@ -174,6 +181,7 @@ DEVICE_INFO_TIMEOUT_S = 1.0  # attente de DEVICE_INFO après le HELLO ; au-delà
 ACTIONS_WAIT_SLICE_S = 0.25  # la session Actions vérifie stop() à ce rythme (stop() ferme aussi le socket)
 ROLE_SCREEN = "screen"
 ROLE_ACTIONS = "actions"
+ROLE_FRAME = "frame"
 
 PREPARING_DETAIL = msg("state.preparing_capture")
 PREPARING_DISPLAY_DETAIL = msg("state.preparing_display")
@@ -492,6 +500,25 @@ def default_actions_hub(send: Callable[[dict], None], log: Callable[[str], None]
     return _ActionsHub(default_providers(log, lang=lang), send, send_artwork=send_artwork, log=log)
 
 
+class FrameSessionLike(Protocol):
+    """What the engine needs from frame.session.FrameSession."""
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def handle(self, action: dict) -> None: ...  # depuis le lecteur de la tablette : ne doit pas bloquer
+
+    def set_config(self, folder: str | None, interval_s: int, fit: str) -> None: ...
+
+
+def default_frame_session(send_state: Callable[..., None], send_file_chunk: Callable[..., None],
+                          log: Callable[[str], None], config: FrameConfig, screen: tuple[int, int], ffmpeg: str,
+                          listener: Any = None) -> FrameSessionLike:
+    """The real Frame session (it imports Qt only when it prepares an image)."""
+    return FrameSession(send_state, send_file_chunk, log, config, screen, ffmpeg, listener)
+
+
 @dataclass
 class Deps:
     """Everything the engine touches outside Python; tests swap in fakes."""
@@ -505,9 +532,23 @@ class Deps:
     # (send(state dict), log, send_artwork(id, image)) -> hub d'une session Actions ; send encode et envoie un
     # ACTIONS_STATE, send_artwork un MEDIA_ARTWORK (sous le même verrou d'envoi)
     actions_hub_factory: Callable[..., ActionsHub] = default_actions_hub
+    # (send_state(epoch, status, folder, interval_s, fit, paused), send_file_chunk(epoch, id, kind, total, offset,
+    # data), log, FrameConfig, screen (width, height), ffmpeg, listener) -> session d'un appareil en rôle Tableau ;
+    # les deux envois encodent un FRAME_STATE / FRAME_FILE sous le verrou d'envoi
+    frame_session_factory: Callable[..., FrameSessionLike] = default_frame_session
     poll_s: float = 1.0
     retry_delay_s: float = RETRY_DELAY_S
     device_info_timeout_s: float = DEVICE_INFO_TIMEOUT_S
+
+
+class _FrameSettingsListener:
+    """What a Frame session calls when the device changes a setting: remembered by the engine, then the listener."""
+
+    def __init__(self, relay: RelayEngine) -> None:
+        self._relay = relay
+
+    def on_frame_settings(self, interval_s: int, fit: str, paused: bool) -> None:
+        self._relay._frame_settings_from_device(interval_s, fit, paused)
 
 
 @dataclass
@@ -568,6 +609,10 @@ class RelayEngine:
         self._state = State.STOPPED
         self._detail: Msg | None = None
         self._last_encoder_line: str | None = None
+        # Réglages du Tableau (fenêtre) et session en cours, changés sous _frame_lock.
+        self._frame_lock = threading.Lock()
+        self._frame_config = FrameConfig()
+        self._frame_session: FrameSessionLike | None = None
 
     @property
     def state(self) -> State:
@@ -631,6 +676,25 @@ class RelayEngine:
         with self._layout_lock:
             self._config = dataclasses.replace(self._config, position=position, scale=scale)
         return self._apply_latest_layout()
+
+    def set_frame_config(self, folder: str | None, interval_s: int, fit: str) -> None:
+        """The user's Frame settings (folder, seconds per image, "crop" or "fit"). Thread-safe, never blocks.
+
+        Kept for the sessions to come and applied at once to the Frame session in progress, if there is one.
+        """
+        with self._frame_lock:
+            self._frame_config = FrameConfig(folder or None, interval_s, fit)
+            session = self._frame_session
+            if session is not None:
+                session.set_config(folder or None, interval_s, fit)
+
+    def _frame_settings_from_device(self, interval_s: int, fit: str, paused: bool) -> None:
+        """The device changed the interval, the display or the pause: remembered, then told to the listener."""
+        with self._frame_lock:
+            self._frame_config = dataclasses.replace(self._frame_config, interval_s=interval_s, fit=fit)
+        on_frame_settings = getattr(self._listener, "on_frame_settings", None)
+        if on_frame_settings is not None:
+            self._notify(on_frame_settings, interval_s, fit, paused)
 
     def _apply_latest_layout(self) -> bool:
         """Brings the session's screen to the latest position/scale; True if it is there now."""
@@ -953,6 +1017,19 @@ class RelayEngine:
             with send_lock:
                 sock.sendall(data)
 
+        def send_frame_state(epoch: int, status: str, folder: str | None, interval_s: int, fit: str,
+                             paused: bool) -> None:
+            """Called by the Frame session (its own thread); its errors (ValueError, OSError) go back to it."""
+            data = protocol.encode_frame_state(epoch, status, folder, interval_s, fit, paused)
+            with send_lock:
+                sock.sendall(data)
+
+        def send_frame_file(epoch: int, file_id: int, kind: int, total: int, offset: int, chunk: bytes) -> None:
+            """Called by the Frame session, once per chunk; the lock is held per chunk, so PINGs are answered between."""
+            data = protocol.encode_frame_file(epoch, file_id, kind, total, offset, chunk)
+            with send_lock:
+                sock.sendall(data)
+
         def send_media_artwork(artwork_id: str, image: bytes) -> None:
             """Called by the hub just before the state that references the cover; errors go back to the hub."""
             data = protocol.encode_media_artwork(artwork_id, image)
@@ -982,8 +1059,11 @@ class RelayEngine:
         device_info: protocol.DeviceInfo | None = None  # le premier DEVICE_INFO, s'il arrive avant le choix du rôle
         role_chosen = False  # posé sous device_lock : un DEVICE_INFO plus tardif est ignoré
         actions_hub: ActionsHub | None = None  # session Actions en cours : le lecteur lui passe les ACTION
+        frame_session: FrameSessionLike | None = None  # session Tableau en cours : le lecteur lui passe les frame.*
         action_failed = False  # un échec du hub n'est journalisé qu'une fois par session
         action_ignored = False  # ACTION hors session Actions : journalisé une fois
+        frame_failed = False  # un échec de la session Tableau n'est journalisé qu'une fois par session
+        frame_ignored = False  # frame.* hors session Tableau : journalisé une fois
 
         def restart_capture() -> None:
             """The virtual screen moved (relayout): ddagrab loses its duplication, so the capture starts again."""
@@ -1045,11 +1125,25 @@ class RelayEngine:
 
         def read_tablet() -> None:
             nonlocal keyframe_requests, input_failed, device_info, action_failed, action_ignored
+            nonlocal frame_failed, frame_ignored
             try:
                 while True:
                     message = protocol.read_message(rfile)
                     if isinstance(message, protocol.Ping):
                         send_pong(message.t_tab_us)
+                    elif isinstance(message, protocol.Action) and message.fields["id"].startswith("frame."):
+                        frame = frame_session
+                        if frame is None:
+                            if not frame_ignored:
+                                frame_ignored = True
+                                self._log("ACTION ignored: not a Frame session")
+                            continue
+                        try:
+                            frame.handle(message.fields)
+                        except Exception as e:  # noqa: BLE001 — le lecteur doit continuer à répondre aux PING
+                            if not frame_failed:
+                                frame_failed = True
+                                self._log(f"Frame: action failed: {e}")
                     elif isinstance(message, protocol.Action):
                         hub = actions_hub
                         if hub is None:
@@ -1114,6 +1208,7 @@ class RelayEngine:
         died = False  # MAX_FFMPEG_FAILURES captures de suite sans vidéo
         failures = 0
         actions_session = False
+        frame_role = False
         try:
             # L'appareil envoie DEVICE_INFO juste après le HELLO ; une ancienne app n'en envoie pas : rôle screen.
             timeout = self._deps.device_info_timeout_s
@@ -1125,7 +1220,7 @@ class RelayEngine:
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
             if info is None:
                 self._log(f"No DEVICE_INFO within {timeout:g} s: screen role")
-            elif info.role in (ROLE_SCREEN, ROLE_ACTIONS):
+            elif info.role in (ROLE_SCREEN, ROLE_ACTIONS, ROLE_FRAME):
                 self._log(f"Device role: {info.role} ({info.name}, {info.kind})")
             else:
                 self._log(f"Device role: {info.role} ({info.name}, {info.kind}): unknown, screen role used")
@@ -1145,6 +1240,28 @@ class RelayEngine:
                         hub.stop()
                     except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fin de la session
                         self._log(f"Actions: hub stop failed: {e}")
+                return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
+            if info is not None and info.role == ROLE_FRAME:
+                frame_role = True
+                with self._frame_lock:  # le même verrou que set_frame_config : aucun réglage ne passe entre les deux
+                    session = self._deps.frame_session_factory(
+                        send_frame_state, send_frame_file, self._log, self._frame_config,
+                        (hello.width, hello.height), self._ffmpeg, _FrameSettingsListener(self))
+                    self._frame_session = session
+                try:
+                    frame_session = session
+                    session.start()
+                    self._set_state(State.FRAME, msg("state.frame", name=info.name or info.kind))
+                    while not should_stop():  # la tablette part, ou stop() (qui ferme aussi le socket)
+                        disconnected.wait(ACTIONS_WAIT_SLICE_S)
+                finally:
+                    frame_session = None
+                    with self._frame_lock:
+                        self._frame_session = None
+                    try:
+                        session.stop()
+                    except Exception as e:  # noqa: BLE001 — ne doit jamais empêcher la fin de la session
+                        self._log(f"Frame: session stop failed: {e}")
                 return SessionResult(ffmpeg_died=False, sent_video=False, stderr_tail=[])
             video = info.video if info is not None else None
             self._log("Device video: not announced (native size)" if video is None
@@ -1258,8 +1375,8 @@ class RelayEngine:
             # Écran virtuel (prepare a été appelé, même s'il a échoué) : éteint après la grâce, annulée si la tablette
             # revient ; Quit (stop(immediate_display_release=True)) : éteint tout de suite, ici aussi, car stop() a
             # pu l'éteindre pendant qu'un appel Windows de prepare le rallumait (sans effet s'il est déjà éteint).
-            # Session Actions : l'écran virtuel n'a pas servi (celui d'une session précédente s'éteint après sa grâce).
-            if self._uses_display() and not actions_session:
+            # Session Actions ou Tableau : l'écran virtuel n'a pas servi (celui d'une session précédente s'éteint après sa grâce).
+            if self._uses_display() and not actions_session and not frame_role:
                 if self._immediate_release:
                     self._release_display(immediate=True)
                     self._immediate_release_done = True

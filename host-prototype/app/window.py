@@ -1,11 +1,13 @@
 """Main window: frameless frosted glass with status, settings, the start/stop button and Quit."""
 from __future__ import annotations
 
-from typing import Callable
+import os
+from typing import Any, Callable
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontInfo, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from app import brand, i18n, settings, status
 from app.i18n import tr
@@ -23,8 +25,10 @@ ENCODER_NAMES = {"amf": "AMF (AMD)", "nvenc": "NVENC (NVIDIA)", "qsv": "QuickSyn
 ENCODER_VALUES = ("auto", "amf", "nvenc", "qsv", "x264")
 LANGUAGE_ITEMS = (("English", "en"), ("Français", "fr"))  # chaque langue dans sa propre langue : jamais traduits
 VDD_MISSING_KEY = "display.vdd_missing"  # seule erreur qui propose « Passer en Dupliquer »
+FRAME_FIT_KEYS = {"crop": "window.frame_crop", "fit": "window.frame_fit"}
+LABEL_COLUMN_PX = 78  # même largeur de libellés dans les deux grilles de réglages : les listes s'alignent
 WIDTH = 360
-HEIGHT = 540  # 360 de large comme avant ; ~30 px de marge avec un bouton d'action visible
+HEIGHT = 670  # 360 de large comme avant ; ~30 px de marge avec un bouton d'action visible (groupe Tableau compris)
 RADIUS = 14.0
 
 STYLE_BASE = """
@@ -33,6 +37,10 @@ QLabel#title { font-size: 16px; font-weight: 600; }
 QLabel#detail { color: rgba(255, 255, 255, 160); font-size: 12px; }
 QLabel#field { color: rgba(255, 255, 255, 160); }
 QLabel#field:disabled { color: rgba(255, 255, 255, 70); }
+QLabel#group { color: rgba(255, 255, 255, 210); font-weight: 600; }
+QLabel#folderPath { background: rgba(255, 255, 255, 10); border: 1px solid rgba(255, 255, 255, 25);
+                    border-radius: 8px; padding: 5px 8px; }
+QLabel#folderPath[empty="true"] { color: rgba(255, 255, 255, 110); }
 QComboBox { background: rgba(255, 255, 255, 18); border: 1px solid rgba(255, 255, 255, 40); border-radius: 8px;
             padding: 5px 10px; }
 QComboBox:hover { border-color: rgba(255, 255, 255, 90); }
@@ -49,6 +57,9 @@ QPushButton#secondary { background: transparent; border: 1px solid rgba(255, 255
                         border-radius: 10px; padding: 8px; color: rgba(255, 255, 255, 200); }
 QPushButton#secondary:hover { background: rgba(255, 255, 255, 18); }
 QPushButton#secondary:pressed { background: rgba(255, 255, 255, 8); }
+QPushButton#choose { background: rgba(255, 255, 255, 18); border: 1px solid rgba(255, 255, 255, 40);
+                     border-radius: 8px; padding: 5px 12px; }
+QPushButton#choose:hover { background: rgba(255, 255, 255, 30); border-color: rgba(255, 255, 255, 90); }
 QPushButton#action { background: rgba(245, 181, 68, 40); border: 1px solid rgba(245, 181, 68, 150);
                      border-radius: 8px; padding: 5px 14px; }
 QPushButton#action:hover { background: rgba(245, 181, 68, 70); }
@@ -85,7 +96,7 @@ def _encoder_label(value: str, lang: str) -> str:
 class ChoiceCombo(QComboBox):
     """A list of setting values whose labels follow the language; activated = the user's choice."""
 
-    def __init__(self, values: tuple[str, ...], label: Callable[[str, str], str], parent: QWidget | None = None,
+    def __init__(self, values: tuple[Any, ...], label: Callable[[Any, str], str], parent: QWidget | None = None,
                  icons: dict[str, str] | None = None) -> None:
         super().__init__(parent)
         self._label = label
@@ -111,9 +122,49 @@ class ChoiceCombo(QComboBox):
         for i in range(self.count()):
             self.setItemText(i, self._label(self.itemData(i), lang))
 
-    def select(self, value: str) -> None:
+    def select(self, value: Any) -> None:
         """Shows `value` without emitting activated (that signal means a click)."""
         self.setCurrentIndex(max(0, self.findData(value)))
+
+
+class ElidedLabel(QLabel):
+    """A one-line label that shortens its text with an ellipsis in the middle to fit, whatever the width it gets."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # takes the room it is given
+
+    def set_full_text(self, text: str) -> None:
+        self._full = text
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def _elide(self) -> None:
+        available = max(0, self.width() - 2 * 8 - 2)  # the padding and border of the style
+        self.setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideMiddle, available))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._elide()
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(0, super().minimumSizeHint().height())
+
+
+def _pick_folder(parent: QWidget, title: str, start: str) -> str:
+    """The folder the user picks in the Windows dialog, or "" if they cancel."""
+    return QFileDialog.getExistingDirectory(parent, title, start)
+
+
+def _interval_label(value: int, lang: str) -> str:
+    if value % 3600 == 0:
+        return tr("window.interval_hours", lang, count=value // 3600)
+    if value % 60 == 0:
+        return tr("window.interval_minutes", lang, count=value // 60)
+    return tr("window.interval_seconds", lang, count=value)
 
 
 class StatusDot(QWidget):
@@ -156,9 +207,12 @@ class MainWindow(QWidget):
     use_duplicate_clicked = Signal()
     add_resolution_clicked = Signal(int, int)  # taille exacte de la tablette
     adjust_requested = Signal()  # « Régler dans Windows… »
+    frame_folder_chosen = Signal(str)  # dossier du Tableau choisi dans la boîte de dialogue
+    frame_interval_changed = Signal(int)
+    frame_fit_changed = Signal(str)
     closed_to_tray = Signal()
 
-    def __init__(self, logo: QPixmap) -> None:
+    def __init__(self, logo: QPixmap, pick_folder: Callable[[QWidget, str, str], str] = _pick_folder) -> None:
         # Réduire et menu système : sans eux, un clic sur l'icône de la barre des tâches ne réduit pas la fenêtre sans cadre.
         super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowSystemMenuHint)
@@ -174,6 +228,8 @@ class MainWindow(QWidget):
         self._stats: StreamStats | None = None  # dernières stats du flux en cours, gardées pour un changement de langue
         self._inexact_size: tuple[int, int] | None = None  # tablette sans mode exact dans cette session
         self._quitting = False
+        self._pick_folder = pick_folder  # remplaçable : les tests n'ouvrent pas de vraie boîte de dialogue
+        self._frame_folder: str | None = None
 
         bar = TitleBar(self)
         bar.setFixedHeight(40)
@@ -223,9 +279,12 @@ class MainWindow(QWidget):
             "encoder": ChoiceCombo(ENCODER_VALUES, _encoder_label, self),
             "language": ChoiceCombo(tuple(value for _name, value in LANGUAGE_ITEMS),
                                     lambda value, _lang: dict((v, n) for n, v in LANGUAGE_ITEMS)[value], self),
+            "frame_interval": ChoiceCombo(settings.FRAME_INTERVALS, _interval_label, self),
+            "frame_fit": ChoiceCombo(settings.FRAME_FITS, _keyed(FRAME_FIT_KEYS), self),
         }
         signals = {"mode": self.mode_changed, "position": self.position_changed, "scale": self.scale_changed,
-                   "encoder": self.encoder_changed, "language": self.language_chosen}
+                   "encoder": self.encoder_changed, "language": self.language_chosen,
+                   "frame_interval": self.frame_interval_changed, "frame_fit": self.frame_fit_changed}
         for name, combo in self._combos.items():
             combo.activated.connect(lambda _i, name=name: self._on_choice(name, signals[name]))
 
@@ -244,6 +303,36 @@ class MainWindow(QWidget):
             form.addWidget(label, row, 0)
             form.addWidget(self._combos[name], row, 1)
         form.setColumnStretch(1, 1)
+        form.setColumnMinimumWidth(0, LABEL_COLUMN_PX)
+
+        # Groupe « Tableau » : dossier (chemin raccourci + bouton), intervalle, affichage.
+        self._frame_title = QLabel(self)
+        self._frame_title.setObjectName("group")
+        self._frame_path = ElidedLabel(self)
+        self._frame_path.setObjectName("folderPath")
+        self._choose_folder = self._button("choose", self._on_choose_folder)
+        self._choose_folder.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+        folder_row.addWidget(self._frame_path, 1)
+        folder_row.addWidget(self._choose_folder)
+        frame_form = QGridLayout()
+        frame_form.setHorizontalSpacing(12)
+        frame_form.setVerticalSpacing(8)
+        self._frame_field_labels: list[tuple[QLabel, str]] = []
+        for row, (key, field) in enumerate((("window.frame_folder", folder_row),
+                                            ("window.frame_interval", self._combos["frame_interval"]),
+                                            ("window.frame_display", self._combos["frame_fit"]))):
+            label = QLabel(self)
+            label.setObjectName("field")
+            self._frame_field_labels.append((label, key))
+            frame_form.addWidget(label, row, 0)
+            if isinstance(field, QHBoxLayout):
+                frame_form.addLayout(field, row, 1)
+            else:
+                frame_form.addWidget(field, row, 1)
+        frame_form.setColumnStretch(1, 1)
+        frame_form.setColumnMinimumWidth(0, LABEL_COLUMN_PX)
 
         self._adjust = self._button("link", self.adjust_requested.emit)
         self._primary = self._button("primary", self.primary_clicked.emit)
@@ -275,6 +364,9 @@ class MainWindow(QWidget):
         link_row.addStretch(1)
         link_row.addWidget(self._adjust)
         body.addLayout(link_row)
+        body.addSpacing(4)
+        body.addWidget(self._frame_title)
+        body.addLayout(frame_form)
         body.addStretch(1)
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
@@ -328,8 +420,11 @@ class MainWindow(QWidget):
         lang = i18n.current_language()
         for button, key in self._tool_buttons:
             button.setToolTip(tr(key, lang))
-        for label, key in self._field_labels:
+        for label, key in self._field_labels + self._frame_field_labels:
             label.setText(tr(key, lang))
+        self._frame_title.setText(tr("window.frame_group", lang))
+        self._choose_folder.setText(tr("window.frame_choose", lang))
+        self._refresh_frame_folder()
         for combo in self._combos.values():
             combo.retranslate()
         self._combos["language"].select(lang)  # sans signal : activated = clic
@@ -404,6 +499,32 @@ class MainWindow(QWidget):
     def set_encoder(self, value: str) -> None:
         self._combos["encoder"].select(value)
 
+    def set_frame_folder(self, folder: str | None) -> None:
+        self._frame_folder = folder or None
+        self._refresh_frame_folder()
+
+    def set_frame_interval(self, value: int) -> None:
+        self._combos["frame_interval"].select(value)
+
+    def set_frame_fit(self, value: str) -> None:
+        self._combos["frame_fit"].select(value)
+
+    def _refresh_frame_folder(self) -> None:
+        empty = self._frame_folder is None
+        text = tr("window.frame_no_folder", i18n.current_language()) if empty else self._frame_folder
+        self._frame_path.set_full_text(text)
+        self._frame_path.setToolTip("" if empty else text)
+        self._frame_path.setProperty("empty", empty)
+        self._frame_path.style().unpolish(self._frame_path)  # la règle [empty="true"] suit le changement
+        self._frame_path.style().polish(self._frame_path)
+
+    def _on_choose_folder(self) -> None:
+        lang = i18n.current_language()
+        start = self._frame_folder if self._frame_folder and os.path.isdir(self._frame_folder) else ""
+        folder = self._pick_folder(self, tr("window.frame_choose_title", lang), start)
+        if folder:  # vide : la boîte a été annulée
+            self.frame_folder_chosen.emit(os.path.normpath(folder))
+
     def show_and_raise(self) -> None:
         self.showNormal()
         self.raise_()
@@ -449,6 +570,25 @@ class MainWindow(QWidget):
 
     def field_labels(self) -> list[str]:
         return [label.text() for label, _key in self._field_labels]
+
+    def frame_group_title(self) -> str:
+        return self._frame_title.text()
+
+    def frame_field_labels(self) -> list[str]:
+        return [label.text() for label, _key in self._frame_field_labels]
+
+    def frame_folder_text(self) -> str:
+        """The whole text of the folder field (the placeholder when none), not its shortened display."""
+        return self._frame_path.full_text()
+
+    def frame_folder_display(self) -> str:
+        return self._frame_path.text()
+
+    def choose_folder_text(self) -> str:
+        return self._choose_folder.text()
+
+    def click_choose_folder(self) -> None:
+        self._choose_folder.click()
 
     def tooltips(self) -> list[str]:
         return [button.toolTip() for button, _key in self._tool_buttons]
