@@ -94,15 +94,17 @@ Le bloc `context` décrit l'app au premier plan sur le PC et les boutons que la 
 
 ```json
 "context":{"available":true,"app":"PowerPoint","profile":"powerpoint",
-           "buttons":[{"id":"ppt.prev","icon":"arrow_left","label":"Précédent"}, …]}
+           "buttons":[{"id":"ppt.prev","icon":"arrow_left","label":"Précédent"}, …],
+           "pages":[{"id":"main","label":"Principal","buttons":[{"id":"ppt.prev","icon":"arrow_left","label":"Précédent"}, …]}]}
 ```
 
 - `available: false` (ou section absente) tant qu'aucune app n'a été vue : la barre est cachée.
-- `app` : le nom à afficher (chaîne non vide). `profile` : l'identifiant du profil (`spotify`, `powerpoint`, `browser`, `word`, `excel`, `vscode`, `explorer`, `generic`), informatif.
+- `app` : le nom à afficher (chaîne non vide). `profile` : l'identifiant du profil (`spotify`, `powerpoint`, `browser`, `word`, `excel`, `vscode`, `explorer`, `illustrator`, `photoshop`, `canva`, `figma`, `generic`), informatif.
 - `buttons` : au plus 8 éléments `{"id","icon","label"}`. `icon` est un nom d'icône connu de la tablette (un nom inconnu donne une icône neutre) ; `label` est dans la langue de l'appareil (`DEVICE_INFO.lang`, français par défaut), de même que `app` pour les noms qui varient (« Explorer » / « Explorateur »). Le raccourci clavier ne quitte jamais le PC.
+- `pages` : au plus 4 éléments `{"id","label","buttons"}`, chacun avec au plus 8 boutons (même forme que `buttons`) ; la tablette les affiche en onglets quand il y en a plus d'un. `label` est dans la langue de l'appareil. `pages` est toujours envoyé, même pour un profil d'une seule page (`main`, dont la tablette cache l'onglet), et `buttons` vaut la première page : une ancienne app qui ignore `pages` garde sa première page. Les `id` de boutons sont uniques dans un profil, toutes pages confondues. Les profils d'apps créatives (`illustrator`, `photoshop`, `canva`, `figma`) ont les pages `tools`, `edit`, `view` ; dans un navigateur, un titre de fenêtre qui contient « Canva » ou « Figma » (sans tenir compte de la casse) donne le profil `canva` ou `figma`. Les noms d'icônes se trouvent dans `ICON_NAMES` (`host-prototype/actions/context_profiles.py`).
 - Le bloc est relevé toutes les 250 ms avec l'audio ; un changement de profil est diffusé aussitôt (état complet).
 
-Action associée : `{"id":"context.press","button":"<id du bouton>"}`. Le PC regarde l'app au premier plan **à cet instant** et n'envoie le raccourci que si le bouton appartient à son profil ; sinon l'action est ignorée et journalisée (la tablette n'a pas encore redessiné sa barre). Un raccourci qui ne peut pas être injecté (app élevée au premier plan, touche absente de la disposition) donne un `notice` `{"code":"action_failed"}`.
+Action associée : `{"id":"context.press","button":"<id du bouton>"}`. Le PC regarde l'app au premier plan **à cet instant** et n'envoie le raccourci que si le bouton appartient à l'une des pages de son profil ; sinon l'action est ignorée et journalisée (la tablette n'a pas encore redessiné sa barre). Un raccourci qui ne peut pas être injecté (app élevée au premier plan, touche absente de la disposition) donne un `notice` `{"code":"action_failed"}`.
 
 Action `{"id":"context.lang","lang":"en"|"fr"}` : l'appareil change de langue pendant une session Actions. Le PC retraduit aussitôt la barre (état complet diffusé, comme après tout `ACTION`). Une valeur inconnue est ignorée et journalisée ; aucune `notice` n'est produite.
 

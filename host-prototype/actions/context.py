@@ -1,14 +1,15 @@
 """The context bar's provider (spec 2026-10-13 §3): the profile of the app in front on the PC, and its buttons.
 
-Snapshot: ``{"available": True, "app": <name>, "profile": <profile id>, "buttons": [{"id", "icon", "label"}]}``
-(the shortcuts stay on the PC), or ``{"available": False}`` while no app has been in front yet. Labels and the app
+Snapshot: ``{"available": True, "app": <name>, "profile": <profile id>, "buttons": [{"id", "icon", "label"}],
+"pages": [{"id", "label", "buttons": [{"id", "icon", "label"}]}]}`` (the shortcuts stay on the PC; ``buttons`` is the
+first page, for the apps that do not know ``pages``), or ``{"available": False}`` while no app has been in front yet. Labels and the app
 name are in the device's language (``lang``, "en" or "fr"; French when unknown).
 
 ``handle({"id": "context.lang", "lang": "en"})`` switches that language (an unknown value is ignored and logged); the
 hub re-polls after any handled action, so the translated bar is broadcast at once.
 
 ``handle({"id": "context.press", "button": <id>})`` looks at the app in front NOW, and presses the shortcut of the
-button only if that button belongs to its profile: when the foreground changed since the device drew its bar, the
+button only if that button belongs to a page of its profile: when the foreground changed since the device drew its bar, the
 action is ignored (and logged), never sent to the wrong app. A shortcut that cannot be injected (blocked by UIPI in
 front of an elevated app, a key the layout lacks) is ``action_failed``. Hub thread only.
 """
@@ -44,8 +45,13 @@ class ContextProvider:
             "available": True,
             "app": context_profiles.display_name(app, self.lang),
             "profile": profile.id,
-            "buttons": [{"id": b.id, "icon": b.icon, "label": b.label(self.lang)} for b in profile.buttons],
+            "buttons": self._buttons(profile.pages[0]),
+            "pages": [{"id": page.id, "label": page.label(self.lang), "buttons": self._buttons(page)}
+                      for page in profile.pages],
         }
+
+    def _buttons(self, page: context_profiles.Page) -> list:
+        return [{"id": b.id, "icon": b.icon, "label": b.label(self.lang)} for b in page.buttons]
 
     def handle(self, action: dict) -> Optional[str]:
         if action.get("id") == LANG_ID:
