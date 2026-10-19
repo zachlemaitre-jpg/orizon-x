@@ -5,7 +5,9 @@ must be finite JSON numbers (not bool, not text), ``dx``/``dy`` are clamped to +
 +-10, unknown button or gesture names and malformed actions are ignored and logged; nothing raises.
 
 * ``trackpad.move {dx, dy}``: a relative ``MOUSEEVENTF_MOVE`` (never ABSOLUTE: Windows applies its pointer speed and
-  acceleration as for a real mouse). The decimals are carried over, only whole pixels are sent;
+  acceleration as for a real mouse). The device's delta (dp x its own sensitivity setting) is multiplied by
+  ``MOVE_GAIN`` (2.0, the pad being small next to a screen) BEFORE the decimals are carried over; only whole pixels are
+  sent. The +-2000 clamp is on the delta received, before the gain;
 * ``trackpad.button {button: "left"|"right", down}``: LEFTDOWN/LEFTUP or RIGHTDOWN/RIGHTUP. The buttons that are down are
   tracked; an ``up`` of a button that is not down is ignored;
 * ``trackpad.scroll {dx, dy}``: the fingers' movement in dp (x to the right, y downwards, as for ``move``), sent as
@@ -52,6 +54,7 @@ WHEEL_DELTA = 120
 UNITS_PER_DP = 4
 MAX_DELTA = 2000.0
 MAX_STEPS = 10
+MOVE_GAIN = 2.0    # pixels of pointer movement per device pixel (dp x the device's sensitivity)
 WHEEL_SIGN = 1     # natural scrolling: fingers down (dy > 0) scroll up (WHEEL > 0)
 HWHEEL_SIGN = -1   # natural scrolling: fingers right (dx > 0) scroll left (HWHEEL < 0)
 
@@ -137,7 +140,7 @@ class TrackpadProvider:
             return self._refuse("move", action)
         out = []
         for i, value in enumerate((dx, dy)):
-            total = self._move_carry[i] + value
+            total = self._move_carry[i] + value * MOVE_GAIN
             whole = int(total)  # toward zero
             self._move_carry[i] = total - whole
             out.append(whole)

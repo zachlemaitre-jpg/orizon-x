@@ -1308,6 +1308,235 @@ class GamepadHubTest(unittest.TestCase):
         self.assertFalse(providers["gamepad"].is_open)
 
 
+class InputRecorder(FakeProvider):
+    """keyboard / trackpad / gamepad stand-in: records the actions and the thread that handled them."""
+
+    def __init__(self):
+        super().__init__({"available": True})
+        self.stops = 0
+
+    def stop(self):
+        self.stops += 1
+
+
+def wait_until(predicate, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.002)
+    return predicate()
+
+
+class InputCoalescingTest(unittest.TestCase):
+    """Input actions waiting in the queue are merged before they run (driven without the threads: the hub drains
+    its input queue itself when its input thread is not running)."""
+
+    def harness(self):
+        providers = make_providers()
+        for name in ("keyboard", "trackpad", "gamepad"):
+            providers[name] = InputRecorder()
+        return Harness(providers)
+
+    def run_all(self, h, *actions):
+        for a in actions:
+            h.hub.handle(a)
+        h.hub._tick(h.clock.t)
+        return h.providers["trackpad"].handled
+
+    def test_consecutive_moves_are_summed(self):
+        h = self.harness()
+        handled = self.run_all(h, *[{"id": "trackpad.move", "dx": 1.5, "dy": -2.0}] * 4)
+        self.assertEqual(handled, [{"id": "trackpad.move", "dx": 6.0, "dy": -8.0}])
+
+    def test_consecutive_scrolls_are_summed(self):
+        h = self.harness()
+        handled = self.run_all(h, {"id": "trackpad.scroll", "dx": 1, "dy": 2}, {"id": "trackpad.scroll", "dx": 3, "dy": 4})
+        self.assertEqual(handled, [{"id": "trackpad.scroll", "dx": 4, "dy": 6}])
+
+    def test_a_button_between_moves_is_a_barrier_and_order_is_kept(self):
+        h = self.harness()
+        down = {"id": "trackpad.button", "button": "left", "down": True}
+        up = {"id": "trackpad.button", "button": "left", "down": False}
+        handled = self.run_all(h, {"id": "trackpad.move", "dx": 1, "dy": 1}, {"id": "trackpad.move", "dx": 1, "dy": 1},
+                               down, {"id": "trackpad.move", "dx": 2, "dy": 0}, {"id": "trackpad.move", "dx": 3, "dy": 0},
+                               up)
+        self.assertEqual(handled, [{"id": "trackpad.move", "dx": 2, "dy": 2}, down,
+                                   {"id": "trackpad.move", "dx": 5, "dy": 0}, up])
+
+    def test_moves_and_scrolls_do_not_merge_with_each_other(self):
+        h = self.harness()
+        handled = self.run_all(h, {"id": "trackpad.move", "dx": 1, "dy": 1}, {"id": "trackpad.scroll", "dx": 1, "dy": 1},
+                               {"id": "trackpad.move", "dx": 1, "dy": 1})
+        self.assertEqual([a["id"] for a in handled], ["trackpad.move", "trackpad.scroll", "trackpad.move"])
+
+    def test_a_key_of_another_provider_is_a_barrier_too(self):
+        h = self.harness()
+        key = {"id": "keyboard.key", "sc": 16, "ext": False, "down": True}
+        handled = self.run_all(h, {"id": "trackpad.move", "dx": 1, "dy": 0}, key, {"id": "trackpad.move", "dx": 1, "dy": 0})
+        self.assertEqual(len(handled), 2)
+        self.assertEqual(h.providers["keyboard"].handled, [key])
+
+    def test_invalid_moves_are_not_merged_and_reach_the_provider_untouched(self):
+        h = self.harness()
+        bad = {"id": "trackpad.move", "dx": "5", "dy": 1}
+        handled = self.run_all(h, {"id": "trackpad.move", "dx": 1, "dy": 1}, bad, {"id": "trackpad.move", "dx": True, "dy": 1})
+        self.assertEqual(len(handled), 3)
+        self.assertIn(bad, handled)
+
+    def test_a_merge_never_exceeds_the_provider_clamp(self):
+        h = self.harness()
+        handled = self.run_all(h, {"id": "trackpad.move", "dx": 1500, "dy": 0}, {"id": "trackpad.move", "dx": 1500, "dy": 0})
+        self.assertEqual(sum(a["dx"] for a in handled), 3000)
+        self.assertEqual(len(handled), 2)
+
+    def test_gamepad_states_are_not_merged(self):
+        h = self.harness()
+        s1 = {"id": "gamepad.state", "buttons": 1, "lt": 0, "rt": 0, "lx": 0, "ly": 0, "rx": 0, "ry": 0}
+        s2 = dict(s1, buttons=2)
+        for a in (s1, s2):
+            h.hub.handle(a)
+        h.hub._tick(h.clock.t)
+        self.assertEqual(h.providers["gamepad"].handled, [s1, s2])
+
+    def test_the_original_actions_are_not_modified(self):
+        h = self.harness()
+        a, b = {"id": "trackpad.move", "dx": 1, "dy": 1}, {"id": "trackpad.move", "dx": 2, "dy": 2}
+        self.run_all(h, a, b)
+        self.assertEqual((a["dx"], b["dx"]), (1, 2))
+
+
+class InputThreadTest(unittest.TestCase):
+    def setUp(self):
+        self.providers = make_providers()
+        for name in ("keyboard", "trackpad", "gamepad"):
+            self.providers[name] = InputRecorder()
+        self.sent = []
+        self.logs = []
+        self.hub = ActionsHub(self.providers, self.sent.append, poll_fast_s=0.01, poll_slow_s=0.02,
+                              log=self.logs.append)
+        self.addCleanup(self.hub.stop)
+
+    def test_an_input_action_runs_while_a_slow_poll_is_blocked(self):
+        gate = threading.Event()
+        entered = threading.Event()
+        real = self.providers["usb"].snapshot
+
+        def blocked_snapshot():
+            entered.set()
+            gate.wait(10)
+            return real()
+        self.providers["usb"].snapshot = blocked_snapshot
+        self.hub.start()
+        try:
+            self.assertTrue(entered.wait(5))  # the hub thread is now stuck in the usb poll
+            key = {"id": "keyboard.key", "sc": 16, "ext": False, "down": True}
+            move = {"id": "trackpad.move", "dx": 3, "dy": 4}
+            self.hub.handle(key)
+            self.hub.handle(move)
+            self.assertTrue(wait_until(lambda: self.providers["keyboard"].handled == [key]
+                                       and self.providers["trackpad"].handled == [move], 2.0))
+            self.assertFalse(gate.is_set())  # ... and the poll is still blocked
+        finally:
+            gate.set()
+        hub_thread = self.hub._thread
+        self.assertNotIn(hub_thread.ident, self.providers["keyboard"].handle_threads)
+        self.assertNotIn(hub_thread.ident, self.providers["trackpad"].handle_threads)
+
+    def test_other_actions_still_run_on_the_hub_thread(self):
+        self.hub.start()
+        self.hub.handle({"id": "volume.set", "value": 0.5})
+        self.assertTrue(wait_until(lambda: self.providers["audio"].handled))
+        self.assertEqual(self.providers["audio"].handle_threads[0], self.hub._thread.ident)
+
+    def test_input_actions_do_not_make_the_hub_poll_again_or_send_notices(self):
+        self.hub.start()
+        self.assertTrue(wait_until(lambda: self.sent))
+        for _ in range(20):
+            self.hub.handle({"id": "trackpad.move", "dx": 1, "dy": 1})
+        self.assertTrue(wait_until(lambda: self.providers["trackpad"].handled))
+        self.assertTrue(all("notice" not in s for s in self.sent))
+
+    def test_order_across_providers_is_the_order_of_arrival(self):
+        order = []
+        for name in ("keyboard", "trackpad", "gamepad"):
+            real = self.providers[name].handle
+            self.providers[name].handle = (lambda a, real=real: order.append(a["id"]) or real(a))
+        self.hub.start()
+        ids = ["keyboard.key", "trackpad.button", "gamepad.open", "keyboard.release", "trackpad.release", "gamepad.close"]
+        for i in ids:
+            self.hub.handle({"id": i})
+        self.assertTrue(wait_until(lambda: len(order) == len(ids)))
+        self.assertEqual(order, ids)
+
+    def test_a_failing_input_provider_does_not_stop_the_input_thread(self):
+        self.providers["keyboard"].handle_raises = RuntimeError("boom")
+        self.hub.start()
+        self.hub.handle({"id": "keyboard.key"})
+        self.hub.handle({"id": "trackpad.release"})
+        self.assertTrue(wait_until(lambda: self.providers["trackpad"].handled))
+        self.assertTrue(any("keyboard.key" in line for line in self.logs))
+
+    def test_missing_input_provider_is_logged_and_does_not_break(self):
+        del self.providers["gamepad"]
+        self.hub.start()
+        self.hub.handle({"id": "gamepad.open"})
+        self.hub.handle({"id": "trackpad.release"})
+        self.assertTrue(wait_until(lambda: self.providers["trackpad"].handled))
+        self.assertTrue(any("gamepad" in line for line in self.logs))
+
+    def test_stop_joins_the_input_thread_then_stops_the_providers(self):
+        self.hub.start()
+        input_thread = self.hub._input_thread
+        self.assertTrue(input_thread.is_alive())
+        self.hub.stop()
+        self.assertFalse(input_thread.is_alive())
+        self.assertFalse(self.hub._thread.is_alive())
+        for name in ("keyboard", "trackpad", "gamepad"):
+            self.assertEqual(self.providers[name].stops, 1, name)
+
+    def test_nothing_runs_after_stop(self):
+        self.hub.start()
+        self.hub.stop()
+        self.hub.handle({"id": "keyboard.key"})
+        time.sleep(0.05)
+        self.assertEqual(self.providers["keyboard"].handled, [])
+
+    def test_stop_while_the_hub_is_blocked_in_a_poll_still_releases_the_input_providers(self):
+        gate = threading.Event()
+        entered = threading.Event()
+        real = self.providers["usb"].snapshot
+
+        def blocked():
+            entered.set()
+            gate.wait(10)
+            return real()
+        self.providers["usb"].snapshot = blocked
+        self.hub.start()
+        self.assertTrue(entered.wait(5))
+        started = time.time()
+        try:
+            self.hub.stop()  # the hub thread cannot join (blocked): STOP_JOIN_S, then the providers are stopped
+        finally:
+            gate.set()
+        self.assertEqual(self.providers["keyboard"].stops, 1)
+        self.assertLess(time.time() - started, hub_mod.STOP_JOIN_S + 2)
+
+    def test_restart_after_stop_works(self):
+        self.hub.start()
+        self.hub.stop()
+        self.hub.start()
+        self.hub.handle({"id": "trackpad.release"})
+        self.assertTrue(wait_until(lambda: self.providers["trackpad"].handled))
+
+    def test_pending_input_when_stopping_is_dropped_without_hanging(self):
+        self.hub.start()
+        for _ in range(1000):
+            self.hub.handle({"id": "trackpad.move", "dx": 1, "dy": 1})
+        self.hub.stop()
+        self.assertFalse(self.hub._input_thread.is_alive())
+
+
 class ContextBarThroughTheHubTest(unittest.TestCase):
     """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
 

@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 
 from actions import gamepad
@@ -360,6 +361,88 @@ class CloseTest(unittest.TestCase):
         p, layer, _ = self.opened()
         layer.remove_error = GamepadError("x")
         p.handle(CLOSE)
+        self.assertFalse(p.is_open)
+
+
+class ConcurrencyTest(unittest.TestCase):
+    """open / state / close run on the hub's input thread, snapshot (bus connect and retry) on the hub thread."""
+
+    def test_no_two_layer_calls_overlap(self):
+        guard = threading.Lock()
+        inside, overlaps = [0], [0]
+
+        class SlowLayer(FakeLayer):
+            def _enter(self):
+                with guard:
+                    inside[0] += 1
+                    if inside[0] > 1:
+                        overlaps[0] += 1
+                threading.Event().wait(0.0003)
+                with guard:
+                    inside[0] -= 1
+
+            def connect(self):
+                self._enter()
+                super().connect()
+
+            def add_target(self):
+                self._enter()
+                super().add_target()
+
+            def update(self, *a):
+                self._enter()
+                super().update(*a)
+
+        layer, clock = SlowLayer(), Clock()
+        p = GamepadProvider(layer=layer, clock=clock, log=lambda _l: None)
+        layer.connect_error = DriverMissingError("no bus")  # the hub thread keeps retrying the connection
+        stop = threading.Event()
+
+        def hub_thread():
+            while not stop.is_set():
+                clock.t += 31
+                p.snapshot()
+
+        def input_thread():
+            for i in range(24):
+                p.handle(OPEN)
+                p.handle(state(buttons=i & 0xF))
+                if i == 12:
+                    layer.connect_error = None
+
+        poller = threading.Thread(target=hub_thread)
+        poller.start()
+        worker = threading.Thread(target=input_thread)
+        worker.start()
+        worker.join(20)
+        stop.set()
+        poller.join(5)
+        self.assertEqual(overlaps[0], 0)
+        self.assertTrue(p.is_open)
+        self.assertEqual(layer.names().count("add"), 1)  # opened once, however the threads interleaved
+
+    def test_stop_during_a_connect_attempt_leaves_nothing_open(self):
+        started, release = threading.Event(), threading.Event()
+
+        class BlockingLayer(FakeLayer):
+            def connect(self):
+                super().connect()
+                started.set()
+                release.wait(5)
+
+        layer = BlockingLayer()
+        p = GamepadProvider(layer=layer, clock=Clock(), log=lambda _l: None)
+        poller = threading.Thread(target=p.snapshot)
+        poller.start()
+        self.assertTrue(started.wait(5))
+        stopper = threading.Thread(target=p.stop)
+        stopper.start()
+        stopper.join(0.1)
+        self.assertTrue(stopper.is_alive())  # waits for the connect in progress
+        release.set()
+        poller.join(5)
+        stopper.join(5)
+        self.assertEqual(layer.names()[-1], "disconnect")
         self.assertFalse(p.is_open)
 
 

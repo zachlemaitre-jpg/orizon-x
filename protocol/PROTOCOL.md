@@ -134,14 +134,14 @@ L'appareil affiche un pavé tactile qui pilote la souris du PC. Tous les message
 "trackpad":{"available":true}
 ```
 
-- `{"id":"trackpad.move","dx":<nombre>,"dy":<nombre>}` : déplacement relatif en pixels d'appareil (dp × sensibilité), x vers la droite, y vers le bas. Le PC envoie un `MOUSEEVENTF_MOVE` relatif (jamais absolu : Windows applique la vitesse et l'accélération du pointeur comme pour une vraie souris), en cumulant les décimales et en n'envoyant que la partie entière.
+- `{"id":"trackpad.move","dx":<nombre>,"dy":<nombre>}` : déplacement relatif en pixels d'appareil (dp × sensibilité), x vers la droite, y vers le bas. Le PC multiplie ce déplacement par un gain de **2,0** (`MOVE_GAIN` : le pavé est petit face à un écran ; la sensibilité réglée sur l'appareil s'applique en plus), puis envoie un `MOUSEEVENTF_MOVE` relatif (jamais absolu : Windows applique la vitesse et l'accélération du pointeur comme pour une vraie souris), en cumulant les décimales (après le gain) et en n'envoyant que la partie entière. La borne de ±2000 s'applique au déplacement reçu, avant le gain.
 - `{"id":"trackpad.button","button":"left"|"right","down":<bool>}` : bouton enfoncé ou relâché. Le PC retient les boutons enfoncés ; un `up` d'un bouton qui ne l'est pas est ignoré.
 - `{"id":"trackpad.scroll","dx":<nombre>,"dy":<nombre>}` : le **déplacement des doigts en dp** (mêmes axes que `move`). Le PC l'envoie en `WHEEL` / `HWHEEL` (1 dp = 4 unités, 120 = un cran), en cumulant les restes et sans rien envoyer pour 0. Sens naturel (le contenu suit les doigts) : doigts vers le bas (`dy > 0`) → `WHEEL` positif (défilement vers le haut, convention Windows : positif = molette poussée vers l'avant) ; doigts vers la droite (`dx > 0`) → `HWHEEL` négatif (défilement vers la gauche ; `HWHEEL` positif = vers la droite).
 - `{"id":"trackpad.zoom","steps":<entier>}` : Ctrl enfoncé, un cran de molette (±120) par pas, Ctrl relâché, en un seul appel `SendInput`. Positif = zoom avant.
 - `{"id":"trackpad.gesture","name":"task_view"|"desktop"|"app_prev"|"app_next"}` : `Win+Tab`, `Win+D`, `Alt+Maj+Tab`, `Alt+Tab`.
 - `{"id":"trackpad.release"}` : relâche les boutons enfoncés. Le PC le fait aussi à la fin de la session Actions.
 - Validation : les nombres doivent être des nombres JSON finis (ni booléens ni texte), `dx` et `dy` sont bornés à ±2000, `steps` est un entier borné à ±10 ; un nom, un bouton ou une action inconnus ou mal formés sont ignorés et journalisés.
-- Ces actions ne produisent jamais de `notice` et, comme `keyboard.*`, ne provoquent pas de nouveau relevé complet des fournisseurs. Une fenêtre lancée en administrateur refuse l'entrée injectée si Orizon X ne l'est pas aussi : l'échec est journalisé une fois.
+- Ces actions ne produisent jamais de `notice` et, comme `keyboard.*`, ne provoquent pas de nouveau relevé complet des fournisseurs. Le PC les exécute sur un thread à part, dans l'ordre d'arrivée et sans attendre les relevés des autres fournisseurs (qui peuvent durer plus d'une seconde) ; des `move` (ou des `scroll`) consécutifs qui attendent ensemble sont additionnés, tout autre message entre deux étant une barrière. Une fenêtre lancée en administrateur refuse l'entrée injectée si Orizon X ne l'est pas aussi : l'échec est journalisé une fois.
 
 ### Manette Xbox virtuelle (`gamepad`, `gamepad.*`)
 

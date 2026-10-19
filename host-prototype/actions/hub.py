@@ -39,15 +39,24 @@ The ``context`` section (actions.context, the context bar) is polled with the fa
 bar must follow the foreground app. Its actions are ``context.*``.
 
 The ``keyboard`` section (actions.keyboard, the device's PC keyboard) carries the layout to draw; its layout is read
-in the slow group. Its actions (``keyboard.*``, one per key press or release, up to about 30 a second while a key
-repeats) are routed to it but do NOT make the hub poll every provider again, unlike any other action. The same goes
-for ``trackpad.*`` (actions.trackpad, the device's trackpad: up to 60 moves a second), whose section is just
-``{"available": True}``, and for ``gamepad.*`` (actions.gamepad, the virtual Xbox controller: up to 125 reports a
-second), whose section is ``{"available": True}`` or ``{"available": False, "reason": ...}``, read in the slow group.
+in the slow group. The ``trackpad`` section (actions.trackpad, the device's trackpad) is just ``{"available": True}``;
+the ``gamepad`` section (actions.gamepad, the virtual Xbox controller) is ``{"available": True}`` or
+``{"available": False, "reason": ...}``, read in the slow group.
 
-``stop()`` joins the thread, then calls ``stop()`` of every provider that has one (the keyboard releases the keys that
-are down), whether or not the hub was started and whatever happened to its thread; one that fails is logged and does
-not prevent the others. The engine calls ``hub.stop()`` in a ``finally`` at the end of every Actions session (the
+Input actions (``keyboard.*``: about 30 a second while a key repeats, ``trackpad.*``: up to 60 moves a second,
+``gamepad.*``: up to 125 reports a second) run on their OWN thread (``actions-input``), started and stopped with the hub:
+the poll of the slow group can block the hub thread for a second or more (brightness, Bluetooth, Wi-Fi, media), and the
+input must not wait behind it. ``handle()`` puts them in a separate queue; the input thread runs them at once, in order
+of arrival, after merging consecutive ``trackpad.move`` (sum of dx and dy) and consecutive ``trackpad.scroll`` (sum)
+that are queued together: any other action between two moves is a barrier. They never make the hub poll every provider
+again, never produce a notice, and a provider that raises is logged. So the providers' ``handle()`` runs on the input
+thread while their ``snapshot()`` runs on the hub thread: those providers are thread-safe. When the input thread is
+not running (a hub driven by ``_tick`` in the tests), the hub thread runs the queued input itself, the same way.
+
+``stop()`` joins the input thread and the hub thread, then calls ``stop()`` of every provider that has one (the keyboard
+releases the keys that are down, the trackpad its buttons, the gamepad its pad), whether or not the hub was started and
+whatever happened to its threads; one that fails is logged and does not prevent the others. Input still queued at that
+point is dropped (the providers' ``stop()`` releases everything that is held). The engine calls ``hub.stop()`` in a ``finally`` at the end of every Actions session (the
 device leaves, the connection drops, the role changes, the engine stops).
 
 Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
@@ -84,7 +93,8 @@ _ROUTES = (
     ("trackpad.", "trackpad"),
     ("gamepad.", "gamepad"),
 )
-_QUIET = ("keyboard.", "trackpad.", "gamepad.")  # actions that do not make the hub poll every provider again
+_QUIET = ("keyboard.", "trackpad.", "gamepad.")  # input actions: own thread, no re-poll (see the module docstring)
+_MERGE_LIMIT = 2000.0  # the provider clamp of a move / scroll: a merged delta never goes beyond it
 
 _FAST = ("audio", "context")
 _SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard", "trackpad", "gamepad")
@@ -127,6 +137,28 @@ def _comparable(state: dict) -> dict:
     return cmp
 
 
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf")
+
+
+def _merge_input(actions: list) -> list:
+    """The input actions with consecutive ``trackpad.move`` (and consecutive ``trackpad.scroll``) summed. Only
+    adjacent actions of the same id merge (anything else in between is a barrier), only when all four deltas are
+    plain numbers and the sums stay within the provider's clamp; the actions given are never modified."""
+    out: list = []
+    for action in actions:
+        previous = out[-1] if out else None
+        if (isinstance(action, dict) and isinstance(previous, dict) and action.get("id") == previous.get("id")
+                and action.get("id") in ("trackpad.move", "trackpad.scroll")
+                and all(_number(x) for x in (action.get("dx"), action.get("dy"), previous.get("dx"), previous.get("dy")))
+                and abs(action["dx"] + previous["dx"]) <= _MERGE_LIMIT
+                and abs(action["dy"] + previous["dy"]) <= _MERGE_LIMIT):
+            out[-1] = dict(previous, dx=previous["dx"] + action["dx"], dy=previous["dy"] + action["dy"])
+        else:
+            out.append(action)
+    return out
+
+
 class ActionsHub:
     def __init__(self, providers: dict, send: Callable[[dict], None], *,
                  send_artwork: Optional[Callable[[str, bytes], None]] = None,
@@ -145,9 +177,13 @@ class ActionsHub:
         self._com_init = com_init
 
         self._actions: "queue.Queue[dict]" = queue.Queue()
+        self._input: "queue.Queue[Any]" = queue.Queue()  # input actions (and the stop sentinel None)
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._input_thread: Optional[threading.Thread] = None
+        self._input_lock = threading.Lock()  # one runner of the input queue at a time
+        self._input_logged: set[str] = set()
 
         # Only touched by the hub thread (or by tests driving _tick directly).
         self._snap: dict[str, Optional[dict]] = {}
@@ -172,15 +208,20 @@ class ActionsHub:
         self._stopping.clear()
         self._thread = threading.Thread(target=self._run, name="actions-hub", daemon=True)
         self._thread.start()
+        if self._input_thread is None or not self._input_thread.is_alive():
+            self._drop_input()
+            self._input_thread = threading.Thread(target=self._run_input, name="actions-input", daemon=True)
+            self._input_thread.start()
 
     def stop(self) -> None:
         self._stopping.set()
         self._wake.set()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(STOP_JOIN_S)
-            if thread.is_alive():
-                self._log("hub: thread did not stop within %.0f s" % STOP_JOIN_S)
+        self._input.put(None)  # wakes the input thread, which stops
+        for thread, what in ((self._input_thread, "input thread"), (self._thread, "thread")):
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(STOP_JOIN_S)
+                if thread.is_alive():
+                    self._log("hub: %s did not stop within %.0f s" % (what, STOP_JOIN_S))
         self._stop_providers()
 
     def _stop_providers(self) -> None:
@@ -194,8 +235,13 @@ class ActionsHub:
                 self._log(f"hub: provider {name!r} did not stop cleanly: {e!r}")
 
     def handle(self, action: dict) -> None:
-        """Queue an ACTION for the hub thread (callable from any thread)."""
+        """Queue an ACTION (callable from any thread): input actions for the input thread, the others for the hub
+        thread."""
         if self._stopping.is_set():
+            return
+        action_id = action.get("id") if isinstance(action, dict) else None
+        if isinstance(action_id, str) and action_id.startswith(_QUIET):
+            self._input.put(action)
             return
         self._actions.put(action)
         self._wake.set()
@@ -219,6 +265,62 @@ class ActionsHub:
                 except Exception as e:  # noqa: BLE001
                     self._log(f"hub: CoUninitialize failed: {e!r}")
 
+    # --- input thread ---
+
+    def _drop_input(self) -> None:
+        while True:
+            try:
+                self._input.get_nowait()
+            except queue.Empty:
+                return
+
+    def _run_input(self) -> None:
+        try:
+            while not self._stopping.is_set():
+                item = self._input.get()
+                if item is None or self._stopping.is_set():
+                    continue
+                self._run_input_batch([item])
+        except Exception as e:  # noqa: BLE001 - never die silently
+            self._log(f"hub: input thread crashed: {e!r}")
+
+    def _run_input_batch(self, batch: list) -> None:
+        """Runs ``batch`` and everything else already queued, merged: the input actions, in order of arrival."""
+        while True:
+            try:
+                item = self._input.get_nowait()
+            except queue.Empty:
+                break
+            if item is not None:
+                batch.append(item)
+        with self._input_lock:
+            for action in _merge_input(batch):
+                if self._stopping.is_set():
+                    return
+                self._execute_input(action)
+
+    def _drain_input(self) -> None:
+        """The hub thread runs the queued input itself when the input thread is not running (tests that drive
+        ``_tick``)."""
+        thread = self._input_thread
+        if thread is not None and thread.is_alive():
+            return
+        batch: list = []
+        self._run_input_batch(batch)
+
+    def _execute_input(self, action: Any) -> None:
+        action_id = action.get("id") if isinstance(action, dict) else None
+        provider = self._providers.get(_route(action_id) or "")
+        if provider is None:
+            if action_id not in self._input_logged:
+                self._input_logged.add(action_id)
+                self._log(f"hub: input action {action_id!r} refused, its provider is unavailable")
+            return
+        try:
+            provider.handle(action)  # no notice for input: the return value is not used
+        except Exception as e:  # noqa: BLE001
+            self._log(f"hub: action {action_id!r} raised {e!r}")
+
     def _wait_s(self) -> float:
         due = min(self._next_fast, self._next_slow, self._last_sent_at + self._refresh_s)
         return max(0.0, min(due - self._clock(), self._poll_slow_s))
@@ -226,6 +328,7 @@ class ActionsHub:
     # --- one iteration (hub thread) ---
 
     def _tick(self, now: float) -> None:
+        self._drain_input()
         force = self._drain_actions()
         if force:
             now = self._clock()
@@ -251,9 +354,7 @@ class ActionsHub:
                 action = self._actions.get_nowait()
             except queue.Empty:
                 return any_action
-            action_id = action.get("id") if isinstance(action, dict) else None
-            if not (isinstance(action_id, str) and action_id.startswith(_QUIET)):
-                any_action = True
+            any_action = True
             self._execute(action)
 
     def _execute(self, action: Any) -> None:

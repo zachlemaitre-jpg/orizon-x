@@ -53,48 +53,58 @@ class MoveTest(unittest.TestCase):
     def test_relative_move_without_the_absolute_flag(self):
         p, send, _ = make()
         self.assertIsNone(p.handle(act("move", dx=5, dy=-3)))
-        self.assertEqual(send.calls, [[("mouse", 5, -3, 0, MOVE)]])
+        self.assertEqual(send.calls, [[("mouse", 10, -6, 0, MOVE)]])  # MOVE_GAIN = 2
         self.assertEqual(MOVE & 0x8000, 0)  # MOUSEEVENTF_ABSOLUTE is never set
+
+    def test_the_gain_is_two(self):
+        self.assertEqual(trackpad.MOVE_GAIN, 2.0)
+        p, send, _ = make()
+        p.handle(act("move", dx=1, dy=-1))
+        self.assertEqual(send.events, [("mouse", 2, -2, 0, MOVE)])
 
     def test_decimals_are_carried_and_only_whole_pixels_sent(self):
         p, send, _ = make()
         for _ in range(4):
             p.handle(act("move", dx=0.6, dy=0.0))
-        # 0.6, 1.2, 1.8, 2.4 -> 0, 1, 1 (carry .8 -> 1.8: +1), ... the total sent is the integer part of the sum
-        sent = sum(e[1] for e in send.events)
-        self.assertEqual(sent, 2)
-        self.assertEqual(len(send.events), 2)  # the calls that moved nothing are not sent
+        # 1.2 per call after the gain: 1.2, 1.4, 1.6, 1.8 -> 1 pixel each, the total (4.8) is cut to 4
+        self.assertEqual([e[1] for e in send.events], [1, 1, 1, 1])
+        send.clear()
+        for _ in range(3):
+            p.handle(act("move", dx=0.1, dy=0.0))
+        # the carry was .8: .8 + .2 = 1.0 -> 1; then .2, .4 -> nothing (the calls that move nothing are not sent)
+        self.assertEqual(sum(e[1] for e in send.events), 1)
+        self.assertEqual(len(send.events), 1)
 
     def test_nothing_is_sent_for_less_than_a_pixel(self):
         p, send, _ = make()
-        p.handle(act("move", dx=0.4, dy=-0.4))
+        p.handle(act("move", dx=0.2, dy=-0.2))  # 0.4 pixels after the gain
         self.assertEqual(send.calls, [])
 
     def test_negative_decimals_carry_toward_zero(self):
         p, send, _ = make()
         for _ in range(5):
-            p.handle(act("move", dx=-0.5, dy=0.25))
-        self.assertEqual(sum(e[1] for e in send.events), -2)   # -2.5 total: -2 sent, -0.5 carried
+            p.handle(act("move", dx=-0.25, dy=0.125))
+        self.assertEqual(sum(e[1] for e in send.events), -2)   # -2.5 total after the gain: -2 sent, -0.5 carried
         self.assertEqual(sum(e[2] for e in send.events), 1)    # 1.25 total: 1 sent
 
     def test_axes_carry_separately(self):
         p, send, _ = make()
-        p.handle(act("move", dx=0.9, dy=2.0))
-        p.handle(act("move", dx=0.2, dy=0.0))
+        p.handle(act("move", dx=0.45, dy=1.0))
+        p.handle(act("move", dx=0.1, dy=0.0))
         self.assertEqual(send.events, [("mouse", 0, 2, 0, MOVE), ("mouse", 1, 0, 0, MOVE)])
 
     def test_large_moves_are_clamped(self):
         p, send, _ = make()
         p.handle(act("move", dx=99999, dy=-99999))
-        self.assertEqual(send.events, [("mouse", 2000, -2000, 0, MOVE)])
+        self.assertEqual(send.events, [("mouse", 4000, -4000, 0, MOVE)])  # clamped to 2000 as received, then x2
         send.clear()
         p.handle(act("move", dx=2000, dy=-2000))
-        self.assertEqual(send.events, [("mouse", 2000, -2000, 0, MOVE)])
+        self.assertEqual(send.events, [("mouse", 4000, -4000, 0, MOVE)])
 
     def test_integers_and_floats_are_both_accepted(self):
         p, send, _ = make()
         p.handle(act("move", dx=3, dy=4.0))
-        self.assertEqual(send.events, [("mouse", 3, 4, 0, MOVE)])
+        self.assertEqual(send.events, [("mouse", 6, 8, 0, MOVE)])
 
 
 class ButtonTest(unittest.TestCase):
@@ -333,6 +343,65 @@ class ValidationTest(unittest.TestCase):
         for a in (act("move", dx=5, dy=5), act("button", button="left", down=True), act("scroll", dx=0, dy=40),
                   act("zoom", steps=1), act("release")):
             self.assertIsNone(p.handle(a))
+        self.assertEqual(p.held, [])
+
+
+class ConcurrencyTest(unittest.TestCase):
+    """handle() runs on the hub's input thread while snapshot() runs on the hub thread, and stop() on a third."""
+
+    def test_no_two_injections_overlap_and_nothing_is_lost(self):
+        in_flight, overlaps, totals = [0], [0], [0]
+        guard = threading.Lock()
+
+        def slow_send(count, events, size):
+            with guard:
+                in_flight[0] += 1
+                if in_flight[0] > 1:
+                    overlaps[0] += 1
+            for e in events:
+                if e.type == trackpad.INPUT_MOUSE and e.u.mi.dwFlags == MOVE:
+                    with guard:
+                        totals[0] += e.u.mi.dx
+            threading.Event().wait(0.0005)
+            with guard:
+                in_flight[0] -= 1
+            return count
+
+        p = TrackpadProvider(send_input=slow_send, log=lambda _l: None)
+
+        def mover():
+            for _ in range(15):
+                p.handle(act("move", dx=1, dy=0))
+                p.snapshot()
+
+        threads = [threading.Thread(target=mover) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(overlaps[0], 0)
+        self.assertEqual(totals[0], 4 * 15 * 2)  # 60 moves of 1 -> 2 pixels each, none lost to a race
+
+    def test_stop_from_another_thread_waits_for_the_injection_in_progress(self):
+        started, release = threading.Event(), threading.Event()
+
+        def blocking_send(count, events, size):
+            started.set()
+            release.wait(5)
+            return count
+
+        p = TrackpadProvider(send_input=blocking_send, log=lambda _l: None)
+        worker = threading.Thread(target=lambda: p.handle(act("button", button="left", down=True)))
+        worker.start()
+        self.assertTrue(started.wait(5))
+        stopper = threading.Thread(target=p.stop)
+        stopper.start()
+        stopper.join(0.1)
+        self.assertTrue(stopper.is_alive())  # stop() waits its turn
+        release.set()
+        worker.join(5)
+        stopper.join(5)
+        self.assertFalse(stopper.is_alive())
         self.assertEqual(p.held, [])
 
 
