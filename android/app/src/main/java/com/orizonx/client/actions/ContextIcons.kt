@@ -16,6 +16,12 @@ object ContextIcons {
         "undo", "redo", "bold", "italic", "underline", "save", "sum", "filter", "copy", "paste",
         "command", "search", "terminal", "comment", "folder_new", "rename", "explorer",
         "screenshot", "desktop", "switch_app",
+        // Creative tools (Illustrator, Photoshop, Canva, Figma): tools, objects, view.
+        "select", "direct_select", "pen", "text", "rectangle", "ellipse", "line", "brush", "eraser", "eyedropper",
+        "crop", "lasso", "marquee", "move", "frame",
+        "group", "ungroup", "lock", "unlock", "layer_new", "layer_duplicate", "merge", "deselect", "transform",
+        "component", "hide", "paste_front",
+        "hand", "zoom_fit", "zoom_100", "zoom_selection", "outline", "rulers", "brush_smaller", "brush_larger", "present",
     )
 
     /** Drawable resource id for [name] (case-insensitive); [R.drawable.ctx_unknown] when it is not in [NAMES]. */
@@ -58,6 +64,42 @@ object ContextIcons {
         "screenshot" -> R.drawable.ctx_screenshot
         "desktop" -> R.drawable.ctx_desktop
         "switch_app" -> R.drawable.ctx_switch_app
+        "select" -> R.drawable.ctx_select
+        "direct_select" -> R.drawable.ctx_direct_select
+        "pen" -> R.drawable.ctx_pen
+        "text" -> R.drawable.ctx_text
+        "rectangle" -> R.drawable.ctx_rectangle
+        "ellipse" -> R.drawable.ctx_ellipse
+        "line" -> R.drawable.ctx_line
+        "brush" -> R.drawable.ctx_brush
+        "eraser" -> R.drawable.ctx_eraser
+        "eyedropper" -> R.drawable.ctx_eyedropper
+        "crop" -> R.drawable.ctx_crop
+        "lasso" -> R.drawable.ctx_lasso
+        "marquee" -> R.drawable.ctx_marquee
+        "move" -> R.drawable.ctx_move
+        "frame" -> R.drawable.ctx_frame
+        "group" -> R.drawable.ctx_group
+        "ungroup" -> R.drawable.ctx_ungroup
+        "lock" -> R.drawable.ctx_lock
+        "unlock" -> R.drawable.ctx_unlock
+        "layer_new" -> R.drawable.ctx_layer_new
+        "layer_duplicate" -> R.drawable.ctx_layer_duplicate
+        "merge" -> R.drawable.ctx_merge
+        "deselect" -> R.drawable.ctx_deselect
+        "transform" -> R.drawable.ctx_transform
+        "component" -> R.drawable.ctx_component
+        "hide" -> R.drawable.ctx_hide
+        "paste_front" -> R.drawable.ctx_paste_front
+        "hand" -> R.drawable.ctx_hand
+        "zoom_fit" -> R.drawable.ctx_zoom_fit
+        "zoom_100" -> R.drawable.ctx_zoom_100
+        "zoom_selection" -> R.drawable.ctx_zoom_selection
+        "outline" -> R.drawable.ctx_outline
+        "rulers" -> R.drawable.ctx_rulers
+        "brush_smaller" -> R.drawable.ctx_brush_smaller
+        "brush_larger" -> R.drawable.ctx_brush_larger
+        "present" -> R.drawable.ctx_present
         else -> R.drawable.ctx_unknown
     }
 }

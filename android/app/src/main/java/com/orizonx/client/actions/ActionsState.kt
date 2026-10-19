@@ -1,5 +1,6 @@
 package com.orizonx.client.actions
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class ClockState(val epochMs: Long, val utcOffsetMin: Int)
@@ -44,10 +45,23 @@ data class Notice(val code: String, val drive: String?)
 /** [icon] is a name from the spec list (see [ContextIcons]); it may be unknown, the UI then shows a dot. */
 data class ContextButton(val id: String, val icon: String, val label: String)
 
-/** Contextual bar for the PC's foreground app: [app] is the display name, [profile] changes with the app. */
-data class ContextBar(val app: String, val profile: String, val buttons: List<ContextButton>) {
+/** One page of the bar (Tools, Edit, View...): at most [ContextBar.MAX_BUTTONS] buttons, never empty once parsed. */
+data class ContextPage(val id: String, val label: String, val buttons: List<ContextButton>)
+
+/**
+ * Contextual bar for the PC's foreground app: [app] is the display name, [profile] changes with the app.
+ * [buttons] is page 1 (what an old PC sends alone); [pages] holds every page, at least one.
+ */
+data class ContextBar(
+    val app: String,
+    val profile: String,
+    val buttons: List<ContextButton>,
+    val pages: List<ContextPage> = listOf(ContextPage(MAIN_PAGE, "", buttons)),
+) {
     companion object {
         const val MAX_BUTTONS = 8
+        const val MAX_PAGES = 4
+        const val MAIN_PAGE = "main"
     }
 }
 
@@ -115,17 +129,39 @@ data class ActionsState(
             context = context(json),
         )
 
-        /** Null (bar hidden) when absent, unavailable or without any usable button; at most [ContextBar.MAX_BUTTONS] buttons. */
+        /**
+         * Null (bar hidden) when absent, unavailable or without any usable button. Without `pages` (or with an empty list)
+         * the legacy `buttons` make a single page; otherwise at most [ContextBar.MAX_PAGES] non-empty pages of
+         * [ContextBar.MAX_BUTTONS] buttons, and `buttons` is taken from page 1.
+         */
         private fun context(json: JSONObject): ContextBar? {
             val c = available(json, "context") ?: return null
-            val array = c.optJSONArray("buttons") ?: return null
-            val buttons = (0 until array.length()).mapNotNull { i ->
+            val app = text(c, "app") ?: ""
+            val profile = text(c, "profile") ?: ""
+            val pagesArray = c.optJSONArray("pages")
+            if (pagesArray == null || pagesArray.length() == 0) {
+                val buttons = buttons(c.optJSONArray("buttons"))
+                if (buttons.isEmpty()) return null
+                return ContextBar(app, profile, buttons)
+            }
+            val pages = (0 until pagesArray.length()).mapNotNull { i ->
+                val p = pagesArray.optJSONObject(i) ?: return@mapNotNull null
+                val buttons = buttons(p.optJSONArray("buttons"))
+                if (buttons.isEmpty()) return@mapNotNull null
+                val id = text(p, "id") ?: "page${i + 1}"
+                ContextPage(id, text(p, "label") ?: id, buttons)
+            }.take(ContextBar.MAX_PAGES)
+            if (pages.isEmpty()) return null
+            return ContextBar(app, profile, pages[0].buttons, pages)
+        }
+
+        private fun buttons(array: JSONArray?): List<ContextButton> {
+            if (array == null) return emptyList()
+            return (0 until array.length()).mapNotNull { i ->
                 val b = array.optJSONObject(i) ?: return@mapNotNull null
                 val id = text(b, "id") ?: return@mapNotNull null
                 ContextButton(id, text(b, "icon") ?: "", text(b, "label") ?: "")
             }.take(ContextBar.MAX_BUTTONS)
-            if (buttons.isEmpty()) return null
-            return ContextBar(text(c, "app") ?: "", text(c, "profile") ?: "", buttons)
         }
 
         /** The section object when the PC reports it with `available: true`, else null. */

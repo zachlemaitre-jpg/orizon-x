@@ -11,6 +11,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -58,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
@@ -70,6 +73,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -101,6 +105,8 @@ import com.orizonx.client.actions.ClockState
 import com.orizonx.client.actions.ContextBar
 import com.orizonx.client.actions.ContextButton
 import com.orizonx.client.actions.ContextIcons
+import com.orizonx.client.actions.ContextPage
+import com.orizonx.client.actions.ContextPageMemory
 import com.orizonx.client.actions.NowPlaying
 import com.orizonx.client.actions.UsbDrive
 import com.orizonx.client.actions.UsbKind
@@ -183,6 +189,11 @@ fun ActionsScreen(
         }
     }
 
+    // Page picked per context profile; lives with the screen so it survives the bar disappearing and coming back.
+    val pageMemory = remember { ContextPageMemory() }
+    var pageVersion by remember { mutableIntStateOf(0) }
+    var stripHeightPx by remember { mutableIntStateOf(0) }
+
     val volumeThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.volumeSet(it)) } }
     val brightnessThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.brightnessSet(it)) } }
 
@@ -217,13 +228,30 @@ fun ActionsScreen(
                     }
                 }
                 // The Touch-Bar-like strip sits at the very bottom; without a context nothing is reserved for it.
-                if (contextBar != null) ContextBarStrip(contextBar, controls, landscape)
+                if (contextBar != null) {
+                    ContextBarStrip(
+                        contextBar, controls, landscape, pageMemory, pageVersion,
+                        onPage = { profile, id ->
+                            pageMemory.select(profile, id)
+                            pageVersion++
+                        },
+                        onHeight = { stripHeightPx = it },
+                    )
+                }
             }
             AnimatedVisibility(
                 visible = noticeCode != null,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = if (contextBar != null) 24.dp + ContextBarHeight + ContextBarBottomMargin else 24.dp, start = 16.dp, end = 16.dp),
+                    .padding(
+                        bottom = if (contextBar != null) {
+                            24.dp + maxOf(ContextBarHeight, with(LocalDensity.current) { stripHeightPx.toDp() }) + ContextBarBottomMargin
+                        } else {
+                            24.dp
+                        },
+                        start = 16.dp,
+                        end = 16.dp,
+                    ),
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
@@ -382,14 +410,27 @@ private val ContextBarBottomMargin = 8.dp
 private val ContextBarShape = RoundedCornerShape(22.dp)
 private val ContextKeyShape = RoundedCornerShape(14.dp)
 private val ContextKeyMinWidth = 64.dp
+private val ContextTabsRowHeight = 34.dp
+private val ContextSwipeThreshold = 48.dp
 private const val CONTEXT_FADE_MS = 200
+private const val CONTEXT_PAGE_FADE_MS = 150
 
 /**
  * Full-width glass strip with the buttons for the PC's foreground app. The content crossfades (~200 ms) when the profile
  * changes; changes inside the same profile (e.g. the window title in the app name) just update it in place.
+ * With several pages, tabs pick the page and a horizontal swipe on the buttons moves to the neighbour page;
+ * [pageMemory] gives each profile back the page it was left on. [onHeight] reports the strip height in pixels.
  */
 @Composable
-private fun ContextBarStrip(bar: ContextBar, c: Controls, landscape: Boolean) {
+private fun ContextBarStrip(
+    bar: ContextBar,
+    c: Controls,
+    landscape: Boolean,
+    pageMemory: ContextPageMemory,
+    pageVersion: Int,
+    onPage: (profile: String, pageId: String) -> Unit,
+    onHeight: (Int) -> Unit,
+) {
     val latest by rememberUpdatedState(bar)
     // The outgoing profile keeps showing its own buttons while it fades out.
     val lastByProfile = remember { mutableMapOf<String, ContextBar>() }
@@ -398,7 +439,8 @@ private fun ContextBarStrip(bar: ContextBar, c: Controls, landscape: Boolean) {
         Modifier
             .fillMaxWidth()
             .padding(start = 12.dp, end = 12.dp, bottom = ContextBarBottomMargin)
-            .height(ContextBarHeight)
+            .onSizeChanged { onHeight(it.height) }
+            .heightIn(min = ContextBarHeight)
             .clip(ContextBarShape)
             .background(Color.White.copy(alpha = 0.10f))
             .border(
@@ -408,38 +450,166 @@ private fun ContextBarStrip(bar: ContextBar, c: Controls, landscape: Boolean) {
             ),
     ) {
         Crossfade(targetState = bar.profile, animationSpec = tween(CONTEXT_FADE_MS), label = "contextBar") { profile ->
-            ContextBarContent(if (profile == latest.profile) latest else lastByProfile[profile] ?: latest, c, landscape)
+            val shown = if (profile == latest.profile) latest else lastByProfile[profile] ?: latest
+            // pageVersion is read here on purpose: the memory is not snapshot state, a new version re-reads it.
+            val page = remember(shown, pageVersion) { pageMemory.current(shown) }
+            ContextBarContent(
+                shown, page, c, landscape,
+                onPage = { target ->
+                    if (target.id != page.id) {
+                        c.tap()
+                        onPage(shown.profile, target.id)
+                    }
+                },
+                neighbour = { offset -> pageMemory.neighbour(shown, offset) },
+            )
         }
     }
 }
 
-/** App name small on the left, then the buttons evenly spread; they scroll horizontally when they would get too narrow. */
+/**
+ * App name small on the left, then the buttons evenly spread; they scroll horizontally when they would get too narrow.
+ * With several pages the tabs follow the name on the same line, or sit above the buttons when the line is too short.
+ */
 @Composable
-private fun ContextBarContent(bar: ContextBar, c: Controls, landscape: Boolean) {
-    Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (bar.app.isNotBlank()) {
-            BasicText(
-                bar.app,
-                style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = if (landscape) 140.dp else 84.dp),
-            )
-            Spacer(Modifier.width(12.dp))
+private fun ContextBarContent(
+    bar: ContextBar,
+    page: ContextPage,
+    c: Controls,
+    landscape: Boolean,
+    onPage: (ContextPage) -> Unit,
+    neighbour: (Int) -> ContextPage?,
+) {
+    val nameWidth = if (landscape) 140.dp else 84.dp
+    val multi = bar.pages.size > 1
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val stacked = multi && !tabsFitInline(bar, bar.app.isNotBlank(), nameWidth, maxWidth)
+        @Composable
+        fun appName() {
+            if (bar.app.isNotBlank()) {
+                BasicText(
+                    bar.app,
+                    style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = nameWidth),
+                )
+            }
         }
-        BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-            if (maxWidth / bar.buttons.size >= ContextKeyMinWidth) {
-                Row(Modifier.fillMaxSize()) { ContextKeys(bar, c, spread = true) }
-            } else {
-                Row(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) { ContextKeys(bar, c, spread = false) }
+        if (stacked) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
+                Row(Modifier.fillMaxWidth().height(ContextTabsRowHeight), verticalAlignment = Alignment.CenterVertically) {
+                    appName()
+                    if (bar.app.isNotBlank()) Spacer(Modifier.width(12.dp))
+                    ContextTabs(bar.pages, page, onPage)
+                }
+                ContextButtonsArea(page, c, onPage, neighbour, Modifier.fillMaxWidth().height(ContextBarHeight - 8.dp))
+            }
+        } else {
+            Row(Modifier.fillMaxWidth().height(ContextBarHeight).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                appName()
+                if (bar.app.isNotBlank()) Spacer(Modifier.width(12.dp))
+                if (multi) {
+                    ContextTabs(bar.pages, page, onPage)
+                    Spacer(Modifier.width(12.dp))
+                }
+                ContextButtonsArea(page, c, onPage, neighbour, Modifier.weight(1f).fillMaxHeight())
+            }
+        }
+    }
+}
+
+/** Rough width of the tab pills, used only to decide between "tabs on the name line" and "tabs above the buttons". */
+private fun tabsFitInline(bar: ContextBar, hasName: Boolean, nameWidth: Dp, available: Dp): Boolean {
+    val tabs = bar.pages.sumOf { it.label.length * 7 + 26 + TAB_GAP_DP }.dp
+    val name = if (hasName) nameWidth + 12.dp else 0.dp
+    val keys = ContextKeyMinWidth * bar.pages.maxOf { it.buttons.size }
+    return available - 28.dp - name - tabs - 12.dp >= keys
+}
+
+private const val TAB_GAP_DP = 6
+
+/** Compact 12 sp pills, the current page highlighted. */
+@Composable
+private fun ContextTabs(pages: List<ContextPage>, current: ContextPage, onPage: (ContextPage) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(TAB_GAP_DP.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (p in pages) {
+            val selected = p.id == current.id
+            Box(
+                Modifier
+                    .heightIn(min = 28.dp)
+                    .clip(PillShape)
+                    .background(Color.White.copy(alpha = if (selected) 0.30f else 0.08f))
+                    .border(1.dp, Color.White.copy(alpha = if (selected) 0.8f else 0.2f), PillShape)
+                    .clickable { onPage(p) }
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(
+                    p.label,
+                    style = TextStyle(
+                        color = Color.White.copy(alpha = if (selected) 1f else 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    ),
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** The buttons of [page], crossfaded (~150 ms) when the page changes, with the swipe that moves to the neighbour page. */
+@Composable
+private fun ContextButtonsArea(
+    page: ContextPage,
+    c: Controls,
+    onPage: (ContextPage) -> Unit,
+    neighbour: (Int) -> ContextPage?,
+    modifier: Modifier,
+) {
+    val scroll = rememberScrollState()
+    val threshold = with(LocalDensity.current) { ContextSwipeThreshold.toPx() }
+    val latestNeighbour by rememberUpdatedState(neighbour)
+    val latestOnPage by rememberUpdatedState(onPage)
+    LaunchedEffect(page.id) { scroll.scrollTo(0) }
+    Box(
+        modifier.pointerInput(threshold) {
+            // Watches the gesture before the buttons see it and consumes nothing: taps and the row's own scrolling keep working.
+            // It changes page only for a mostly horizontal swipe during which the row did not move (nothing to scroll, or at its end).
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                val startScroll = scroll.value
+                var last = down.position
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    last = change.position
+                    if (!change.pressed) break
+                }
+                val dx = last.x - down.position.x
+                val dy = last.y - down.position.y
+                if (kotlin.math.abs(dx) >= threshold && kotlin.math.abs(dx) > 2 * kotlin.math.abs(dy) && scroll.value == startScroll) {
+                    latestNeighbour(if (dx < 0) 1 else -1)?.let { latestOnPage(it) }
+                }
+            }
+        },
+    ) {
+        Crossfade(targetState = page, animationSpec = tween(CONTEXT_PAGE_FADE_MS), label = "contextPage") { p ->
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                if (maxWidth / p.buttons.size >= ContextKeyMinWidth) {
+                    Row(Modifier.fillMaxSize()) { ContextKeys(p.buttons, c, spread = true) }
+                } else {
+                    Row(Modifier.fillMaxSize().horizontalScroll(scroll)) { ContextKeys(p.buttons, c, spread = false) }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun RowScope.ContextKeys(bar: ContextBar, c: Controls, spread: Boolean) {
-    for (button in bar.buttons) {
+private fun RowScope.ContextKeys(buttons: List<ContextButton>, c: Controls, spread: Boolean) {
+    for (button in buttons) {
         ContextKey(
             button, c,
             if (spread) Modifier.weight(1f).fillMaxHeight() else Modifier.width(ContextKeyMinWidth).fillMaxHeight(),

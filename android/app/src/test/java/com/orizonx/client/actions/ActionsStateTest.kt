@@ -236,6 +236,65 @@ class ActionsStateTest {
         assertEquals(listOf(ContextButton("ok", "no_such_icon", "Ok"), ContextButton("bare", "", "")), c.buttons)
     }
 
+    private fun page(id: String, vararg ids: String): String =
+        """{"id":"$id","label":"L-$id","buttons":[${ids.joinToString(",") { """{"id":"$it","icon":"copy","label":"B$it"}""" }}]}"""
+
+    private fun pagesJson(vararg pages: String, buttons: String = """{"id":"top","icon":"copy","label":"Top"}"""): String =
+        """{"context":{"available":true,"app":"Illustrator","profile":"illustrator","buttons":[$buttons],"pages":[${pages.joinToString(",")}]}}"""
+
+    @Test
+    fun contextWithoutPagesIsOneMainPageOfTheButtons() {
+        val c = parse(
+            """{"context":{"available":true,"app":"X","profile":"x","buttons":[{"id":"a","icon":"copy","label":"A"}]}}""",
+        ).context!!
+        assertEquals(1, c.pages.size)
+        assertEquals(listOf("a"), c.pages[0].buttons.map { it.id })
+        assertEquals(c.buttons, c.pages[0].buttons)
+    }
+
+    @Test
+    fun contextWithEmptyPagesFallsBackToTheButtons() {
+        val c = parse(
+            """{"context":{"available":true,"app":"X","profile":"x","pages":[],"buttons":[{"id":"a","icon":"copy","label":"A"}]}}""",
+        ).context!!
+        assertEquals(1, c.pages.size)
+        assertEquals(listOf("a"), c.pages[0].buttons.map { it.id })
+    }
+
+    @Test
+    fun contextPagesAreParsedWithIdLabelAndButtons() {
+        val c = parse(pagesJson(page("tools", "t1", "t2"), page("edit", "e1"))).context!!
+        assertEquals(listOf("tools", "edit"), c.pages.map { it.id })
+        assertEquals(listOf("L-tools", "L-edit"), c.pages.map { it.label })
+        assertEquals(listOf("t1", "t2"), c.pages[0].buttons.map { it.id })
+        assertEquals(ContextButton("e1", "copy", "Be1"), c.pages[1].buttons[0])
+        // `buttons` is page 1, whatever the legacy top-level list says.
+        assertEquals(c.pages[0].buttons, c.buttons)
+    }
+
+    @Test
+    fun contextKeepsAtMostFourPages() {
+        val c = parse(pagesJson(*(1..5).map { page("p$it", "b$it") }.toTypedArray())).context!!
+        assertEquals(listOf("p1", "p2", "p3", "p4"), c.pages.map { it.id })
+    }
+
+    @Test
+    fun contextDropsEmptyPages() {
+        val c = parse(pagesJson(page("a", "a1"), page("empty"), """{"id":"nobtn"}""", page("c", "c1"))).context!!
+        assertEquals(listOf("a", "c"), c.pages.map { it.id })
+    }
+
+    @Test
+    fun contextKeepsAtMostEightButtonsPerPage() {
+        val c = parse(pagesJson(page("a", *(1..9).map { "b$it" }.toTypedArray()))).context!!
+        assertEquals((1..8).map { "b$it" }, c.pages[0].buttons.map { it.id })
+    }
+
+    @Test
+    fun contextWithOnlyEmptyPagesIsNull() {
+        assertNull(parse(pagesJson(page("a"), page("b"))).context)
+    }
+
     @Test
     fun usbKindDefaultsToStick() {
         val s = parse(
