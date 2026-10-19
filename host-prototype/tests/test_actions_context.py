@@ -18,6 +18,8 @@ class MatchTest(unittest.TestCase):
             "POWERPNT.EXE": "powerpoint",
             "chrome.exe": "browser", "msedge.exe": "browser", "firefox.exe": "browser",
             "brave.exe": "browser", "opera.exe": "browser",
+            "vivaldi.exe": "browser", "Arc.exe": "browser", "zen.exe": "browser", "librewolf.exe": "browser",
+            "waterfox.exe": "browser", "floorp.exe": "browser", "chromium.exe": "browser", "thorium.exe": "browser",
             "WINWORD.EXE": "word",
             "EXCEL.EXE": "excel",
             "Code.exe": "vscode",
@@ -74,7 +76,10 @@ class DisplayNameTest(unittest.TestCase):
 
     def test_browsers_use_their_real_name(self):
         for exe, name in (("chrome.exe", "Chrome"), ("msedge.exe", "Edge"), ("firefox.exe", "Firefox"),
-                          ("brave.exe", "Brave"), ("opera.exe", "Opera")):
+                          ("brave.exe", "Brave"), ("opera.exe", "Opera"), ("vivaldi.exe", "Vivaldi"),
+                          ("Arc.exe", "Arc"), ("zen.exe", "Zen"), ("librewolf.exe", "LibreWolf"),
+                          ("waterfox.exe", "Waterfox"), ("floorp.exe", "Floorp"), ("chromium.exe", "Chromium"),
+                          ("thorium.exe", "Thorium")):
             with self.subTest(exe):
                 self.assertEqual(cp.display_name(app(exe)), name)
 

@@ -139,7 +139,8 @@ PROFILES = (
         _b("ppt.black", "screen_black", "Black screen", "Écran noir", "B"),
         _b("ppt.exit", "exit", "Exit", "Quitter", "Esc"),
     )),
-    _single("browser", ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"), (
+    _single("browser", ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe", "arc.exe",
+                        "zen.exe", "librewolf.exe", "waterfox.exe", "floorp.exe", "chromium.exe", "thorium.exe"), (
         _b("web.back", "arrow_left", "Back", "Retour", "Alt+Left"),
         _b("web.forward", "arrow_right", "Forward", "Avance", "Alt+Right"),
         _b("web.reload", "refresh", "Reload", "Actualiser", "F5"),
@@ -446,7 +447,8 @@ _NAMES_BY_LANG = {  # the names that vary with the language
 }
 _BROWSER_NAMES = {
     "chrome.exe": "Chrome", "msedge.exe": "Edge", "firefox.exe": "Firefox", "brave.exe": "Brave",
-    "opera.exe": "Opera",
+    "opera.exe": "Opera", "vivaldi.exe": "Vivaldi", "arc.exe": "Arc", "zen.exe": "Zen", "librewolf.exe": "LibreWolf",
+    "waterfox.exe": "Waterfox", "floorp.exe": "Floorp", "chromium.exe": "Chromium", "thorium.exe": "Thorium",
 }
 
 
