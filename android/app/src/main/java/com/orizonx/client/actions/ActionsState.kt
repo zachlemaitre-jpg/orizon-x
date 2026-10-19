@@ -51,12 +51,14 @@ data class ContextPage(val id: String, val label: String, val buttons: List<Cont
 /**
  * Contextual bar for the PC's foreground app: [app] is the display name, [profile] changes with the app.
  * [buttons] is page 1 (what an old PC sends alone); [pages] holds every page, at least one.
+ * [icon] is the sha1 id of the app or site icon (an image received like cover art), null when the PC has none yet.
  */
 data class ContextBar(
     val app: String,
     val profile: String,
     val buttons: List<ContextButton>,
     val pages: List<ContextPage> = listOf(ContextPage(MAIN_PAGE, "", buttons)),
+    val icon: String? = null,
 ) {
     companion object {
         const val MAX_BUTTONS = 8
@@ -138,11 +140,12 @@ data class ActionsState(
             val c = available(json, "context") ?: return null
             val app = text(c, "app") ?: ""
             val profile = text(c, "profile") ?: ""
+            val icon = (c.opt("icon") as? String)?.takeIf { it.isNotBlank() }
             val pagesArray = c.optJSONArray("pages")
             if (pagesArray == null || pagesArray.length() == 0) {
                 val buttons = buttons(c.optJSONArray("buttons"))
                 if (buttons.isEmpty()) return null
-                return ContextBar(app, profile, buttons)
+                return ContextBar(app, profile, buttons, icon = icon)
             }
             val pages = (0 until pagesArray.length()).mapNotNull { i ->
                 val p = pagesArray.optJSONObject(i) ?: return@mapNotNull null
@@ -152,7 +155,7 @@ data class ActionsState(
                 ContextPage(id, text(p, "label") ?: id, buttons)
             }.take(ContextBar.MAX_PAGES)
             if (pages.isEmpty()) return null
-            return ContextBar(app, profile, pages[0].buttons, pages)
+            return ContextBar(app, profile, pages[0].buttons, pages, icon)
         }
 
         private fun buttons(array: JSONArray?): List<ContextButton> {

@@ -74,7 +74,7 @@ fun OrizonXApp(
             // VideoSurface stays composed underneath: it owns the Receiver's lifecycle (Surface created/destroyed).
             AnimatedVisibility(visible = actionsActive, enter = fadeIn(tween(300)), exit = fadeOut(tween(300))) {
                 ActionsScreen(
-                    model.actionsState, model.artwork, onAction,
+                    model.actionsState, model.images, onAction,
                     onSwitchMode = { onRoleChosen(DeviceRole.SCREEN) },
                     langPref = model.langPref, onLangPref = onLangPrefChosen,
                 )

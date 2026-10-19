@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import com.orizonx.client.actions.ArtworkDecoder
+import com.orizonx.client.actions.ImageLru
 import com.orizonx.client.frame.FrameController
 import com.orizonx.client.i18n.Lang
 import com.orizonx.client.i18n.LangPref
@@ -74,13 +75,18 @@ class UiModel(val frame: FrameController) : Session.Listener {
     var actionsState by mutableStateOf<JSONObject?>(null)
         private set
 
-    /** Last cover art received, decoded and keyed by the id the PC announced in `now_playing.artwork`. */
-    var artwork by mutableStateOf<Pair<String, ImageBitmap>?>(null)
+    /**
+     * Decoded images received over MEDIA_ARTWORK, keyed by the sha1 id the PC announced (`now_playing.artwork` for covers,
+     * `context.icon` for app icons): an immutable view of an [ImageLru] of 16 entries.
+     */
+    var images by mutableStateOf<Map<String, ImageBitmap>>(emptyMap())
         private set
 
     @Volatile private var decoderName = ""
 
-    /** Bumped on each disconnect so a decode still in flight cannot resurrect the previous session's cover. */
+    private val imageCache = ImageLru<ImageBitmap>()
+
+    /** Bumped on each disconnect so a decode still in flight cannot resurrect the previous session's images. */
     @Volatile private var artworkEpoch = 0
     private val artworkDecoder = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "artwork-decoder").apply { isDaemon = true }
@@ -116,7 +122,12 @@ class UiModel(val frame: FrameController) : Session.Listener {
         runCatching {
             artworkDecoder.execute {
                 val bitmap = runCatching { ArtworkDecoder.decode(bytes) }.getOrNull() ?: return@execute
-                if (epoch == artworkEpoch) artwork = id to bitmap
+                synchronized(imageCache) {
+                    if (epoch == artworkEpoch) {
+                        imageCache.put(id, bitmap)
+                        images = imageCache.snapshot()
+                    }
+                }
             }
         }
     }
@@ -125,8 +136,11 @@ class UiModel(val frame: FrameController) : Session.Listener {
         connectedRole = null
         frame.reset() // session end: forget the queue and empty the cache
         actionsState = null
-        artworkEpoch++
-        artwork = null
+        synchronized(imageCache) {
+            artworkEpoch++
+            imageCache.clear()
+            images = emptyMap()
+        }
         waitingReason = reason
         state = ConnectionState.Waiting(reason)
         hud = null

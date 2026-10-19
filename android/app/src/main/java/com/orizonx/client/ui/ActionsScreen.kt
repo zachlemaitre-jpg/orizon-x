@@ -139,12 +139,12 @@ private val UsbChipMaxWidth = 280.dp
 /**
  * The Actions remote: clock, PC battery and the controls reported by the PC's latest ACTIONS_STATE ([rawState]).
  * Actions update the displayed state immediately (optimistic); the next ACTIONS_STATE wins.
- * [artwork] is the last cover received (id, bitmap); it is shown only while it matches `now_playing.artwork`.
+ * [images] holds the decoded images by id (cover art and app icons); the cover is looked up by `now_playing.artwork`, the bar icon by `context.icon`.
  */
 @Composable
 fun ActionsScreen(
     rawState: JSONObject?,
-    artwork: Pair<String, ImageBitmap>?,
+    images: Map<String, ImageBitmap>,
     onAction: (JSONObject) -> Unit,
     onSwitchMode: () -> Unit,
     langPref: LangPref,
@@ -203,7 +203,7 @@ fun ActionsScreen(
         update = update,
         volumeThrottle = volumeThrottle,
         brightnessThrottle = brightnessThrottle,
-        artwork = artwork,
+        images = images,
     )
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -271,7 +271,7 @@ private class Controls(
     val update: (ActionsState.() -> ActionsState) -> Unit,
     val volumeThrottle: ActionThrottle,
     val brightnessThrottle: ActionThrottle,
-    val artwork: Pair<String, ImageBitmap>?,
+    val images: Map<String, ImageBitmap>,
 )
 
 /**
@@ -411,6 +411,8 @@ private val ContextBarShape = RoundedCornerShape(22.dp)
 private val ContextKeyShape = RoundedCornerShape(14.dp)
 private val ContextKeyMinWidth = 64.dp
 private val ContextTabsRowHeight = 34.dp
+private val ContextIconSize = 28.dp
+private val ContextIconShape = RoundedCornerShape(6.dp)
 private val ContextSwipeThreshold = 48.dp
 private const val CONTEXT_FADE_MS = 200
 private const val CONTEXT_PAGE_FADE_MS = 150
@@ -468,7 +470,7 @@ private fun ContextBarStrip(
 }
 
 /**
- * App name small on the left, then the buttons evenly spread; they scroll horizontally when they would get too narrow.
+ * App name small on the left (with its icon above it once received), then the buttons evenly spread; they scroll horizontally when they would get too narrow.
  * With several pages the tabs follow the name on the same line, or sit above the buttons when the line is too short.
  */
 @Composable
@@ -482,39 +484,71 @@ private fun ContextBarContent(
 ) {
     val nameWidth = if (landscape) 140.dp else 84.dp
     val multi = bar.pages.size > 1
+    // The icon shows only once its image has arrived; until then (or without an id) the name stands alone, as before.
+    val icon = bar.icon?.let { c.images[it] }
+    val hasLabel = bar.app.isNotBlank() || icon != null
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val stacked = multi && !tabsFitInline(bar, bar.app.isNotBlank(), nameWidth, maxWidth)
+        val stacked = multi && !tabsFitInline(bar, hasLabel, nameWidth, maxWidth)
         @Composable
-        fun appName() {
-            if (bar.app.isNotBlank()) {
-                BasicText(
-                    bar.app,
-                    style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = nameWidth),
-                )
-            }
+        fun appLabel() {
+            if (hasLabel) ContextAppLabel(bar.app, icon, nameWidth)
         }
-        if (stacked) {
+        if (stacked && icon != null) {
+            // Tabs above the buttons, and the icon over the name in a column of its own on the left, as in the inline layout.
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                appLabel()
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(Modifier.fillMaxWidth().height(ContextTabsRowHeight), verticalAlignment = Alignment.CenterVertically) {
+                        ContextTabs(bar.pages, page, onPage)
+                    }
+                    ContextButtonsArea(page, c, onPage, neighbour, Modifier.fillMaxWidth().height(ContextBarHeight - 8.dp))
+                }
+            }
+        } else if (stacked) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
                 Row(Modifier.fillMaxWidth().height(ContextTabsRowHeight), verticalAlignment = Alignment.CenterVertically) {
-                    appName()
-                    if (bar.app.isNotBlank()) Spacer(Modifier.width(12.dp))
+                    appLabel()
+                    if (hasLabel) Spacer(Modifier.width(12.dp))
                     ContextTabs(bar.pages, page, onPage)
                 }
                 ContextButtonsArea(page, c, onPage, neighbour, Modifier.fillMaxWidth().height(ContextBarHeight - 8.dp))
             }
         } else {
             Row(Modifier.fillMaxWidth().height(ContextBarHeight).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                appName()
-                if (bar.app.isNotBlank()) Spacer(Modifier.width(12.dp))
+                appLabel()
+                if (hasLabel) Spacer(Modifier.width(12.dp))
                 if (multi) {
                     ContextTabs(bar.pages, page, onPage)
                     Spacer(Modifier.width(12.dp))
                 }
                 ContextButtonsArea(page, c, onPage, neighbour, Modifier.weight(1f).fillMaxHeight())
             }
+        }
+    }
+}
+
+/** The app name, small; with an [icon], a 28 dp full-colour rounded icon centred above it. */
+@Composable
+private fun ContextAppLabel(app: String, icon: ImageBitmap?, nameWidth: Dp) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        if (icon != null) {
+            Image(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(ContextIconSize).clip(ContextIconShape),
+                contentScale = ContentScale.Fit,
+            )
+            if (app.isNotBlank()) Spacer(Modifier.height(3.dp))
+        }
+        if (app.isNotBlank()) {
+            BasicText(
+                app,
+                style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, textAlign = TextAlign.Center),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = nameWidth),
+            )
         }
     }
 }
@@ -890,7 +924,7 @@ private fun VolumeSlider(audio: AudioState, c: Controls, modifier: Modifier) {
 /** Cover on the left; title, artist · album, app and the three keys under them on the right (centred when [stretch]). */
 @Composable
 private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
-    val cover = c.artwork?.takeIf { now.artworkId != null && it.first == now.artworkId }?.second
+    val cover = now.artworkId?.let { c.images[it] }
     GlassCard(modifier) {
         if (stretch) Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {

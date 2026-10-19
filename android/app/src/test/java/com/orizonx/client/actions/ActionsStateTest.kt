@@ -295,6 +295,44 @@ class ActionsStateTest {
         assertNull(parse(pagesJson(page("a"), page("b"))).context)
     }
 
+    private fun iconJson(icon: String): String =
+        """{"context":{"available":true,"app":"X","profile":"x","icon":$icon,"buttons":[{"id":"a","icon":"copy","label":"A"}]}}"""
+
+    @Test
+    fun contextIconIsParsed() {
+        assertEquals("0123456789abcdef0123456789abcdef01234567", parse(iconJson("\"0123456789abcdef0123456789abcdef01234567\"")).context!!.icon)
+    }
+
+    @Test
+    fun contextIconAbsentNullOrNotAStringIsNull() {
+        assertNull(parse("""{"context":{"available":true,"app":"X","profile":"x","buttons":[{"id":"a","icon":"copy","label":"A"}]}}""").context!!.icon)
+        assertNull(parse(iconJson("null")).context!!.icon)
+        assertNull(parse(iconJson("5")).context!!.icon)
+        assertNull(parse(iconJson("true")).context!!.icon)
+        assertNull(parse(iconJson("{}")).context!!.icon)
+        assertNull(parse(iconJson("[\"x\"]")).context!!.icon)
+        assertNull(parse(iconJson("\"\"")).context!!.icon)
+        assertNull(parse(iconJson("\"  \"")).context!!.icon)
+    }
+
+    @Test
+    fun contextIconSurvivesPages() {
+        val c = parse(
+            """{"context":{"available":true,"app":"Illustrator","profile":"illustrator","icon":"abc",
+                "buttons":[],"pages":[{"id":"tools","label":"Tools","buttons":[{"id":"t","icon":"pen","label":"T"}]}]}}""",
+        ).context!!
+        assertEquals("abc", c.icon)
+        assertEquals(listOf("tools"), c.pages.map { it.id })
+    }
+
+    @Test
+    fun nowPlayingCoverIdStillParsed() {
+        val n = parse(
+            """{"now_playing":{"available":true,"app":"Spotify","title":"T","playing":true,"artwork":"0123456789abcdef0123456789abcdef01234567"}}""",
+        ).nowPlaying!!
+        assertEquals("0123456789abcdef0123456789abcdef01234567", n.artworkId)
+    }
+
     @Test
     fun usbKindDefaultsToStick() {
         val s = parse(
