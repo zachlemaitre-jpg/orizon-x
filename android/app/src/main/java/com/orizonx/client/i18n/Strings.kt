@@ -43,6 +43,8 @@ enum class S {
 
     // Actions screen
     SWITCH_MODE,
+    KEYBOARD,
+    KEYBOARD_CLOSE_DESC,
     CONNECTING_TO_PC,
     NOTICE_USB_BUSY,
     NOTICE_USB_FAILED,
@@ -144,6 +146,8 @@ object Strings {
         S.HUD_OFFSET_SYNC to t("offset: syncing…", "offset : synchro…"),
 
         S.SWITCH_MODE to t("Change mode", "Changer de mode"),
+        S.KEYBOARD to t("Keyboard", "Clavier"),
+        S.KEYBOARD_CLOSE_DESC to t("Close the keyboard", "Fermer le clavier"),
         S.CONNECTING_TO_PC to t("Connecting to the PC…", "Connexion au PC…"),
         S.NOTICE_USB_BUSY to t("The drive is in use, close any open files", "La clé est utilisée, ferme les fichiers ouverts"),
         S.NOTICE_USB_FAILED to t("Cannot eject the drive", "Impossible d'éjecter la clé"),

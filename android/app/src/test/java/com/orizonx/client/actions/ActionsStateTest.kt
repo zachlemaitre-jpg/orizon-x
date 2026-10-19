@@ -377,6 +377,35 @@ class ActionsStateTest {
     }
 
     @Test
+    fun keyboardSectionIsParsed() {
+        assertEquals(
+            KeyboardInfo(com.orizonx.client.keyboard.KeyboardLayoutId.AZERTY),
+            parse("""{"keyboard":{"available":true,"layout":"azerty"}}""").keyboard,
+        )
+        assertEquals(
+            KeyboardInfo(com.orizonx.client.keyboard.KeyboardLayoutId.QWERTY),
+            parse("""{"keyboard":{"available":true,"layout":"qwerty"}}""").keyboard,
+        )
+    }
+
+    @Test
+    fun keyboardAbsentOrUnavailableIsNull() {
+        assertNull(parse("{}").keyboard)
+        assertNull(parse("""{"keyboard":null}""").keyboard)
+        assertNull(parse("""{"keyboard":{"available":false,"layout":"azerty"}}""").keyboard)
+        assertNull(parse("""{"keyboard":{"layout":"azerty"}}""").keyboard)
+    }
+
+    @Test
+    fun unknownOrMissingKeyboardLayoutIsQwerty() {
+        val qwerty = com.orizonx.client.keyboard.KeyboardLayoutId.QWERTY
+        assertEquals(qwerty, parse("""{"keyboard":{"available":true,"layout":"dvorak"}}""").keyboard!!.layout)
+        assertEquals(qwerty, parse("""{"keyboard":{"available":true}}""").keyboard!!.layout)
+        assertEquals(qwerty, parse("""{"keyboard":{"available":true,"layout":null}}""").keyboard!!.layout)
+        assertEquals(qwerty, parse("""{"keyboard":{"available":true,"layout":5}}""").keyboard!!.layout)
+    }
+
+    @Test
     fun nowPlayingCoverIdStillParsed() {
         val n = parse(
             """{"now_playing":{"available":true,"app":"Spotify","title":"T","playing":true,"artwork":"0123456789abcdef0123456789abcdef01234567"}}""",

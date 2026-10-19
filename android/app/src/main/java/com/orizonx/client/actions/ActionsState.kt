@@ -1,5 +1,6 @@
 package com.orizonx.client.actions
 
+import com.orizonx.client.keyboard.KeyboardLayoutId
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -41,6 +42,9 @@ data class NowPlaying(
 )
 
 data class Notice(val code: String, val drive: String?)
+
+/** The PC accepts keyboard input ([layout] is the PC's current layout, QWERTY when it is anything but AZERTY). */
+data class KeyboardInfo(val layout: KeyboardLayoutId)
 
 /**
  * [icon] is a name from the spec list (see [ContextIcons]); it may be unknown, the UI then shows a dot.
@@ -92,6 +96,7 @@ data class ActionsState(
     val nowPlaying: NowPlaying? = null,
     val notice: Notice? = null,
     val context: ContextBar? = null,
+    val keyboard: KeyboardInfo? = null,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -136,6 +141,7 @@ data class ActionsState(
                 text(n, "code")?.let { Notice(it, text(n, "drive")) }
             },
             context = context(json),
+            keyboard = available(json, "keyboard")?.let { KeyboardInfo(KeyboardLayoutId.fromWire(it.opt("layout") as? String)) },
         )
 
         /**

@@ -116,6 +116,7 @@ import com.orizonx.client.actions.VolumeIcon
 import com.orizonx.client.actions.WifiIcon
 import com.orizonx.client.actions.WifiState
 import com.orizonx.client.i18n.LangPref
+import com.orizonx.client.keyboard.KeyLayouts
 import com.orizonx.client.i18n.LocalLang
 import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
@@ -197,6 +198,7 @@ fun ActionsScreen(
     val pageMemory = remember { ContextPageMemory() }
     var pageVersion by remember { mutableIntStateOf(0) }
     var stripHeightPx by remember { mutableIntStateOf(0) }
+    var keyboardOpen by remember { mutableStateOf(false) }
 
     val volumeThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.volumeSet(it)) } }
     val brightnessThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.brightnessSet(it)) } }
@@ -216,22 +218,10 @@ fun ActionsScreen(
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             val state = shown
             val contextBar = state?.context
-            Column(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-                        LangPill(langPref, onLangPref)
-                        Spacer(Modifier.width(10.dp))
-                        Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
-                    }
-                    if (state == null) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            GlassText(tr(S.CONNECTING_TO_PC), size = 16.sp, alpha = 0.8f)
-                        }
-                    } else {
-                        ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
-                    }
-                }
-                // The Touch-Bar-like strip sits at the very bottom; without a context nothing is reserved for it.
+            val keyboardInfo = state?.keyboard
+            // The keyboard screen replaces the tiles; it closes by itself when the PC stops offering a keyboard.
+            val showKeyboard = keyboardOpen && keyboardInfo != null
+            val contextStrip: @Composable () -> Unit = {
                 if (contextBar != null) {
                     ContextBarStrip(
                         contextBar, controls, landscape, pageMemory, pageVersion,
@@ -243,12 +233,48 @@ fun ActionsScreen(
                     )
                 }
             }
+            if (showKeyboard && keyboardInfo != null) {
+                Column(Modifier.fillMaxSize()) {
+                    // The context bar stays, above the keyboard.
+                    Box(Modifier.padding(top = 8.dp)) { contextStrip() }
+                    KeyboardScreen(
+                        KeyLayouts.of(keyboardInfo.layout),
+                        onAction = { send(it) },
+                        onClose = { keyboardOpen = false },
+                        tap = tap,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                            LangPill(langPref, onLangPref)
+                            if (keyboardInfo != null) {
+                                Spacer(Modifier.width(10.dp))
+                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
+                        }
+                        if (state == null) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                GlassText(tr(S.CONNECTING_TO_PC), size = 16.sp, alpha = 0.8f)
+                            }
+                        } else {
+                            ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
+                        }
+                    }
+                    // The Touch-Bar-like strip sits at the very bottom; without a context nothing is reserved for it.
+                    contextStrip()
+                }
+            }
             AnimatedVisibility(
                 visible = noticeCode != null,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
-                        bottom = if (contextBar != null) {
+                        bottom = if (contextBar != null && !showKeyboard) {
                             24.dp + maxOf(ContextBarHeight, with(LocalDensity.current) { stripHeightPx.toDp() }) + ContextBarBottomMargin
                         } else {
                             24.dp
@@ -1145,7 +1171,7 @@ private fun ChipIconButton(icon: Int, description: String, onClick: () -> Unit) 
 // --- Controls ------------------------------------------------------------------------------
 
 @Composable
-internal fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, icon: Int? = null) {
     Box(
         modifier
             .heightIn(min = 44.dp)
@@ -1156,7 +1182,15 @@ internal fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier
             .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        GlassText(text, size = 15.sp, weight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+        if (icon == null) {
+            GlassText(text, size = 15.sp, weight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Picto(icon, 20.dp)
+                Spacer(Modifier.width(8.dp))
+                GlassText(text, size = 15.sp, weight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+            }
+        }
     }
 }
 
