@@ -1,6 +1,7 @@
 package com.orizonx.client.ui
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -8,6 +9,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
@@ -92,19 +99,25 @@ fun GamepadScreen(
                 )
             }
         }
-        val closeDescription = tr(S.GAMEPAD_CLOSE_DESC)
+        // Le geste ou le bouton Retour d'Android ferme aussi la manette.
+        BackHandler { tap(); onClose() }
+        // Bien visible, et sous la zone de la caméra (encoche) : en paysage, elle tombe au milieu du bord du haut.
+        val closeLabel = tr(S.GAMEPAD_CLOSE_DESC)
         Box(
             Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 6.dp)
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.12f))
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .padding(top = 10.dp)
+                .height(44.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(Color.White.copy(alpha = 0.22f))
+                .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
                 .clickable { tap(); onClose() }
-                .semantics { contentDescription = closeDescription },
+                .semantics { contentDescription = closeLabel }
+                .padding(horizontal = 18.dp),
             contentAlignment = Alignment.Center,
         ) {
-            BasicText("✕", style = TextStyle(color = Color.White, fontSize = 16.sp))
+            BasicText("✕  $closeLabel", style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
         }
     }
 }
