@@ -23,6 +23,8 @@ class MatchTest(unittest.TestCase):
             "Code.exe": "vscode",
             "Illustrator.exe": "illustrator", "Photoshop.exe": "photoshop",
             "Canva.exe": "canva", "Figma.exe": "figma",
+            "Adobe Premiere Pro.exe": "premiere", "AfterFX.exe": "aftereffects",
+            "InDesign.exe": "indesign", "Lightroom.exe": "lightroom",
         }
         for exe, profile in cases.items():
             with self.subTest(exe):
@@ -95,7 +97,8 @@ class TableTest(unittest.TestCase):
     def test_profile_ids(self):
         self.assertEqual([p.id for p in cp.PROFILES],
                          ["spotify", "powerpoint", "browser", "word", "excel", "vscode", "explorer",
-                          "illustrator", "photoshop", "canva", "figma", "generic"])
+                          "illustrator", "photoshop", "canva", "figma",
+                          "premiere", "aftereffects", "indesign", "lightroom", "generic"])
 
     def test_each_page_has_one_to_eight_buttons_with_unique_ids(self):
         seen = set()
@@ -234,6 +237,69 @@ CREATIVE = {
             "Zoom −|Zoom −|Ctrl+-|zoom_out", "Zoom +|Zoom +|Ctrl+=|zoom_in", "Fit|Ajuster|Ctrl+Alt+0|zoom_fit",
             "Present|Présenter|Ctrl+Alt+P|present"],
     },
+    "premiere": {
+        "tools": [
+            "Selection|Sélection|V|select", "Track select|Sélection de piste|A|track_select",
+            "Ripple edit|Modification par propagation|B|ripple_edit", "Razor|Cutter|C|razor",
+            "Slip|Déplacement|Y|slip", "Pen|Plume|P|pen", "Hand|Main|H|hand", "Type|Texte|T|text"],
+        "edit": [
+            "Undo|Annuler|Ctrl+Z|undo", "Redo|Rétablir|Ctrl+Shift+Z|redo",
+            "Add edit|Ajouter un montage|Ctrl+K|add_edit",
+            "Ripple delete|Supprimer et raccorder|Shift+Delete|ripple_delete",
+            "Mark in|Point d'entrée|I|mark_in", "Mark out|Point de sortie|O|mark_out",
+            "Export|Exporter|Ctrl+M|export", "Save|Enregistrer|Ctrl+S|save"],
+        "playback": [
+            "Play/Pause|Lecture/Pause|Space|play_pause", "Previous frame|Image précédente|Left|frame_prev",
+            "Next frame|Image suivante|Right|frame_next", "Previous edit|Montage précédent|Up|edit_prev",
+            "Next edit|Montage suivant|Down|edit_next", "Zoom out|Zoom −|-|zoom_out", "Zoom in|Zoom +|=|zoom_in",
+            "Fit timeline|Ajuster la séquence|OEM_5|timeline_fit"],
+    },
+    "aftereffects": {
+        "tools": [
+            "Selection|Sélection|V|select", "Hand|Main|H|hand", "Zoom|Zoom|Z|search", "Rotation|Rotation|W|rotate",
+            "Anchor point|Point d'ancrage|Y|anchor", "Pen|Plume|G|pen", "Shape|Forme|Q|rectangle",
+            "Type|Texte|Ctrl+T|text"],
+        "edit": [
+            "Undo|Annuler|Ctrl+Z|undo", "Redo|Rétablir|Ctrl+Shift+Z|redo", "Duplicate|Dupliquer|Ctrl+D|copy",
+            "Split layer|Scinder le calque|Ctrl+Shift+D|split_layer",
+            "Precompose|Précomposer|Ctrl+Shift+C|precompose", "New solid|Nouvel solide|Ctrl+Y|solid",
+            "Keyframes|Images clés|U|keyframes", "Save|Enregistrer|Ctrl+S|save"],
+        "timeline": [
+            "Play|Lecture|Space|play_pause", "Previous frame|Image précédente|PageUp|frame_prev",
+            "Next frame|Image suivante|PageDown|frame_next", "Start|Début|Home|go_start", "End|Fin|End|go_end",
+            "Previous keyframe|Image clé précédente|J|keyframe_prev",
+            "Next keyframe|Image clé suivante|K|keyframe_next", "Render queue|File de rendu|Ctrl+M|render"],
+    },
+    "indesign": {
+        "tools": [
+            "Selection|Sélection|V|select", "Direct selection|Sélection directe|A|direct_select",
+            "Type|Texte|T|text", "Rectangle frame|Bloc rectangulaire|F|rect_frame",
+            "Rectangle|Rectangle|M|rectangle", "Ellipse|Ellipse|L|ellipse", "Pen|Plume|P|pen", "Hand|Main|H|hand"],
+        "edit": [
+            "Undo|Annuler|Ctrl+Z|undo", "Redo|Rétablir|Shift+Ctrl+Z|redo", "Group|Grouper|Ctrl+G|group",
+            "Ungroup|Dissocier|Shift+Ctrl+G|ungroup", "Place|Importer|Ctrl+D|place",
+            "Duplicate|Dupliquer|Alt+Shift+Ctrl+D|copy", "Lock|Verrouiller|Ctrl+L|lock",
+            "Save|Enregistrer|Ctrl+S|save"],
+        "view": [
+            "Zoom|Zoom|Z|search", "Fit page|Ajuster la page|Ctrl+0|zoom_fit", "100 %|100 %|Ctrl+1|zoom_100",
+            "Zoom −|Zoom −|Ctrl+-|zoom_out", "Zoom +|Zoom +|Ctrl+=|zoom_in", "Preview|Aperçu|W|preview",
+            "Rulers|Règles|Ctrl+R|rulers", "Export|Exporter|Ctrl+E|export"],
+    },
+    "lightroom": {
+        "navigate": [
+            "Grid|Grille|G|grid", "Loupe|Loupe|E|loupe", "Develop|Développement|D|develop",
+            "Compare|Comparaison|C|compare", "Crop|Recadrage|R|crop", "Spot removal|Retouche|Q|spot",
+            "Previous|Précédente|Left|arrow_left", "Next|Suivante|Right|arrow_right"],
+        "rate": [
+            "Pick|Retenir|P|pick", "Reject|Rejeter|X|reject", "Unflag|Sans marque|U|unflag",
+            "1 ★|1 ★|1|star", "2 ★|2 ★|2|star", "3 ★|3 ★|3|star", "4 ★|4 ★|4|star", "5 ★|5 ★|5|star"],
+        "edit": [
+            "Undo|Annuler|Ctrl+Z|undo", "Redo|Rétablir|Ctrl+Y|redo", "Auto|Auto|Ctrl+U|auto",
+            "Copy settings|Copier les réglages|Ctrl+Shift+C|copy_settings",
+            "Paste settings|Coller les réglages|Ctrl+Shift+V|paste_settings",
+            "Before/After|Avant/Après|Y|before_after", "Export|Exporter|Ctrl+Shift+E|export",
+            "Fullscreen|Plein écran|F|fullscreen"],
+    },
     "figma": {
         "tools": [
             "Move|Déplacer|V|move", "Frame|Cadre|F|frame", "Rectangle|Rectangle|R|rectangle",
@@ -249,7 +315,9 @@ CREATIVE = {
             "Rulers|Règles|Shift+R|rulers", "Outline|Contours|Ctrl+Y|outline"],
     },
 }
-PAGE_LABELS = {"tools": ("Tools", "Outils"), "edit": ("Edit", "Édition"), "view": ("View", "Affichage")}
+PAGE_LABELS = {"tools": ("Tools", "Outils"), "edit": ("Edit", "Édition"), "view": ("View", "Affichage"),
+               "playback": ("Playback", "Lecture"), "timeline": ("Timeline", "Montage"),
+               "navigate": ("Navigate", "Navigation"), "rate": ("Rate", "Notes")}
 US_SCAN = lambda ch: {"-": 0xBD, "=": 0xBB, "/": 0xBF, "`": 0xC0}.get(ch, -1)  # noqa: E731
 
 
@@ -276,6 +344,13 @@ class CreativeProfilesTest(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_new_icons_are_known(self):
+        for name in ("track_select", "ripple_edit", "razor", "slip", "add_edit", "ripple_delete", "mark_in",
+                     "mark_out", "export", "frame_prev", "frame_next", "edit_prev", "edit_next", "timeline_fit",
+                     "rotate", "anchor", "split_layer", "precompose", "solid", "keyframes", "go_start", "go_end",
+                     "keyframe_prev", "keyframe_next", "render", "rect_frame", "place", "preview", "grid", "loupe",
+                     "develop", "compare", "spot", "pick", "reject", "unflag", "star", "auto", "copy_settings",
+                     "paste_settings", "before_after", "fullscreen"):
+            self.assertIn(name, cp.ICON_NAMES)
         for name in ("select", "direct_select", "pen", "text", "rectangle", "ellipse", "line", "brush", "eraser",
                      "eyedropper", "crop", "lasso", "marquee", "move", "frame", "comment",
                      "group", "ungroup", "lock", "unlock", "layer_new", "layer_duplicate", "merge", "deselect",
@@ -300,6 +375,29 @@ class CreativeProfilesTest(unittest.TestCase):
         self.assertEqual(vks("="), [0xBB])
         self.assertEqual(vks("-", lambda ch: 0x36), [0x36])  # an AZERTY-like layout answer is honoured
 
+    def test_adobe_video_and_photo_shortcuts_become_the_right_keys(self):
+        def vks(shortcut, scan=US_SCAN):
+            return [vk for vk, flags in keys.parse_shortcut(shortcut, scan) if not flags & keys.KEYEVENTF_KEYUP]
+        never = lambda ch: self.fail("the layout must not be consulted")  # noqa: E731
+        # Lightroom's ratings: the digit-row virtual keys, whatever the layout
+        for digit in "12345":
+            self.assertEqual(vks(digit, never), [ord(digit)])
+        self.assertEqual(vks("1", never), [0x31])
+        self.assertEqual(vks("5", never), [0x35])
+        self.assertEqual(vks("OEM_5", never), [0xDC])  # the \ key by position
+        self.assertEqual(vks("Shift+Delete", never), [keys.VK_SHIFT, 0x2E])
+        for name, vk in (("PageUp", 0x21), ("PageDown", 0x22), ("End", 0x23), ("Home", 0x24), ("Left", 0x25),
+                         ("Up", 0x26), ("Right", 0x27), ("Down", 0x28), ("Space", 0x20)):
+            self.assertEqual(vks(name, never), [vk], name)
+
+    def test_navigation_keys_carry_the_extended_flag_and_space_does_not(self):
+        def down_flags(shortcut):
+            return [f for vk, f in keys.parse_shortcut(shortcut, US_SCAN) if not f & keys.KEYEVENTF_KEYUP][-1]
+        for name in ("Delete", "Shift+Delete", "PageUp", "PageDown", "Home", "End", "Up", "Down", "Left", "Right"):
+            self.assertEqual(down_flags(name), keys.KEYEVENTF_EXTENDEDKEY, name)
+        for name in ("Space", "1", "OEM_5", "Y"):
+            self.assertEqual(down_flags(name), 0, name)
+
     def test_creative_shortcuts_with_a_fake_send_input(self):
         sent = []
 
@@ -323,6 +421,26 @@ class CreativeDetectionTest(unittest.TestCase):
                          ("FIGMA.EXE", "figma")):
             with self.subTest(exe):
                 self.assertEqual(cp.match(app(exe)).id, pid)
+
+    def test_adobe_video_and_photo_exes_in_mixed_case(self):
+        for exe, pid in (("Adobe Premiere Pro.exe", "premiere"), ("ADOBE PREMIERE PRO.EXE", "premiere"),
+                         ("AfterFX.exe", "aftereffects"), ("afterfx.EXE", "aftereffects"),
+                         ("InDesign.exe", "indesign"), ("INDESIGN.EXE", "indesign"),
+                         ("Lightroom.exe", "lightroom"), ("lightroom.EXE", "lightroom")):
+            with self.subTest(exe):
+                self.assertEqual(cp.match(app(exe)).id, pid)
+
+    def test_adobe_video_and_photo_exes_not_in_the_list_are_generic(self):
+        for exe in ("Adobe Media Encoder.exe", "Lightroom Classic.exe", "AfterFX.com"):
+            with self.subTest(exe):
+                self.assertEqual(cp.match(app(exe)).id, "generic")
+
+    def test_adobe_video_and_photo_display_names(self):
+        for exe, name in (("Adobe Premiere Pro.exe", "Premiere Pro"), ("AfterFX.exe", "After Effects"),
+                          ("InDesign.exe", "InDesign"), ("Lightroom.exe", "Lightroom")):
+            for lang in ("en", "fr"):
+                with self.subTest(exe, lang=lang):
+                    self.assertEqual(cp.display_name(app(exe), lang), name)
 
     def test_canva_in_a_chrome_title(self):
         a = app("chrome.exe", "Chrome_WidgetWin_1", "Logo – Canva - Google Chrome")
@@ -422,6 +540,8 @@ class ContextProviderTest(unittest.TestCase):
                 "vscode": ("Code.exe", "Cls"), "explorer": ("explorer.exe", "CabinetWClass"),
                 "illustrator": ("Illustrator.exe", "Cls"), "photoshop": ("Photoshop.exe", "Cls"),
                 "canva": ("Canva.exe", "Cls"), "figma": ("Figma.exe", "Cls"),
+                "premiere": ("Adobe Premiere Pro.exe", "Cls"), "aftereffects": ("AfterFX.exe", "Cls"),
+                "indesign": ("InDesign.exe", "Cls"), "lightroom": ("Lightroom.exe", "Cls"),
                 "generic": ("notepad.exe", "Cls")}
         for profile in cp.PROFILES:
             self.tracker.app = app(*exes[profile.id])
