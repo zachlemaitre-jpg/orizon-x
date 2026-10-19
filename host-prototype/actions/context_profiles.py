@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from actions.browser_url import host_matches, host_of
 from actions.foreground import ForegroundApp, short_title
 
 ICON_NAMES = frozenset({
@@ -309,16 +310,27 @@ def profile_by_id(profile_id: str) -> Optional[Profile]:
     return _BY_ID.get(profile_id)
 
 
-def match(app: Optional[ForegroundApp]) -> Profile:
-    """The profile of an app (generic for an unknown one or none). In a browser, a window title that mentions Canva
-    or Figma (case-insensitive) picks that profile; the title of any other window is never looked at."""
+def is_browser(app: Optional[ForegroundApp]) -> bool:
+    """True for the window of one of the browsers of the ``browser`` profile (the only ones whose URL is read)."""
+    return app is not None and app.exe.lower() in _BY_ID["browser"].exes
+
+
+def match(app: Optional[ForegroundApp], url: Optional[str] = None) -> Profile:
+    """The profile of an app (generic for an unknown one or none). In a browser, Canva and Figma are picked by the
+    host of the tab's ``url`` (canva.com / figma.com and their subdomains; ``www.`` and the scheme are optional),
+    then by a window title that mentions them (case-insensitive); otherwise it is the browser profile. The URL and
+    the title of any other window are never looked at."""
     if app is None:
         return _GENERIC
     exe = app.exe.lower()
     for profile in PROFILES:
         if exe in profile.exes and (profile.window_class is None or app.window_class == profile.window_class):
             if profile.id == "browser":
+                host = host_of(url)
                 title = app.title.lower()
+                for web_id in _WEB_TITLES:
+                    if host_matches(host, web_id + ".com"):
+                        return _BY_ID[web_id]
                 for web_id in _WEB_TITLES:
                     if web_id in title:
                         return _BY_ID[web_id]
@@ -330,11 +342,11 @@ def normalize_lang(lang: object) -> str:
     return lang if lang in LANGS else DEFAULT_LANG
 
 
-def display_name(app: Optional[ForegroundApp], lang: str = DEFAULT_LANG) -> str:
+def display_name(app: Optional[ForegroundApp], lang: str = DEFAULT_LANG, url: Optional[str] = None) -> str:
     """The name shown on the bar: fixed for the known apps, the browser's own name, else the window's short title,
     else the exe without ".exe". ``lang`` ("en" or "fr") picks the names that vary and the default name."""
     lang = normalize_lang(lang)
-    profile = match(app)
+    profile = match(app, url)
     if app is not None:
         if profile.id == "browser":
             return _BROWSER_NAMES.get(app.exe.lower()) or _NAMES_BY_LANG["browser"][lang]

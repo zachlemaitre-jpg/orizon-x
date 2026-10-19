@@ -19,6 +19,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from actions import context_profiles, keys
+from actions.browser_url import BrowserUrlReader
 from actions.foreground import ForegroundTracker
 
 _log = logging.getLogger("orizonx.actions.context")
@@ -30,20 +31,29 @@ ACTION_FAILED = "action_failed"
 
 class ContextProvider:
     def __init__(self, tracker: Any = None, send_shortcut: Optional[Callable[[str], bool]] = None,
-                 log: Optional[Callable[[str], None]] = None, lang: str = context_profiles.DEFAULT_LANG) -> None:
+                 log: Optional[Callable[[str], None]] = None, lang: str = context_profiles.DEFAULT_LANG,
+                 url_reader: Any = None) -> None:
         self.lang = context_profiles.normalize_lang(lang)
         self._tracker = tracker if tracker is not None else ForegroundTracker()
         self._send_shortcut = send_shortcut or keys.send_shortcut
         self._log = log or _log.info
+        self._url_reader = url_reader if url_reader is not None else BrowserUrlReader(log=self._log)
+
+    def _profile(self, app: Any) -> "tuple[context_profiles.Profile, Optional[str]]":
+        """The profile of ``app`` and the tab's URL it was picked with (read only for a browser window)."""
+        url = None
+        if context_profiles.is_browser(app) and getattr(app, "hwnd", 0):
+            url = self._url_reader.url(app.hwnd, app.title)
+        return context_profiles.match(app, url), url
 
     def snapshot(self) -> dict:
         app = self._tracker.current()
         if app is None:
             return {"available": False}
-        profile = context_profiles.match(app)
+        profile, url = self._profile(app)
         return {
             "available": True,
-            "app": context_profiles.display_name(app, self.lang),
+            "app": context_profiles.display_name(app, self.lang, url),
             "profile": profile.id,
             "buttons": self._buttons(profile.pages[0]),
             "pages": [{"id": page.id, "label": page.label(self.lang), "buttons": self._buttons(page)}
@@ -66,7 +76,7 @@ class ContextProvider:
             return ACTION_FAILED
         button_id = action.get("button")
         app = self._tracker.current()
-        profile = context_profiles.match(app)
+        profile, _ = self._profile(app)
         button = next((b for b in profile.buttons if b.id == button_id), None) if app is not None else None
         if button is None:
             self._log(f"context: button {button_id!r} ignored, it is not in the profile of the app in front "

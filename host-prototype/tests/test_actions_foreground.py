@@ -51,6 +51,12 @@ class DetectionTest(unittest.TestCase):
         api.foreground = 10
         self.assertEqual(tracker.current(), ForegroundApp("POWERPNT.EXE", "PPTFrameClass", "Deck - PowerPoint", 111))
 
+    def test_reports_the_window_handle(self):
+        api, tracker = make()
+        api.add(10, "Chrome_WidgetWin_1", "Tab", 111, r"C:\x\chrome.exe")
+        api.foreground = 10
+        self.assertEqual(tracker.current().hwnd, 10)
+
     def test_nothing_seen_yet_is_none(self):
         api, tracker = make()
         api.foreground = 0

@@ -418,6 +418,10 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
         return NowPlayingProvider()
 
     def context() -> Any:
+        try:  # the browser tab's URL is read with UI Automation (comtypes): imported here, in the building thread
+            import comtypes.client  # noqa: F401
+        except ImportError as e:
+            log(f"hub: context: UI Automation unavailable ({e!r}), browser tabs are told by their title only")
         from actions.context import ContextProvider
         return ContextProvider(log=log, lang=lang)
 

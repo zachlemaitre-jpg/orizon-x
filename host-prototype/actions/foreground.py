@@ -22,7 +22,7 @@ import logging
 import os
 import re
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 _log = logging.getLogger("orizonx.actions.foreground")
@@ -43,6 +43,7 @@ class ForegroundApp:
     window_class: str
     title: str
     pid: int
+    hwnd: int = field(default=0, compare=False)  # the window, for what needs to look inside it (the URL)
 
 
 def short_title(title: str) -> str:
@@ -145,5 +146,5 @@ class ForegroundTracker:
         exe = _base_name(api.process_exe(pid))
         if exe.lower() == OWN_EXE:
             return self._last
-        self._last = ForegroundApp(exe, window_class, api.window_title(hwnd), pid)
+        self._last = ForegroundApp(exe, window_class, api.window_title(hwnd), pid, hwnd)
         return self._last
