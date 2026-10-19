@@ -12,7 +12,7 @@ One thread owns everything:
   as it lasts.
 
 State shape: ``{"v": 1, "clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-"usb": [...], "now_playing", "context", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
+"usb": [...], "now_playing", "context", "keyboard", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
 ``airplane`` come from ``merge_radio_state(radios, wifi_info, bt_info)`` (see actions.radios); ``usb`` is the list
 of drives. A section whose provider is missing or raising is ``{"available": False}`` (``[]`` for usb) until the
 provider answers again; the failure is logged once per streak.
@@ -38,8 +38,17 @@ in the state, like a cover.
 The ``context`` section (actions.context, the context bar) is polled with the fast group (250 ms), like audio: the
 bar must follow the foreground app. Its actions are ``context.*``.
 
+The ``keyboard`` section (actions.keyboard, the device's PC keyboard) carries the layout to draw; its layout is read
+in the slow group. Its actions (``keyboard.*``, one per key press or release, up to about 30 a second while a key
+repeats) are routed to it but do NOT make the hub poll every provider again, unlike any other action.
+
+``stop()`` joins the thread, then calls ``stop()`` of every provider that has one (the keyboard releases the keys that
+are down), whether or not the hub was started and whatever happened to its thread; one that fails is logged and does
+not prevent the others. The engine calls ``hub.stop()`` in a ``finally`` at the end of every Actions session (the
+device leaves, the connection drops, the role changes, the engine stops).
+
 Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
-now_playing, context.
+now_playing, context, keyboard.
 """
 from __future__ import annotations
 
@@ -68,10 +77,12 @@ _ROUTES = (
     ("airplane.", "radios"),
     ("usb.", "usb"),
     ("context.", "context"),
+    ("keyboard.", "keyboard"),
 )
+_QUIET = ("keyboard.",)  # actions that do not make the hub poll every provider again
 
 _FAST = ("audio", "context")
-_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing")
+_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard")
 _UNAVAILABLE = {"available": False}
 
 _COINIT_MULTITHREADED = 0
@@ -165,6 +176,17 @@ class ActionsHub:
             thread.join(STOP_JOIN_S)
             if thread.is_alive():
                 self._log("hub: thread did not stop within %.0f s" % STOP_JOIN_S)
+        self._stop_providers()
+
+    def _stop_providers(self) -> None:
+        for name, provider in list(self._providers.items()):
+            stopper = getattr(provider, "stop", None)
+            if not callable(stopper):
+                continue
+            try:
+                stopper()
+            except Exception as e:  # noqa: BLE001 - the other providers must be stopped too
+                self._log(f"hub: provider {name!r} did not stop cleanly: {e!r}")
 
     def handle(self, action: dict) -> None:
         """Queue an ACTION for the hub thread (callable from any thread)."""
@@ -224,7 +246,9 @@ class ActionsHub:
                 action = self._actions.get_nowait()
             except queue.Empty:
                 return any_action
-            any_action = True
+            action_id = action.get("id") if isinstance(action, dict) else None
+            if not (isinstance(action_id, str) and action_id.startswith(_QUIET)):
+                any_action = True
             self._execute(action)
 
     def _execute(self, action: Any) -> None:
@@ -289,6 +313,7 @@ class ActionsHub:
         state["usb"] = [dict(d) for d in drives]
         state["now_playing"] = self._section("now_playing")
         state["context"] = self._section("context")
+        state["keyboard"] = self._section("keyboard")
         return state
 
     def _log_artwork_once(self, artwork_id: str, line: str) -> None:
@@ -444,6 +469,10 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
         from actions.now_playing import NowPlayingProvider
         return NowPlayingProvider()
 
+    def keyboard() -> Any:
+        from actions.keyboard import KeyboardProvider
+        return KeyboardProvider(log=log)
+
     def context() -> Any:
         try:  # the browser tab's URL is read with UI Automation (comtypes): imported here, in the building thread
             import comtypes.client  # noqa: F401
@@ -455,6 +484,6 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),
                           ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing),
-                          ("context", context)):
+                          ("context", context), ("keyboard", keyboard)):
         add(name, factory)
     return providers

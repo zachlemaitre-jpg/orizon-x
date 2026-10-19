@@ -82,6 +82,7 @@ def make_providers():
         "now_playing": FakeNowPlaying(),
         "context": FakeProvider({"available": True, "app": "Spotify", "profile": "spotify", "buttons": [
             {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]}),
+        "keyboard": FakeProvider({"available": True, "layout": "azerty"}),
     }
 
 
@@ -131,6 +132,7 @@ class StateTest(unittest.TestCase):
                             "album": "UN BESO", "playing": True, "artwork": ID_A},
             "context": {"available": True, "app": "Spotify", "profile": "spotify", "buttons": [
                 {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]},
+            "keyboard": {"available": True, "layout": "azerty"},
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -1066,6 +1068,120 @@ class IconArtworkTest(unittest.TestCase):
         self.assertEqual([a for a, _ in h.artworks if a == ICON_1], [ICON_1])
 
 
+class FakeKeyboard(FakeProvider):
+    def __init__(self, layout="azerty"):
+        super().__init__({"available": True, "layout": layout})
+        self.stops = []
+        self.stop_threads = []
+        self.stop_raises = None
+
+    def stop(self):
+        self.stops.append(time.monotonic())
+        self.stop_threads.append(threading.get_ident())
+        if self.stop_raises:
+            raise self.stop_raises
+
+
+class KeyboardHubTest(unittest.TestCase):
+    def harness(self, **kw):
+        providers = make_providers()
+        providers["keyboard"] = FakeKeyboard()
+        return Harness(providers, **kw)
+
+    def test_keyboard_section_carries_the_layout(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.sent[0]["keyboard"], {"available": True, "layout": "azerty"})
+
+    def test_layout_is_refreshed_in_the_slow_poll_and_broadcast(self):
+        h = self.harness()
+        h.tick()
+        h.providers["keyboard"].snap["layout"] = "qwerty"
+        h.tick(0.3)  # the fast poll only: the layout is not read yet
+        self.assertEqual(h.sent[-1]["keyboard"]["layout"], "azerty")
+        h.tick(1.0)  # the slow poll
+        self.assertEqual(h.sent[-1]["keyboard"], {"available": True, "layout": "qwerty"})
+
+    def test_missing_or_failing_keyboard_is_unavailable(self):
+        providers = make_providers()
+        del providers["keyboard"]
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["keyboard"], {"available": False})
+        h2 = self.harness()
+        h2.providers["keyboard"].raises = OSError("x")
+        h2.tick()
+        self.assertEqual(h2.sent[0]["keyboard"], {"available": False})
+
+    def test_keyboard_actions_are_routed_to_the_keyboard_provider(self):
+        h = self.harness()
+        h.tick()
+        key = {"id": "keyboard.key", "sc": 16, "ext": False, "down": True}
+        h.hub.handle(key)
+        h.hub.handle({"id": "keyboard.release"})
+        h.hub._tick(h.clock.t)
+        self.assertEqual(h.providers["keyboard"].handled, [key, {"id": "keyboard.release"}])
+        self.assertEqual(h.providers["context"].handled, [])
+        self.assertTrue(all("notice" not in s for s in h.sent))
+
+    def test_a_key_does_not_poll_the_slow_providers(self):
+        h = self.harness()
+        h.tick()
+        polls = {name: p.snapshots for name, p in h.providers.items()}
+        for _ in range(20):
+            h.hub.handle({"id": "keyboard.key", "sc": 16, "ext": False, "down": True})
+            h.hub._tick(h.clock.t)  # same instant: only an action could force a poll
+        for name in ("usb", "radios", "battery", "wifi_info", "bt_info", "media", "brightness", "now_playing"):
+            self.assertEqual(h.providers[name].snapshots, polls[name], name)
+
+    def test_another_action_still_forces_a_poll(self):
+        h = self.harness()
+        h.tick()
+        before = h.providers["usb"].snapshots
+        h.hub.handle({"id": "volume.set", "value": 0.5})
+        h.hub._tick(h.clock.t)
+        self.assertEqual(h.providers["usb"].snapshots, before + 1)
+
+    def test_stop_stops_the_keyboard_even_if_the_hub_never_started(self):
+        h = self.harness()
+        h.hub.stop()
+        self.assertEqual(len(h.providers["keyboard"].stops), 1)
+
+    def test_stop_is_called_after_the_hub_thread_ended(self):
+        providers = make_providers()
+        keyboard = providers["keyboard"] = FakeKeyboard()
+        sent = []
+        hub = ActionsHub(providers, sent.append, poll_fast_s=0.01, poll_slow_s=0.02, log=lambda _l: None)
+        hub.start()
+        deadline = time.time() + 5
+        while not sent and time.time() < deadline:
+            time.sleep(0.005)
+        hub_thread = hub._thread
+        hub.stop()
+        self.assertFalse(hub_thread.is_alive())
+        self.assertEqual(len(keyboard.stops), 1)
+
+    def test_a_provider_that_fails_to_stop_does_not_stop_the_others_or_the_hub(self):
+        h = self.harness()
+        h.providers["keyboard"].stop_raises = OSError("SendInput gone")
+        other = FakeKeyboard()
+        h.providers["other"] = other
+        h.hub.stop()
+        self.assertEqual(len(other.stops), 1)
+        self.assertTrue(any("keyboard" in line for line in h.logs))
+
+    def test_providers_without_stop_are_fine_and_stop_twice_is_harmless(self):
+        h = Harness()  # no provider has a stop() here
+        h.hub.stop()
+        h.hub.stop()
+
+    def test_default_providers_include_the_keyboard_without_sending_anything(self):
+        providers = default_providers(lambda _l: None)
+        self.assertIn("keyboard", providers)
+        self.assertTrue(callable(providers["keyboard"].stop))
+        self.assertEqual(providers["keyboard"].held, [])
+
+
 class ContextBarThroughTheHubTest(unittest.TestCase):
     """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
 
@@ -1172,7 +1288,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing", "context"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 

@@ -113,6 +113,19 @@ Action associée : `{"id":"context.press","button":"<id du bouton>"}`. Le PC reg
 
 Action `{"id":"context.lang","lang":"en"|"fr"}` : l'appareil change de langue pendant une session Actions. Le PC retraduit aussitôt la barre (état complet diffusé, comme après tout `ACTION`). Une valeur inconnue est ignorée et journalisée ; aucune `notice` n'est produite.
 
+### Clavier du PC (`keyboard`, `keyboard.key`, `keyboard.release`)
+
+L'appareil affiche un clavier de PC complet et envoie chaque touche par sa **position physique** (scan code « set 1 ») ; Windows applique ensuite sa propre disposition, si bien que les caractères, AltGr, les raccourcis et les jeux marchent.
+
+```json
+"keyboard":{"available":true,"layout":"azerty"}
+```
+
+- `layout` : `"azerty"` ou `"qwerty"`, la disposition que l'appareil doit dessiner. Le PC la lit (`GetKeyboardLayout`) sur la fenêtre au premier plan : langue principale française (`0x0C`), sauf français canadien (`0x0C0C`), donne `azerty`, tout le reste `qwerty`. Elle est relue avec le cycle lent du hub. Une section absente ou `available:false` : pas de clavier ; une disposition inconnue se lit comme `qwerty`.
+- Action `{"id":"keyboard.key","sc":<1..127>,"ext":<bool>,"down":<bool>}` : une touche enfoncée (`down:true`) ou relâchée (`down:false`). `ext` est le préfixe E0 (flèches, Suppr, Win, AltGr, Ctrl droite…). Le PC injecte `SendInput` avec `wVk=0`, `wScan=sc`, `KEYEVENTF_SCANCODE`, plus `KEYEVENTF_EXTENDEDKEY` si `ext`, plus `KEYEVENTF_KEYUP` si `down:false`. La répétition d'une touche tenue est faite par l'appareil (un `down` toutes les 33 ms après 500 ms). Seuls les couples `(sc, ext)` du clavier de l'appareil sont acceptés (`actions/keyboard.py`, `KEY_TABLE`) ; tout autre couple, ou une action mal formée, est ignoré et journalisé.
+- Action `{"id":"keyboard.release"}` : relâche toutes les touches enfoncées, la dernière enfoncée d'abord. Le PC fait la même chose à la fin de la session Actions (la tablette part, la connexion tombe, changement de rôle, arrêt), pour qu'aucune touche ne reste bloquée.
+- Ces actions ne produisent jamais de `notice` et, contrairement aux autres `ACTION`, ne provoquent pas de nouveau relevé complet des fournisseurs. Une fenêtre lancée en administrateur refuse les touches injectées si Orizon X ne l'est pas aussi (même limite que pour le tactile) : l'échec est journalisé une fois.
+
 ### Compatibilité
 
 Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.
