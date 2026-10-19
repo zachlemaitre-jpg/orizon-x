@@ -415,6 +415,28 @@ class ActionsStateTest {
     }
 
     @Test
+    fun gamepadSectionIsParsed() {
+        assertEquals(GamepadInfo(true), parse("""{"gamepad":{"available":true}}""").gamepad)
+        assertEquals(
+            GamepadInfo(false, GamepadProblem.DRIVER_MISSING),
+            parse("""{"gamepad":{"available":false,"reason":"driver_missing"}}""").gamepad,
+        )
+        assertEquals(GamepadInfo(false, GamepadProblem.ERROR), parse("""{"gamepad":{"available":false,"reason":"error"}}""").gamepad)
+    }
+
+    @Test
+    fun gamepadAbsentIsNullAndOddReasonsAreErrors() {
+        assertNull(parse("{}").gamepad)
+        assertNull(parse("""{"gamepad":null}""").gamepad)
+        assertNull(parse("""{"gamepad":"yes"}""").gamepad)
+        assertEquals(GamepadInfo(false, GamepadProblem.ERROR), parse("""{"gamepad":{"available":false}}""").gamepad)
+        assertEquals(GamepadInfo(false, GamepadProblem.ERROR), parse("""{"gamepad":{"available":false,"reason":5}}""").gamepad)
+        assertEquals(GamepadInfo(false, GamepadProblem.ERROR), parse("""{"gamepad":{"available":false,"reason":"other"}}""").gamepad)
+        assertEquals(GamepadInfo(false, GamepadProblem.ERROR), parse("""{"gamepad":{"available":"true"}}""").gamepad)
+        assertEquals(GamepadInfo(false, GamepadProblem.ERROR), parse("""{"gamepad":{}}""").gamepad)
+    }
+
+    @Test
     fun nowPlayingCoverIdStillParsed() {
         val n = parse(
             """{"now_playing":{"available":true,"app":"Spotify","title":"T","playing":true,"artwork":"0123456789abcdef0123456789abcdef01234567"}}""",

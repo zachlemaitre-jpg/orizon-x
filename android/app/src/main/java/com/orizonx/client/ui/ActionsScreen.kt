@@ -206,6 +206,7 @@ fun ActionsScreen(
     var stripHeightPx by remember { mutableIntStateOf(0) }
     var keyboardOpen by remember { mutableStateOf(false) }
     var trackpadOpen by remember { mutableStateOf(false) }
+    var gamepadOpen by remember { mutableStateOf(false) }
     val appContext = LocalContext.current
     val trackpadStore = remember { TrackpadStore(appContext.getSharedPreferences("orizonx", Context.MODE_PRIVATE)) }
     var trackpadSensitivity by remember { mutableFloatStateOf(trackpadStore.load()) }
@@ -232,6 +233,8 @@ fun ActionsScreen(
             // The keyboard screen replaces the tiles; it closes by itself when the PC stops offering a keyboard.
             val showKeyboard = keyboardOpen && keyboardInfo != null
             val showTrackpad = trackpadOpen && !showKeyboard && state?.trackpad == true
+            val gamepadInfo = state?.gamepad
+            val showGamepad = gamepadOpen && !showKeyboard && !showTrackpad && gamepadInfo != null
             val contextStrip: @Composable () -> Unit = {
                 if (contextBar != null) {
                     ContextBarStrip(
@@ -258,6 +261,9 @@ fun ActionsScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+            } else if (showGamepad && gamepadInfo != null) {
+                // Full screen, no header and no context bar.
+                GamepadScreen(gamepadInfo, onAction = { send(it) }, onClose = { gamepadOpen = false }, tap = tap)
             } else if (showTrackpad) {
                 Column(Modifier.fillMaxSize()) {
                     // Same header as the keyboard: context bar, then clock, battery, sound and brightness.
@@ -282,11 +288,15 @@ fun ActionsScreen(
                             LangPill(langPref, onLangPref)
                             if (keyboardInfo != null) {
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; gamepadOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
                             }
                             if (state?.trackpad == true) {
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
+                                Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; gamepadOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
+                            }
+                            if (gamepadInfo != null) {
+                                Spacer(Modifier.width(10.dp))
+                                Pill(tr(S.GAMEPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; gamepadOpen = true }, icon = R.drawable.ox_gamepad)
                             }
                             Spacer(Modifier.width(10.dp))
                             Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
@@ -308,7 +318,7 @@ fun ActionsScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
-                        bottom = if (contextBar != null && !showKeyboard && !showTrackpad) {
+                        bottom = if (contextBar != null && !showKeyboard && !showTrackpad && !showGamepad) {
                             24.dp + maxOf(ContextBarHeight, with(LocalDensity.current) { stripHeightPx.toDp() }) + ContextBarBottomMargin
                         } else {
                             24.dp

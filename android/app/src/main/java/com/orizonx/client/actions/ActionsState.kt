@@ -43,6 +43,20 @@ data class NowPlaying(
 
 data class Notice(val code: String, val drive: String?)
 
+/** What the PC reports for the virtual controller: [available], or why not ([problem]). */
+data class GamepadInfo(val available: Boolean, val problem: GamepadProblem? = null)
+
+enum class GamepadProblem {
+    DRIVER_MISSING,
+    ERROR,
+    ;
+
+    companion object {
+        /** "driver_missing" is the missing driver; any other reason (or none) is a generic error. */
+        fun fromWire(value: String?): GamepadProblem = if (value == "driver_missing") DRIVER_MISSING else ERROR
+    }
+}
+
 /** The PC accepts keyboard input ([layout] is the PC's current layout, QWERTY when it is anything but AZERTY). */
 data class KeyboardInfo(val layout: KeyboardLayoutId)
 
@@ -98,6 +112,7 @@ data class ActionsState(
     val context: ContextBar? = null,
     val keyboard: KeyboardInfo? = null,
     val trackpad: Boolean = false,
+    val gamepad: GamepadInfo? = null,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -144,6 +159,7 @@ data class ActionsState(
             context = context(json),
             keyboard = available(json, "keyboard")?.let { KeyboardInfo(KeyboardLayoutId.fromWire(it.opt("layout") as? String)) },
             trackpad = available(json, "trackpad") != null,
+            gamepad = gamepad(json),
         )
 
         /**
@@ -181,6 +197,13 @@ data class ActionsState(
                 val id = text(b, "id") ?: return@mapNotNull null
                 ContextButton(id, text(b, "icon") ?: "", text(b, "label") ?: "", b.opt("active") == true)
             }.take(max)
+        }
+
+        /** Present (even unavailable) when the PC has the section: a pill is shown, with the reason when it is not usable. */
+        private fun gamepad(json: JSONObject): GamepadInfo? {
+            val g = json.optJSONObject("gamepad") ?: return null
+            if (g.opt("available") == true) return GamepadInfo(true)
+            return GamepadInfo(false, GamepadProblem.fromWire(g.opt("reason") as? String))
         }
 
         /** The section object when the PC reports it with `available: true`, else null. */
