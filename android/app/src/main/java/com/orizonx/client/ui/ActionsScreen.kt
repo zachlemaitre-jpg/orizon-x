@@ -105,6 +105,8 @@ import com.orizonx.client.actions.BrightnessState
 import com.orizonx.client.actions.ClockState
 import com.orizonx.client.actions.ContextBar
 import com.orizonx.client.actions.ContextButton
+import com.orizonx.client.actions.ControlRules
+import com.orizonx.client.actions.KeyboardTopCards
 import com.orizonx.client.actions.ContextIcons
 import com.orizonx.client.actions.ContextPage
 import com.orizonx.client.actions.ContextPageMemory
@@ -237,6 +239,8 @@ fun ActionsScreen(
                 Column(Modifier.fillMaxSize()) {
                     // The context bar stays, above the keyboard.
                     Box(Modifier.padding(top = 8.dp)) { contextStrip() }
+                    // Clock, battery, sound and brightness stay too; the keyboard gets the height that is left.
+                    if (state != null) KeyboardTopRow(state, controls)
                     KeyboardScreen(
                         KeyLayouts.of(keyboardInfo.layout),
                         onAction = { send(it) },
@@ -418,9 +422,9 @@ private fun ColumnScope.RightColumn(state: ActionsState, c: Controls, brightness
 }
 
 /** The media keys live in the "En cours de lecture" card when it is shown, in the Son card otherwise. */
-private fun soundKeys(state: ActionsState) = state.mediaAvailable && state.nowPlaying == null
+private fun soundKeys(state: ActionsState) = ControlRules.soundKeys(state)
 
-private fun hasSound(state: ActionsState) = state.audio != null || soundKeys(state)
+private fun hasSound(state: ActionsState) = ControlRules.hasSound(state)
 private fun hasRadios(state: ActionsState) = state.wifi != null || state.bluetooth != null || state.airplane != null
 
 /** The controls the PC reports as available, in display order. */
@@ -432,6 +436,51 @@ private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit
     if (hasRadios(state)) list += { RadioTiles(state, c) }
     return list
 }
+
+/**
+ * What stays above the open keyboard, compact: the clock with its date and the PC battery, then the Sound and Brightness
+ * cards (the very same cards as the tiles, with the same actions). Only what the PC reports ([KeyboardTopCards]).
+ * Wide screens put all three on one row; narrow ones put the clock on top of the cards, which then sit side by side
+ * when they fit.
+ */
+@Composable
+private fun KeyboardTopRow(state: ActionsState, c: Controls) {
+    val keep = KeyboardTopCards.of(state)
+    if (!keep.any) return
+    val brightness = state.brightness
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp, bottom = 2.dp)) {
+        val width = maxWidth
+        val wide = width >= 720.dp
+        val cardsAside = width >= 480.dp
+        @Composable
+        fun RowScope.cards() {
+            if (keep.sound) SoundCard(state, c, Modifier.weight(1f).fillMaxHeight())
+            if (brightness != null) BrightnessCard(brightness, c, Modifier.weight(1f).fillMaxHeight())
+        }
+        if (wide) {
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (keep.clock) {
+                    BoxWithConstraints(Modifier.weight(0.8f), contentAlignment = Alignment.Center) {
+                        ClockBlock(state.clock, state.battery, min(KeyboardClockSp, maxWidth.value / 4.1f), 16f)
+                    }
+                }
+                cards()
+            }
+        } else {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (keep.clock) ClockBlock(state.clock, state.battery, min(KeyboardClockSp, width.value / 4.1f), 16f)
+                if (cardsAside) {
+                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) { cards() }
+                } else {
+                    if (keep.sound) SoundCard(state, c)
+                    if (brightness != null) BrightnessCard(brightness, c)
+                }
+            }
+        }
+    }
+}
+
+private const val KeyboardClockSp = 52f
 
 // --- Contextual bar ------------------------------------------------------------------------
 
