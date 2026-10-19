@@ -21,7 +21,7 @@
 2. **SmartScreen** peut afficher « Windows a protégé votre ordinateur », car l'installateur n'est pas signé. Clique sur **Informations complémentaires**, puis sur **Exécuter quand même**.
 3. Windows demande les **droits administrateur** (une seule fois) : accepte.
 4. Choisis la langue. **English** est présélectionné ; **Français** est disponible dans la liste.
-5. Clique sur Suivant jusqu'à l'installation. Deux cases sont proposées : un raccourci sur le bureau (cochée) et « Démarrer Orizon X avec Windows » (décochée).
+5. Clique sur Suivant jusqu'à l'installation. Trois cases sont proposées : un raccourci sur le bureau (cochée), « Démarrer Orizon X avec Windows » (décochée) et « Manette Xbox virtuelle (pilote ViGEmBus) » (cochée), qui installe le pilote permettant à la tablette de servir de manette ; ViGEmBus **reste installé** quand on désinstalle Orizon X, car d'autres logiciels peuvent l'utiliser.
 6. Pendant l'installation, Windows demande d'installer le **pilote d'écran virtuel** (éditeur : **SignPath Foundation**). Clique sur **Installer**. Si la fenêtre n'apparaît pas au premier plan, cherche-la dans la barre des tâches. Si tu refuses, Orizon X fonctionne seulement en mode Dupliquer.
 7. Si l'installateur demande de **redémarrer**, redémarre : le pilote n'est prêt qu'après.
 8. Lance **Orizon X** (case « Lancer Orizon X » à la fin, ou raccourci).

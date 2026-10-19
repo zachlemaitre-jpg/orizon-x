@@ -38,6 +38,7 @@ try {
     & $venvPython -m PyInstaller --noconfirm --clean --onedir --windowed --name OrizonX `
         --icon (Join-Path $hostDir "app\assets\orizonx.ico") `
         --add-data "$(Join-Path $hostDir 'app\assets');app\assets" `
+        --add-binary "$(Join-Path $hostDir 'vendor\ViGEmClient.dll');." `
         --collect-submodules winrt `
         --collect-submodules pycaw `
         --collect-submodules comtypes `

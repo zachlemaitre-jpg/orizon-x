@@ -143,6 +143,21 @@ L'appareil affiche un pavé tactile qui pilote la souris du PC. Tous les message
 - Validation : les nombres doivent être des nombres JSON finis (ni booléens ni texte), `dx` et `dy` sont bornés à ±2000, `steps` est un entier borné à ±10 ; un nom, un bouton ou une action inconnus ou mal formés sont ignorés et journalisés.
 - Ces actions ne produisent jamais de `notice` et, comme `keyboard.*`, ne provoquent pas de nouveau relevé complet des fournisseurs. Une fenêtre lancée en administrateur refuse l'entrée injectée si Orizon X ne l'est pas aussi : l'échec est journalisé une fois.
 
+### Manette Xbox virtuelle (`gamepad`, `gamepad.*`)
+
+L'appareil devient une manette Xbox 360 : Windows et les jeux voient une vraie manette XInput, grâce au pilote **ViGEmBus** (installé par la tâche « Manette Xbox virtuelle » de l'installateur) et à `ViGEmClient.dll`. Tous les messages sont des `ACTION`.
+
+```json
+"gamepad":{"available":true}
+"gamepad":{"available":false,"reason":"driver_missing"|"error"}
+```
+
+- `available:true` : le PC a pu se connecter au bus ViGEmBus. `driver_missing` : `ViGEmClient.dll` est introuvable ou le bus n'existe pas (pilote non installé) ; `error` : toute autre erreur. Le PC retente la connexion toutes les 30 s tant qu'elle échoue, et relit la section avec le cycle lent du hub. Une section absente : pas de manette.
+- `{"id":"gamepad.open"}` : branche la manette virtuelle (idempotent). À envoyer à l'ouverture de l'écran manette.
+- `{"id":"gamepad.state","buttons":<u16>,"lt":0|255,"rt":0|255,"lx":<i16>,"ly":<i16>,"rx":<i16>,"ry":<i16>}` : le rapport complet (le dernier l'emporte). `buttons` suit les bits `XUSB_GAMEPAD_*` : DPAD_UP `0x0001`, DPAD_DOWN `0x0002`, DPAD_LEFT `0x0004`, DPAD_RIGHT `0x0008`, START `0x0010`, BACK `0x0020`, LEFT_THUMB `0x0040`, RIGHT_THUMB `0x0080`, LEFT_SHOULDER `0x0100`, RIGHT_SHOULDER `0x0200`, GUIDE `0x0400`, A `0x1000`, B `0x2000`, X `0x4000`, Y `0x8000` ; les autres bits sont ignorés. Les gâchettes sont numériques (toute valeur supérieure à 0 vaut 255). Les axes sont bornés à [-32768, 32767] et **Y est positif vers le haut**, comme en XInput. Un champ absent, non entier (booléen, texte, `null`, décimal, NaN) fait ignorer tout le rapport, avec une entrée au journal. Ignoré tant que la manette n'est pas ouverte.
+- `{"id":"gamepad.close"}` : rapport neutre (tout à 0), puis la manette est débranchée. Le PC le fait aussi à la fin de la session Actions.
+- Ces actions ne produisent jamais de `notice` et, comme `keyboard.*` et `trackpad.*`, ne provoquent pas de nouveau relevé complet des fournisseurs. Exclus : les vibrations renvoyées par le jeu, les gâchettes progressives, plusieurs manettes, la manette DualShock 4.
+
 ### Compatibilité
 
 Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.

@@ -84,6 +84,7 @@ def make_providers():
             {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]}),
         "keyboard": FakeProvider({"available": True, "layout": "azerty"}),
         "trackpad": FakeProvider({"available": True}),
+        "gamepad": FakeProvider({"available": True}),
     }
 
 
@@ -135,6 +136,7 @@ class StateTest(unittest.TestCase):
                 {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]},
             "keyboard": {"available": True, "layout": "azerty"},
             "trackpad": {"available": True},
+            "gamepad": {"available": True},
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -1238,6 +1240,74 @@ class TrackpadHubTest(unittest.TestCase):
         self.assertEqual(providers["trackpad"].snapshot(), {"available": True})
 
 
+class GamepadHubTest(unittest.TestCase):
+    def harness(self, snap=None):
+        providers = make_providers()
+        providers["gamepad"] = FakeKeyboard()  # snapshot/handle plus a recorded stop()
+        providers["gamepad"].snap = snap or {"available": True}
+        return Harness(providers)
+
+    def test_section_is_available(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.sent[0]["gamepad"], {"available": True})
+
+    def test_section_carries_the_reason_when_the_driver_is_missing(self):
+        h = self.harness({"available": False, "reason": "driver_missing"})
+        h.tick()
+        self.assertEqual(h.sent[0]["gamepad"], {"available": False, "reason": "driver_missing"})
+
+    def test_section_is_read_in_the_slow_poll_and_broadcast(self):
+        h = self.harness({"available": False, "reason": "driver_missing"})
+        h.tick()
+        h.providers["gamepad"].snap = {"available": True}
+        h.tick(0.3)  # fast poll only
+        self.assertEqual(h.sent[-1]["gamepad"]["available"], False)
+        h.tick(1.0)
+        self.assertEqual(h.sent[-1]["gamepad"], {"available": True})
+
+    def test_missing_provider_is_unavailable(self):
+        providers = make_providers()
+        del providers["gamepad"]
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["gamepad"], {"available": False})
+
+    def test_gamepad_actions_are_routed_to_the_gamepad_only(self):
+        h = self.harness()
+        h.tick()
+        open_action = {"id": "gamepad.open"}
+        state = {"id": "gamepad.state", "buttons": 4096, "lt": 0, "rt": 255, "lx": 0, "ly": 0, "rx": 0, "ry": 0}
+        for a in (open_action, state, {"id": "gamepad.close"}):
+            h.hub.handle(a)
+        h.hub._tick(h.clock.t)
+        self.assertEqual(h.providers["gamepad"].handled, [open_action, state, {"id": "gamepad.close"}])
+        self.assertEqual(h.providers["trackpad"].handled, [])
+        self.assertTrue(all("notice" not in s for s in h.sent))
+
+    def test_gamepad_actions_do_not_poll_the_other_providers(self):
+        h = self.harness()
+        h.tick()
+        polls = {name: p.snapshots for name, p in h.providers.items()}
+        for _ in range(30):
+            h.hub.handle({"id": "gamepad.state", "buttons": 0, "lt": 0, "rt": 0, "lx": 1, "ly": 1, "rx": 0, "ry": 0})
+            h.hub._tick(h.clock.t)
+        for name in ("usb", "radios", "battery", "wifi_info", "bt_info", "media", "brightness", "now_playing",
+                     "context", "keyboard", "trackpad"):
+            self.assertEqual(h.providers[name].snapshots, polls[name], name)
+
+    def test_stop_stops_the_gamepad(self):
+        h = self.harness()
+        h.hub.stop()
+        self.assertEqual(len(h.providers["gamepad"].stops), 1)
+
+    def test_default_providers_include_the_gamepad_without_touching_the_driver(self):
+        providers = default_providers(lambda _l: None)
+        self.assertIn("gamepad", providers)
+        self.assertTrue(callable(providers["gamepad"].stop))
+        self.assertFalse(providers["gamepad"].is_open)
+
+
 class ContextBarThroughTheHubTest(unittest.TestCase):
     """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
 
@@ -1344,7 +1414,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 

@@ -9,6 +9,13 @@
 ; Exit code 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) = success, but Windows must restart to finish: setup then asks
 ; for a restart (NeedRestart / UninstallNeedRestart below).
 ; No devcon (Microsoft's tool is not redistributable).
+;
+; Task "gamepad" (checked by default): installs the ViGEmBus driver (vigem\ViGEmBus_1.22.0_x64_x86_arm64.exe, signed
+; by Nefarius Software Solutions e.U.) for the virtual Xbox controller, silently, only if the "ViGEmBus" service does
+; not exist yet. That file is an Advanced Installer setup (an exe around an MSI), NOT a WiX Burn bundle: it takes
+; "/exenoui /qn /norestart" (exe without its own UI, then msiexec's quiet and no-restart options). Exit code 0 =
+; installed, 3010 / 1641 = installed but Windows must restart (RebootNeeded, as for the display driver). Any failure
+; is logged and never blocks the installation. ViGEmBus is left installed by the uninstaller (other programs use it).
 
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
@@ -78,17 +85,27 @@ en.VddInstallFailed=The virtual display driver could not be installed. Orizon X 
 fr.VddInstallFailed=Le pilote d'écran virtuel n'a pas pu être installé. Orizon X fonctionnera en mode Dupliquer.
 en.RemoveVddQuestion=Also remove the virtual display driver? (another program may use it)
 fr.RemoveVddQuestion=Supprimer aussi le pilote d'écran virtuel ? (un autre programme peut l'utiliser)
+en.GamepadGroup=Game controller:
+fr.GamepadGroup=Manette de jeu :
+en.GamepadTask=Virtual Xbox controller (ViGEmBus driver)
+fr.GamepadTask=Manette Xbox virtuelle (pilote ViGEmBus)
+en.GamepadInstallFailed=The ViGEmBus driver for the virtual Xbox controller could not be installed. Orizon X works without it; run the installer again to retry.
+fr.GamepadInstallFailed=Le pilote ViGEmBus de la manette Xbox virtuelle n'a pas pu être installé. Orizon X fonctionne sans lui ; relancez l'installateur pour réessayer.
 en.VddRemoveFailed=The virtual display driver could not be removed. You can remove "Virtual Display Driver" in Device Manager (Display adapters).
 fr.VddRemoveFailed=Le pilote d'écran virtuel n'a pas pu être supprimé. Vous pouvez supprimer « Virtual Display Driver » dans le Gestionnaire de périphériques (Cartes graphiques).
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "autostart"; Description: "{cm:AutoStartTask}"; GroupDescription: "{cm:StartupGroup}"; Flags: unchecked
+Name: "gamepad"; Description: "{cm:GamepadTask}"; GroupDescription: "{cm:GamepadGroup}"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Pilote VDD x64 signé : ne jamais modifier ces fichiers (le .cat signe leurs octets exacts).
 Source: "vdd\*"; DestDir: "{app}\vdd"; Flags: ignoreversion
+; Pilote ViGEmBus signé (Nefarius) : gardé dans le programme d'installation, extrait dans {tmp} seulement si la tâche
+; « gamepad » est cochée et que le service n'existe pas (SetupGamepadDriver). Jamais copié dans {app}.
+Source: "vigem\ViGEmBus_1.22.0_x64_x86_arm64.exe"; Flags: dontcopy
 ; Dernière entrée : son AfterInstall lance le travail du pilote une fois tous les fichiers posés. Pas en
 ; ssPostInstall, car Inno interroge NeedRestart avant cette étape : le redémarrage demandé par le pilote serait perdu.
 Source: "LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion; AfterInstall: AfterAllFiles
@@ -110,6 +127,8 @@ Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Description: "{cm:LaunchApp}";
 [Code]
 const
   VddEnumKey = 'SYSTEM\CurrentControlSet\Enum\ROOT\DISPLAY';
+  ViGEmServiceKey = 'SYSTEM\CurrentControlSet\Services\ViGEmBus';
+  ViGEmSetup = 'ViGEmBus_1.22.0_x64_x86_arm64.exe';
   OrizonKey = 'Software\OrizonX';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
 
@@ -313,11 +332,56 @@ begin
   RunApp('--cleanup');
 end;
 
+{ Le service du pilote ViGEmBus existe-t-il ? (installé par nous ou par un autre logiciel) }
+function ViGEmBusInstalled(): Boolean;
+begin
+  Result := RegKeyExists(HKLM, ViGEmServiceKey);
+end;
+
+{ Tâche « gamepad » : installe ViGEmBus en silencieux s'il manque. Le fichier est un installateur Advanced Installer
+  (un exe autour d'un MSI), pas un bundle WiX Burn : « /exenoui /qn /norestart ». Code de sortie : 0 = installé,
+  3010 ou 1641 = installé mais Windows doit redémarrer. Jamais bloquant : tout échec est journalisé (et signalé). }
+procedure SetupGamepadDriver();
+var
+  RC: Integer;
+  Setup: String;
+begin
+  if not WizardIsTaskSelected('gamepad') then
+  begin
+    Log('Gamepad task not selected: ViGEmBus not installed by us');
+    Exit;
+  end;
+  if ViGEmBusInstalled() then
+  begin
+    Log('ViGEmBus service already present: nothing to install');
+    Exit;
+  end;
+  try
+    ExtractTemporaryFile(ViGEmSetup);
+    Setup := ExpandConstant('{tmp}\' + ViGEmSetup);
+    RC := RunHidden(Setup, '/exenoui /qn /norestart');
+    if (RC = 3010) or (RC = 1641) then
+    begin
+      RebootNeeded := True;
+      Log('Windows must restart to finish the ViGEmBus driver installation');
+    end
+    else if (RC <> 0) or not ViGEmBusInstalled() then
+    begin
+      Log(Format('ViGEmBus installation failed or incomplete (exit code %d); the virtual controller will be unavailable', [RC]));
+      SuppressibleMsgBox(CustomMessage('GamepadInstallFailed'), mbError, MB_OK, IDOK);
+    end;
+  except
+    Log('ViGEmBus installation raised: ' + GetExceptionMessage);
+    SuppressibleMsgBox(CustomMessage('GamepadInstallFailed'), mbError, MB_OK, IDOK);
+  end;
+end;
+
 { Appelé par la dernière entrée de [Files] (voir le commentaire là-bas). }
 procedure AfterAllFiles();
 begin
   AddAdbFirewallRule();
   SetupVirtualDisplay();
+  SetupGamepadDriver();
 end;
 
 { Page de fin « Redémarrer maintenant / plus tard » d'Inno (en /SILENT, /NORESTART est respecté). }
