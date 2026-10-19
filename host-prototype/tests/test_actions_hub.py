@@ -885,6 +885,187 @@ class ThreadTest(unittest.TestCase):
         hub.stop()
 
 
+ICON_1 = "1" * 40
+ICON_2 = "2" * 40
+PNG_1 = b"\x89PNG-icon-1"
+PNG_2 = b"\x89PNG-icon-2"
+
+
+class FakeContext(FakeProvider):
+    """context stand-in with an icon: `images` maps an icon id to its PNG (what artwork_bytes gives)."""
+
+    def __init__(self, icon=ICON_1, images=None):
+        super().__init__({"available": True, "app": "Illustrator", "profile": "illustrator", "buttons": [],
+                          "icon": icon})
+        self.images = dict(images) if images is not None else {ICON_1: PNG_1, ICON_2: PNG_2}
+        self.artwork_requests = []
+
+    def artwork_bytes(self, icon_id):
+        self.artwork_requests.append(icon_id)
+        return self.images.get(icon_id)
+
+
+class IconArtworkTest(unittest.TestCase):
+    def harness(self, **kw):
+        providers = make_providers()
+        providers["context"] = FakeContext()
+        providers["now_playing"].snap["artwork"] = None
+        return Harness(providers, **kw)
+
+    def icon_events(self, h):
+        return [e for e in h.events if e[0] == "artwork"]
+
+    def test_icon_is_sent_before_the_first_state_that_references_it(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.events, [("artwork", ICON_1), ("state", None)])
+        self.assertEqual(h.artworks, [(ICON_1, PNG_1)])
+        self.assertEqual(h.sent[0]["context"]["icon"], ICON_1)
+
+    def test_the_image_is_asked_to_the_context_provider_not_to_now_playing(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.providers["context"].artwork_requests, [ICON_1])
+        self.assertEqual(h.providers["now_playing"].artwork_requests, [])
+
+    def test_an_unchanged_icon_is_not_sent_again(self):
+        h = self.harness()
+        h.tick()
+        for _ in range(10):
+            h.tick(1.0)
+        h.tick(30.0)  # periodic refresh: the state again, not the icon
+        self.assertEqual(h.artworks, [(ICON_1, PNG_1)])
+        self.assertEqual(len(h.sent), 2)
+
+    def test_a_new_icon_is_sent_when_context_icon_changes(self):
+        h = self.harness()
+        h.tick()
+        h.providers["context"].snap["icon"] = ICON_2
+        h.tick(1.0)
+        self.assertEqual(h.events, [("artwork", ICON_1), ("state", None), ("artwork", ICON_2), ("state", None)])
+        self.assertEqual(h.sent[-1]["context"]["icon"], ICON_2)
+
+    def test_going_back_to_a_previous_app_sends_its_icon_again(self):
+        # the device's image cache is small and shared with the covers: an icon is not assumed to be still there
+        h = self.harness()
+        h.tick()
+        h.providers["context"].snap["icon"] = ICON_2
+        h.tick(1.0)
+        h.providers["context"].snap["icon"] = ICON_1
+        h.tick(1.0)
+        self.assertEqual([a for a, _ in h.artworks], [ICON_1, ICON_2, ICON_1])
+
+    def test_icon_then_none_then_the_same_icon_sends_it_again(self):
+        h = self.harness()
+        h.tick()
+        h.providers["context"].snap["icon"] = None
+        h.tick(1.0)
+        self.assertIsNone(h.sent[-1]["context"]["icon"])
+        h.providers["context"].snap["icon"] = ICON_1
+        h.tick(1.0)
+        self.assertEqual([a for a, _ in h.artworks], [ICON_1, ICON_1])
+
+    def test_no_icon_sends_nothing(self):
+        h = self.harness()
+        h.providers["context"].snap["icon"] = None
+        h.tick()
+        self.assertEqual(h.artworks, [])
+        self.assertIsNone(h.sent[0]["context"]["icon"])
+
+    def test_a_context_without_an_icon_field_or_unavailable_is_untouched(self):
+        h = Harness()  # the default fake context has no "icon"
+        h.tick()
+        self.assertNotIn("icon", h.sent[0]["context"])
+        h2 = self.harness()
+        h2.providers["context"].snap = {"available": False}
+        h2.tick()
+        self.assertEqual(h2.sent[0]["context"], {"available": False})
+        self.assertEqual(h2.artworks, [])
+
+    def test_cover_and_icon_are_both_sent_cover_first(self):
+        providers = make_providers()
+        providers["context"] = FakeContext()
+        h = Harness(providers)  # now_playing has the cover ID_A
+        h.tick()
+        self.assertEqual(h.events, [("artwork", ID_A), ("artwork", ICON_1), ("state", ID_A)])
+
+    def test_a_change_of_icon_alone_triggers_a_broadcast(self):
+        h = self.harness()
+        h.tick()
+        count = len(h.sent)
+        h.providers["context"].snap["icon"] = ICON_2
+        h.tick(0.25)
+        self.assertEqual(len(h.sent), count + 1)
+
+    def test_missing_bytes_null_the_icon_without_resending_every_tick(self):
+        h = self.harness()
+        h.providers["context"].images = {}
+        h.tick()
+        self.assertEqual(h.artworks, [])
+        self.assertIsNone(h.sent[0]["context"]["icon"])
+        h.tick(1.0)
+        self.assertEqual(len(h.sent), 1)
+
+    def test_without_send_artwork_the_state_never_references_an_icon(self):
+        h = self.harness(send_artwork=None)
+        h.tick()
+        self.assertIsNone(h.sent[0]["context"]["icon"])
+        self.assertEqual(h.providers["context"].artwork_requests, [])
+
+    def test_artwork_bytes_raising_nulls_the_icon(self):
+        h = self.harness()
+
+        def boom(_id):
+            raise RuntimeError("x")
+        h.providers["context"].artwork_bytes = boom
+        h.tick()
+        self.assertIsNone(h.sent[0]["context"]["icon"])
+        self.assertEqual(h.artworks, [])
+
+    def test_unencodable_icon_is_dropped_and_not_retried(self):
+        calls = []
+
+        def send_artwork(artwork_id, image):
+            calls.append(artwork_id)
+            raise ValueError("too big")
+        h = self.harness(send_artwork=send_artwork)
+        h.tick()
+        self.assertIsNone(h.sent[0]["context"]["icon"])
+        h.tick(1.0)
+        h.tick(1.0)
+        self.assertEqual(calls, [ICON_1])
+
+    def test_socket_error_on_the_icon_holds_the_state_and_retries(self):
+        h = self.harness()
+        real = h._send_artwork
+        fail = [True]
+
+        def send_artwork(artwork_id, image):
+            if fail[0]:
+                raise OSError("closed")
+            real(artwork_id, image)
+        h.hub._send_artwork = send_artwork
+        h.tick()
+        self.assertEqual(h.sent, [])
+        fail[0] = False
+        h.tick(1.0)
+        self.assertEqual(h.events, [("artwork", ICON_1), ("state", None)])
+
+    def test_cover_behaviour_is_unchanged_next_to_an_icon(self):
+        providers = make_providers()
+        providers["context"] = FakeContext()
+        providers["now_playing"].covers[ID_B] = COVER_B
+        h = Harness(providers)
+        h.tick()
+        providers["now_playing"].snap["artwork"] = ID_B
+        h.tick(1.0)
+        providers["now_playing"].snap["artwork"] = ID_A
+        h.tick(1.0)
+        covers = [a for a, _ in h.artworks if a in (ID_A, ID_B)]
+        self.assertEqual(covers, [ID_A, ID_B, ID_A])
+        self.assertEqual([a for a, _ in h.artworks if a == ICON_1], [ICON_1])
+
+
 class ContextBarThroughTheHubTest(unittest.TestCase):
     """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
 

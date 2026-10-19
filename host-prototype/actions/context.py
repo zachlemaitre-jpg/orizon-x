@@ -1,8 +1,9 @@
 """The context bar's provider (spec 2026-10-13 §3): the profile of the app in front on the PC, and its buttons.
 
 Snapshot: ``{"available": True, "app": <name>, "profile": <profile id>, "buttons": [{"id", "icon", "label"}],
-"pages": [{"id", "label", "buttons": [{"id", "icon", "label"}]}]}`` (the shortcuts stay on the PC; ``buttons`` is the
-first page, for the apps that do not know ``pages``), or ``{"available": False}`` while no app has been in front yet. Labels and the app
+"pages": [{"id", "label", "buttons": [{"id", "icon", "label"}]}], "icon": <sha1 of the app's or site's icon PNG> | None}``
+(the shortcuts stay on the PC; ``buttons`` is the first page, for the apps that do not know ``pages``; ``icon`` comes
+from actions.app_icons, None while it is not ready, and the hub sends the image once per session), or ``{"available": False}`` while no app has been in front yet. Labels and the app
 name are in the device's language (``lang``, "en" or "fr"; French when unknown).
 
 ``handle({"id": "context.lang", "lang": "en"})`` switches that language (an unknown value is ignored and logged); the
@@ -19,6 +20,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from actions import context_profiles, keys
+from actions.app_icons import AppIconProvider
 from actions.browser_url import BrowserUrlReader
 from actions.foreground import ForegroundTracker
 
@@ -32,12 +34,13 @@ ACTION_FAILED = "action_failed"
 class ContextProvider:
     def __init__(self, tracker: Any = None, send_shortcut: Optional[Callable[[str], bool]] = None,
                  log: Optional[Callable[[str], None]] = None, lang: str = context_profiles.DEFAULT_LANG,
-                 url_reader: Any = None) -> None:
+                 url_reader: Any = None, icons: Any = None) -> None:
         self.lang = context_profiles.normalize_lang(lang)
         self._tracker = tracker if tracker is not None else ForegroundTracker()
         self._send_shortcut = send_shortcut or keys.send_shortcut
         self._log = log or _log.info
         self._url_reader = url_reader if url_reader is not None else BrowserUrlReader(log=self._log)
+        self._icons = icons if icons is not None else AppIconProvider(log=self._log)
 
     def _profile(self, app: Any) -> "tuple[context_profiles.Profile, Optional[str]]":
         """The profile of ``app`` and the tab's URL it was picked with (read only for a browser window)."""
@@ -58,7 +61,12 @@ class ContextProvider:
             "buttons": self._buttons(profile.pages[0]),
             "pages": [{"id": page.id, "label": page.label(self.lang), "buttons": self._buttons(page)}
                       for page in profile.pages],
+            "icon": self._icons.icon_id(app, profile, url),
         }
+
+    def artwork_bytes(self, icon_id: Optional[str]) -> Optional[bytes]:
+        """The PNG of an icon id of the snapshot, for the hub (sent as a MEDIA_ARTWORK)."""
+        return self._icons.artwork_bytes(icon_id)
 
     def _buttons(self, page: context_profiles.Page) -> list:
         return [{"id": b.id, "icon": b.icon, "label": b.label(self.lang)} for b in page.buttons]

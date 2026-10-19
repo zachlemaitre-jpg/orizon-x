@@ -29,6 +29,12 @@ be sent (no ``send_artwork`` callback, no bytes, or ``send_artwork`` raised Valu
 by ``None`` in the state; another error of ``send_artwork`` (the socket closed) holds the state back as well, and
 both are tried again at the next poll.
 
+Icons (spec app-icon §3): ``context.icon`` is the sha1 of the icon of the app (or site) in front, produced by the
+``context`` provider, whose ``artwork_bytes(id)`` gives the PNG. The device keeps only a small image cache shared with
+the covers, so the image is sent (MEDIA_ARTWORK, before the state) every time ``context.icon`` changes to an id other
+than the one of the last state broadcast, not once per session; an icon that cannot be sent is replaced by ``None``
+in the state, like a cover.
+
 The ``context`` section (actions.context, the context bar) is polled with the fast group (250 ms), like audio: the
 bar must follow the foreground app. Its actions are ``context.*``.
 
@@ -139,6 +145,8 @@ class ActionsHub:
         self._artwork_sent: Optional[str] = None  # the cover the device holds (it keeps only the last one)
         self._artwork_refused: Optional[str] = None  # a cover send_artwork could not encode: never retried
         self._artwork_logged: Optional[str] = None
+        self._icon_broadcast: Optional[str] = None  # context.icon of the last state sent
+        self._icons_refused: set[str] = set()  # icons send_artwork could not encode: never retried
 
     # --- public API ---
 
@@ -288,22 +296,24 @@ class ActionsHub:
             self._artwork_logged = artwork_id
             self._log(line)
 
-    def _pending_artwork(self, state: dict) -> Optional[tuple[str, bytes]]:
-        """The cover to send before this state, if any. A cover that cannot be sent (no send_artwork, no bytes,
-        refused before) is replaced by None in the state, so that no state references a cover the device lacks."""
-        section = state.get("now_playing")
-        if not isinstance(section, dict) or "artwork" not in section:
+    def _pending_one(self, state: dict, section_name: str, field: str, provider_key: str,
+                     held: Callable[[str], bool], refused: Callable[[str], bool]) -> Optional[tuple]:
+        """The image ``state[section_name][field]`` references, if it has to be sent before this state:
+        (section, field, id, bytes). One that cannot be sent (no send_artwork, no bytes, refused before) is replaced
+        by None in the state, so that no state references an image the device lacks. ``held``: the device has it."""
+        section = state.get(section_name)
+        if not isinstance(section, dict) or field not in section:
             return None
-        artwork_id = section["artwork"]
+        artwork_id = section[field]
         if not isinstance(artwork_id, str) or not artwork_id:
-            section["artwork"] = None
+            section[field] = None
             return None
-        if artwork_id == self._artwork_sent:
+        if held(artwork_id):
             return None
-        if self._send_artwork is None or artwork_id == self._artwork_refused:
-            section["artwork"] = None
+        if self._send_artwork is None or refused(artwork_id):
+            section[field] = None
             return None
-        getter = getattr(self._providers.get("now_playing"), "artwork_bytes", None)
+        getter = getattr(self._providers.get(provider_key), "artwork_bytes", None)
         data: Any = None
         if callable(getter):
             try:
@@ -312,9 +322,19 @@ class ActionsHub:
                 self._log_artwork_once(artwork_id, f"hub: artwork {artwork_id} unreadable: {e!r}")
                 data = None
         if not isinstance(data, (bytes, bytearray)) or not data:
-            section["artwork"] = None
+            section[field] = None
             return None
-        return artwork_id, bytes(data)
+        return section_name, field, artwork_id, bytes(data)
+
+    def _pending_artworks(self, state: dict) -> list:
+        """The images to send before this state: the cover, then the icon."""
+        pending = [
+            self._pending_one(state, "now_playing", "artwork", "now_playing",
+                              lambda i: i == self._artwork_sent, lambda i: i == self._artwork_refused),
+            self._pending_one(state, "context", "icon", "context",
+                              lambda i: i == self._icon_broadcast, lambda i: i in self._icons_refused),
+        ]
+        return [p for p in pending if p is not None]
 
     def _note_send_failure(self, e: Exception) -> None:
         if not self._send_failed:
@@ -323,30 +343,35 @@ class ActionsHub:
 
     def _maybe_send(self, now: float) -> None:
         state = self._build_state()
-        artwork = self._pending_artwork(state)
+        artworks = self._pending_artworks(state)
         cmp = _comparable(state)
         due = (self._last_sent is None or cmp != self._last_sent or self._notice is not None
-               or now - self._last_sent_at >= self._refresh_s or artwork is not None)
+               or now - self._last_sent_at >= self._refresh_s or bool(artworks))
         if not due:
             return
         out = copy.deepcopy(state)
         if self._notice is not None:
             out["notice"] = dict(self._notice)
-        if artwork is not None and self._send_artwork is not None:  # the cover first, then the state
-            artwork_id, data = artwork
+        for section_name, field, artwork_id, data in artworks:  # the images first (cover, icon), then the state
+            if self._send_artwork is None:
+                break
             try:
                 self._send_artwork(artwork_id, data)
             except ValueError as e:  # not encodable (too big...): the state goes without it
-                self._artwork_refused = artwork_id
+                if field == "icon":
+                    self._icons_refused.add(artwork_id)
+                else:
+                    self._artwork_refused = artwork_id
                 self._log_artwork_once(artwork_id, f"hub: artwork {artwork_id} not sent: {e}")
-                out["now_playing"]["artwork"] = None
-                state["now_playing"]["artwork"] = None
+                out[section_name][field] = None
+                state[section_name][field] = None
                 cmp = _comparable(state)
             except Exception as e:  # noqa: BLE001 - the socket closed: no state either (it would reference it)
                 self._note_send_failure(e)
                 return
             else:
-                self._artwork_sent = artwork_id
+                if field == "artwork":
+                    self._artwork_sent = artwork_id
         try:
             self._send(out)
         except Exception as e:  # noqa: BLE001 - e.g. the socket closed; the session will stop us
@@ -356,6 +381,8 @@ class ActionsHub:
         self._notice = None
         self._last_sent = cmp
         self._last_sent_at = now
+        context = state.get("context")
+        self._icon_broadcast = context.get("icon") if isinstance(context, dict) else None
 
 
 def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "fr") -> dict:

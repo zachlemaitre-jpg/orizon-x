@@ -41,7 +41,7 @@ La version reste 1.
 
 - **`context.icon`** : `"<sha1>"` ou `null`.
 - **Image** : envoyée par `MEDIA_ARTWORK` (0x05), comme une pochette.
-  - Le hub envoie l'image d'un id la première fois que l'état la référence, puis se souvient qu'elle a été envoyée (ensemble des ids envoyés, remis à zéro à chaque session).
+  - L'image est envoyée chaque fois que `context.icon` change, vers un id non nul différent de celui du dernier état diffusé (revenir à une app déjà vue renvoie donc son icône). La tablette ne garde que 16 images, partagées avec les pochettes : une icône envoyée « une fois par session » pourrait être évincée et ne plus revenir. Les icônes sont petites (PNG 96 px). Le comportement des pochettes ne change pas.
   - Généralisation dans le hub : `artwork_bytes(id)` est demandé au fournisseur qui a produit l'id (`now_playing` ou `context`).
 - `protocol/PROTOCOL.md` documente `context.icon` et le fait que `MEDIA_ARTWORK` sert aussi aux icônes.
 
@@ -63,7 +63,7 @@ La version reste 1.
   - cache : mémoire, disque avec validité, échec mémorisé ;
   - choix de la source (app native, profil de site, navigateur générique) ;
   - `context.icon` nul puis l'id ;
-  - le hub envoie l'image une fois par session et demande `artwork_bytes` au bon fournisseur ;
+  - le hub envoie l'image chaque fois que `context.icon` change (retour à une app déjà vue compris) et demande `artwork_bytes` au bon fournisseur ;
   - une conversion réelle, en lecture seule, de l'icône d'un exe Windows (`notepad.exe`) en PNG.
 - **Android** :
   - LRU (ajout, éviction, lecture) ;

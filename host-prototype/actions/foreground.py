@@ -44,6 +44,7 @@ class ForegroundApp:
     title: str
     pid: int
     hwnd: int = field(default=0, compare=False)  # the window, for what needs to look inside it (the URL)
+    path: str = field(default="", compare=False)  # the full path of the exe ("" when unreadable), for its icon
 
 
 def short_title(title: str) -> str:
@@ -143,8 +144,9 @@ class ForegroundTracker:
         pid = api.window_pid(hwnd)
         if pid in self._own_pids:
             return self._last
-        exe = _base_name(api.process_exe(pid))
+        path = api.process_exe(pid) or ""
+        exe = _base_name(path)
         if exe.lower() == OWN_EXE:
             return self._last
-        self._last = ForegroundApp(exe, window_class, api.window_title(hwnd), pid, hwnd)
+        self._last = ForegroundApp(exe, window_class, api.window_title(hwnd), pid, hwnd, path)
         return self._last

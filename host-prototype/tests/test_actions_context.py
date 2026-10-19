@@ -478,6 +478,22 @@ class CreativeDetectionTest(unittest.TestCase):
         self.assertEqual(cp.display_name(app("chrome.exe", title="Google - Google Chrome"), "en"), "Chrome")
 
 
+class FakeIcons:
+    """The icon provider of the context bar: `ids` is what icon_id answers; calls are recorded."""
+
+    def __init__(self, ids=None, images=None):
+        self.ids = ids or []
+        self.images = images or {}
+        self.calls = []
+
+    def icon_id(self, app, profile, url):
+        self.calls.append((app, profile.id, url))
+        return self.ids.pop(0) if self.ids else None
+
+    def artwork_bytes(self, icon_id):
+        return self.images.get(icon_id)
+
+
 class FakeTracker:
     def __init__(self, current=None):
         self.app = current
@@ -506,7 +522,7 @@ class ContextProviderTest(unittest.TestCase):
     def test_snapshot_shape(self):
         self.tracker.app = app("POWERPNT.EXE")
         snap = self.provider.snapshot()
-        self.assertEqual(set(snap), {"available", "app", "profile", "buttons", "pages"})
+        self.assertEqual(set(snap), {"available", "app", "profile", "buttons", "pages", "icon"})
         self.assertIs(snap["available"], True)
         self.assertEqual(snap["app"], "PowerPoint")
         self.assertEqual(snap["profile"], "powerpoint")
@@ -682,8 +698,37 @@ class ContextProviderTest(unittest.TestCase):
         self.assertIsNone(self.provider.handle({"id": "context.press", "button": "ppt.next"}))
         self.assertEqual(self.sent, [])
 
+    def test_snapshot_icon_is_null_then_the_id(self):
+        icons = FakeIcons(ids=[None, "a" * 40, "a" * 40], images={"a" * 40: b"PNG"})
+        provider = ContextProvider(tracker=self.tracker, log=self.logs.append, icons=icons)
+        self.tracker.app = app("Illustrator.exe")
+        self.assertIsNone(provider.snapshot()["icon"])
+        self.assertEqual(provider.snapshot()["icon"], "a" * 40)
+        self.assertEqual(provider.snapshot()["icon"], "a" * 40)
+        self.assertEqual(provider.artwork_bytes("a" * 40), b"PNG")
+        self.assertIsNone(provider.artwork_bytes("b" * 40))
+        json.dumps(provider.snapshot())
+
+    def test_the_icon_provider_gets_the_app_the_profile_and_the_tab_url(self):
+        icons = FakeIcons()
+        reader = type("R", (), {"url": lambda self, hwnd, title="": "canva.com/design/x"})()
+        provider = ContextProvider(tracker=self.tracker, log=self.logs.append, icons=icons, url_reader=reader)
+        self.tracker.app = ForegroundApp("chrome.exe", "Cls", "hdi - Google Chrome", 1, 9, r"C:\x\chrome.exe")
+        provider.snapshot()
+        a, profile_id, url = icons.calls[0]
+        self.assertEqual((a.path, profile_id, url), (r"C:\x\chrome.exe", "canva", "canva.com/design/x"))
+        self.tracker.app = app("notepad.exe")
+        provider.snapshot()
+        self.assertEqual(icons.calls[1][1:], ("generic", None))
+
+    def test_the_default_icon_provider_gives_none_for_an_app_without_a_path(self):
+        provider = ContextProvider(tracker=self.tracker, log=self.logs.append)
+        self.tracker.app = app("Illustrator.exe")  # no path: nothing to extract
+        self.assertIsNone(provider.snapshot()["icon"])
+
     def test_default_construction_sends_nothing(self):
-        provider = ContextProvider()  # real tracker, real sender: only the read-only parts are used
+        # real tracker, real sender: only the read-only parts are used (no icon extraction: a fake provider)
+        provider = ContextProvider(icons=FakeIcons())
         snap = provider.snapshot()
         self.assertIn("available", snap)
 
