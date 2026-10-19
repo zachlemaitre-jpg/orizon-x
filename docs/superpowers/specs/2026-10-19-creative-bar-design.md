@@ -116,3 +116,43 @@ La version reste 1.
   - chaque app installée, chaque page, chaque bouton ;
   - les raccourcis sensibles à AZERTY (`[ ]`, `Ctrl+=`, `Shift+1`) ;
   - Canva et Figma dans le navigateur.
+
+## 6. Ajout : autres apps Adobe (validé le 2026-10-19)
+
+Détection par l'exe (sans tenir compte de la casse) : `Adobe Premiere Pro.exe` → `premiere`, `AfterFX.exe` → `aftereffects`, `InDesign.exe` → `indesign`, `Lightroom.exe` → `lightroom` (Lightroom Classic). Noms affichés : Premiere Pro, After Effects, InDesign, Lightroom. Media Encoder est exclu (presque aucun raccourci utile). Ids de boutons préfixés `pr.`, `ae.`, `id.`, `lr.`. Libellés de pages : Tools/Outils, Edit/Édition, et la 3e page selon l'app (Playback/Lecture, Timeline/Montage, View/Affichage) ; Lightroom : Navigate/Navigation, Rate/Notes, Edit/Édition.
+
+### Premiere Pro
+
+| Page | Boutons (libellé en / fr, raccourci, icône) |
+|---|---|
+| tools | Selection / Sélection `V` select · Track select / Sélection de piste `A` track_select · Ripple edit / Modification par propagation `B` ripple_edit · Razor / Cutter `C` razor · Slip / Déplacement `Y` slip · Pen / Plume `P` pen · Hand / Main `H` hand · Type / Texte `T` text |
+| edit | Undo / Annuler `Ctrl+Z` undo · Redo / Rétablir `Ctrl+Shift+Z` redo · Add edit / Ajouter un montage `Ctrl+K` add_edit · Ripple delete / Supprimer et raccorder `Shift+Delete` ripple_delete · Mark in / Point d'entrée `I` mark_in · Mark out / Point de sortie `O` mark_out · Export / Exporter `Ctrl+M` export · Save / Enregistrer `Ctrl+S` save |
+| playback | Play/Pause / Lecture/Pause `Space` play_pause · Previous frame / Image précédente `Left` frame_prev · Next frame / Image suivante `Right` frame_next · Previous edit / Montage précédent `Up` edit_prev · Next edit / Montage suivant `Down` edit_next · Zoom out / Zoom − `-` zoom_out · Zoom in / Zoom + `=` zoom_in · Fit timeline / Ajuster la séquence `OEM_5` timeline_fit |
+
+### After Effects
+
+| Page | Boutons |
+|---|---|
+| tools | Selection / Sélection `V` select · Hand / Main `H` hand · Zoom / Zoom `Z` search · Rotation / Rotation `W` rotate · Anchor point / Point d'ancrage `Y` anchor · Pen / Plume `G` pen · Shape / Forme `Q` rectangle · Type / Texte `Ctrl+T` text |
+| edit | Undo / Annuler `Ctrl+Z` undo · Redo / Rétablir `Ctrl+Shift+Z` redo · Duplicate / Dupliquer `Ctrl+D` copy · Split layer / Scinder le calque `Ctrl+Shift+D` split_layer · Precompose / Précomposer `Ctrl+Shift+C` precompose · New solid / Nouvel solide `Ctrl+Y` solid · Keyframes / Images clés `U` keyframes · Save / Enregistrer `Ctrl+S` save |
+| timeline | Play / Lecture `Space` play_pause · Previous frame / Image précédente `PageUp` frame_prev · Next frame / Image suivante `PageDown` frame_next · Start / Début `Home` go_start · End / Fin `End` go_end · Previous keyframe / Image clé précédente `J` keyframe_prev · Next keyframe / Image clé suivante `K` keyframe_next · Render queue / File de rendu `Ctrl+M` render |
+
+### InDesign
+
+| Page | Boutons |
+|---|---|
+| tools | Selection / Sélection `V` select · Direct selection / Sélection directe `A` direct_select · Type / Texte `T` text · Rectangle frame / Bloc rectangulaire `F` rect_frame · Rectangle / Rectangle `M` rectangle · Ellipse / Ellipse `L` ellipse · Pen / Plume `P` pen · Hand / Main `H` hand |
+| edit | Undo / Annuler `Ctrl+Z` undo · Redo / Rétablir `Shift+Ctrl+Z` redo · Group / Grouper `Ctrl+G` group · Ungroup / Dissocier `Shift+Ctrl+G` ungroup · Place / Importer `Ctrl+D` place · Duplicate / Dupliquer `Alt+Shift+Ctrl+D` copy · Lock / Verrouiller `Ctrl+L` lock · Save / Enregistrer `Ctrl+S` save |
+| view | Zoom / Zoom `Z` search · Fit page / Ajuster la page `Ctrl+0` zoom_fit · 100 % / 100 % `Ctrl+1` zoom_100 · Zoom − / Zoom − `Ctrl+-` zoom_out · Zoom + / Zoom + `Ctrl+=` zoom_in · Preview / Aperçu `W` preview · Rulers / Règles `Ctrl+R` rulers · Export / Exporter `Ctrl+E` export |
+
+### Lightroom Classic
+
+| Page | Boutons |
+|---|---|
+| navigate | Grid / Grille `G` grid · Loupe / Loupe `E` loupe · Develop / Développement `D` develop · Compare / Comparaison `C` compare · Crop / Recadrage `R` crop · Spot removal / Retouche `Q` spot · Previous / Précédente `Left` arrow_left · Next / Suivante `Right` arrow_right |
+| rate | Pick / Retenir `P` pick · Reject / Rejeter `X` reject · Unflag / Sans marque `U` unflag · 1 ★ / 1 ★ `1` star · 2 ★ / 2 ★ `2` star · 3 ★ / 3 ★ `3` star · 4 ★ / 4 ★ `4` star · 5 ★ / 5 ★ `5` star |
+| edit | Undo / Annuler `Ctrl+Z` undo · Redo / Rétablir `Ctrl+Y` redo · Auto / Auto `Ctrl+U` auto · Copy settings / Copier les réglages `Ctrl+Shift+C` copy_settings · Paste settings / Coller les réglages `Ctrl+Shift+V` paste_settings · Before/After / Avant/Après `Y` before_after · Export / Exporter `Ctrl+Shift+E` export · Fullscreen / Plein écran `F` fullscreen |
+
+Les chiffres `1`…`5` de Lightroom sont envoyés par code virtuel de la rangée des chiffres (`0x31`…`0x35`), comme `Shift+1` de Figma. `OEM_5` est la touche `\` du clavier US, envoyée par position. L'essai réel valide `OEM_5`, `Shift+Delete` et les chiffres.
+
+**Nouvelles icônes** (`ctx_<nom>`, chemins Material Icons, Apache-2.0) : `track_select`, `ripple_edit`, `razor`, `slip`, `add_edit`, `ripple_delete`, `mark_in`, `mark_out`, `export`, `frame_prev`, `frame_next`, `edit_prev`, `edit_next`, `timeline_fit`, `rotate`, `anchor`, `split_layer`, `precompose`, `solid`, `keyframes`, `go_start`, `go_end`, `keyframe_prev`, `keyframe_next`, `render`, `rect_frame`, `place`, `preview`, `grid`, `loupe`, `develop`, `compare`, `spot`, `pick`, `reject`, `unflag`, `star`, `auto`, `copy_settings`, `paste_settings`, `before_after`, `fullscreen`.
