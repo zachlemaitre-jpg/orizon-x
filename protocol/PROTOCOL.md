@@ -126,6 +126,23 @@ L'appareil affiche un clavier de PC complet et envoie chaque touche par sa **pos
 - Action `{"id":"keyboard.release"}` : relâche toutes les touches enfoncées, la dernière enfoncée d'abord. Le PC fait la même chose à la fin de la session Actions (la tablette part, la connexion tombe, changement de rôle, arrêt), pour qu'aucune touche ne reste bloquée.
 - Ces actions ne produisent jamais de `notice` et, contrairement aux autres `ACTION`, ne provoquent pas de nouveau relevé complet des fournisseurs. Une fenêtre lancée en administrateur refuse les touches injectées si Orizon X ne l'est pas aussi (même limite que pour le tactile) : l'échec est journalisé une fois.
 
+### Trackpad (`trackpad`, `trackpad.*`)
+
+L'appareil affiche un pavé tactile qui pilote la souris du PC. Tous les messages sont des `ACTION`. Les gestes sont reconnus par l'appareil, qui envoie au plus un `move`, un `scroll` ou un `zoom` par trame de 16 ms.
+
+```json
+"trackpad":{"available":true}
+```
+
+- `{"id":"trackpad.move","dx":<nombre>,"dy":<nombre>}` : déplacement relatif en pixels d'appareil (dp × sensibilité), x vers la droite, y vers le bas. Le PC envoie un `MOUSEEVENTF_MOVE` relatif (jamais absolu : Windows applique la vitesse et l'accélération du pointeur comme pour une vraie souris), en cumulant les décimales et en n'envoyant que la partie entière.
+- `{"id":"trackpad.button","button":"left"|"right","down":<bool>}` : bouton enfoncé ou relâché. Le PC retient les boutons enfoncés ; un `up` d'un bouton qui ne l'est pas est ignoré.
+- `{"id":"trackpad.scroll","dx":<nombre>,"dy":<nombre>}` : le **déplacement des doigts en dp** (mêmes axes que `move`). Le PC l'envoie en `WHEEL` / `HWHEEL` (1 dp = 4 unités, 120 = un cran), en cumulant les restes et sans rien envoyer pour 0. Sens naturel (le contenu suit les doigts) : doigts vers le bas (`dy > 0`) → `WHEEL` positif (défilement vers le haut, convention Windows : positif = molette poussée vers l'avant) ; doigts vers la droite (`dx > 0`) → `HWHEEL` négatif (défilement vers la gauche ; `HWHEEL` positif = vers la droite).
+- `{"id":"trackpad.zoom","steps":<entier>}` : Ctrl enfoncé, un cran de molette (±120) par pas, Ctrl relâché, en un seul appel `SendInput`. Positif = zoom avant.
+- `{"id":"trackpad.gesture","name":"task_view"|"desktop"|"app_prev"|"app_next"}` : `Win+Tab`, `Win+D`, `Alt+Maj+Tab`, `Alt+Tab`.
+- `{"id":"trackpad.release"}` : relâche les boutons enfoncés. Le PC le fait aussi à la fin de la session Actions.
+- Validation : les nombres doivent être des nombres JSON finis (ni booléens ni texte), `dx` et `dy` sont bornés à ±2000, `steps` est un entier borné à ±10 ; un nom, un bouton ou une action inconnus ou mal formés sont ignorés et journalisés.
+- Ces actions ne produisent jamais de `notice` et, comme `keyboard.*`, ne provoquent pas de nouveau relevé complet des fournisseurs. Une fenêtre lancée en administrateur refuse l'entrée injectée si Orizon X ne l'est pas aussi : l'échec est journalisé une fois.
+
 ### Compatibilité
 
 Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.

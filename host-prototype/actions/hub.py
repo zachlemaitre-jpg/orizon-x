@@ -12,7 +12,7 @@ One thread owns everything:
   as it lasts.
 
 State shape: ``{"v": 1, "clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-"usb": [...], "now_playing", "context", "keyboard", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
+"usb": [...], "now_playing", "context", "keyboard", "trackpad", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
 ``airplane`` come from ``merge_radio_state(radios, wifi_info, bt_info)`` (see actions.radios); ``usb`` is the list
 of drives. A section whose provider is missing or raising is ``{"available": False}`` (``[]`` for usb) until the
 provider answers again; the failure is logged once per streak.
@@ -40,7 +40,9 @@ bar must follow the foreground app. Its actions are ``context.*``.
 
 The ``keyboard`` section (actions.keyboard, the device's PC keyboard) carries the layout to draw; its layout is read
 in the slow group. Its actions (``keyboard.*``, one per key press or release, up to about 30 a second while a key
-repeats) are routed to it but do NOT make the hub poll every provider again, unlike any other action.
+repeats) are routed to it but do NOT make the hub poll every provider again, unlike any other action. The same goes
+for ``trackpad.*`` (actions.trackpad, the device's trackpad: up to 60 moves a second), whose section is just
+``{"available": True}``.
 
 ``stop()`` joins the thread, then calls ``stop()`` of every provider that has one (the keyboard releases the keys that
 are down), whether or not the hub was started and whatever happened to its thread; one that fails is logged and does
@@ -48,7 +50,7 @@ not prevent the others. The engine calls ``hub.stop()`` in a ``finally`` at the 
 device leaves, the connection drops, the role changes, the engine stops).
 
 Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
-now_playing, context, keyboard.
+now_playing, context, keyboard, trackpad.
 """
 from __future__ import annotations
 
@@ -78,11 +80,12 @@ _ROUTES = (
     ("usb.", "usb"),
     ("context.", "context"),
     ("keyboard.", "keyboard"),
+    ("trackpad.", "trackpad"),
 )
-_QUIET = ("keyboard.",)  # actions that do not make the hub poll every provider again
+_QUIET = ("keyboard.", "trackpad.")  # actions that do not make the hub poll every provider again
 
 _FAST = ("audio", "context")
-_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard")
+_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard", "trackpad")
 _UNAVAILABLE = {"available": False}
 
 _COINIT_MULTITHREADED = 0
@@ -314,6 +317,7 @@ class ActionsHub:
         state["now_playing"] = self._section("now_playing")
         state["context"] = self._section("context")
         state["keyboard"] = self._section("keyboard")
+        state["trackpad"] = self._section("trackpad")
         return state
 
     def _log_artwork_once(self, artwork_id: str, line: str) -> None:
@@ -473,6 +477,10 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
         from actions.keyboard import KeyboardProvider
         return KeyboardProvider(log=log)
 
+    def trackpad() -> Any:
+        from actions.trackpad import TrackpadProvider
+        return TrackpadProvider(log=log)
+
     def context() -> Any:
         try:  # the browser tab's URL is read with UI Automation (comtypes): imported here, in the building thread
             import comtypes.client  # noqa: F401
@@ -484,6 +492,6 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),
                           ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing),
-                          ("context", context), ("keyboard", keyboard)):
+                          ("context", context), ("keyboard", keyboard), ("trackpad", trackpad)):
         add(name, factory)
     return providers

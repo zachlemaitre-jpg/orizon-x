@@ -83,6 +83,7 @@ def make_providers():
         "context": FakeProvider({"available": True, "app": "Spotify", "profile": "spotify", "buttons": [
             {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]}),
         "keyboard": FakeProvider({"available": True, "layout": "azerty"}),
+        "trackpad": FakeProvider({"available": True}),
     }
 
 
@@ -133,6 +134,7 @@ class StateTest(unittest.TestCase):
             "context": {"available": True, "app": "Spotify", "profile": "spotify", "buttons": [
                 {"id": "spotify.playpause", "icon": "play_pause", "label": "Lecture/Pause"}]},
             "keyboard": {"available": True, "layout": "azerty"},
+            "trackpad": {"available": True},
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -1182,6 +1184,60 @@ class KeyboardHubTest(unittest.TestCase):
         self.assertEqual(providers["keyboard"].held, [])
 
 
+class TrackpadHubTest(unittest.TestCase):
+    def harness(self):
+        providers = make_providers()
+        providers["trackpad"] = FakeKeyboard()  # a provider with snapshot/handle/stop and a recorded stop
+        providers["trackpad"].snap = {"available": True}
+        return Harness(providers)
+
+    def test_trackpad_section(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.sent[0]["trackpad"], {"available": True})
+
+    def test_missing_trackpad_is_unavailable(self):
+        providers = make_providers()
+        del providers["trackpad"]
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["trackpad"], {"available": False})
+
+    def test_trackpad_actions_are_routed_to_the_trackpad_only(self):
+        h = self.harness()
+        h.tick()
+        move = {"id": "trackpad.move", "dx": 3.5, "dy": -2.0}
+        h.hub.handle(move)
+        h.hub.handle({"id": "trackpad.release"})
+        h.hub._tick(h.clock.t)
+        self.assertEqual(h.providers["trackpad"].handled, [move, {"id": "trackpad.release"}])
+        self.assertEqual(h.providers["keyboard"].handled, [])
+        self.assertTrue(all("notice" not in s for s in h.sent))
+
+    def test_trackpad_actions_do_not_poll_the_other_providers(self):
+        h = self.harness()
+        h.tick()
+        polls = {name: p.snapshots for name, p in h.providers.items()}
+        for _ in range(30):
+            h.hub.handle({"id": "trackpad.move", "dx": 1, "dy": 1})
+            h.hub._tick(h.clock.t)  # same instant: only an action could force a poll
+        for name in ("usb", "radios", "battery", "wifi_info", "bt_info", "media", "brightness", "now_playing",
+                     "context", "keyboard"):
+            self.assertEqual(h.providers[name].snapshots, polls[name], name)
+
+    def test_stop_stops_the_trackpad(self):
+        h = self.harness()
+        h.hub.stop()
+        self.assertEqual(len(h.providers["trackpad"].stops), 1)
+
+    def test_default_providers_include_the_trackpad_without_sending_anything(self):
+        providers = default_providers(lambda _l: None)
+        self.assertIn("trackpad", providers)
+        self.assertTrue(callable(providers["trackpad"].stop))
+        self.assertEqual(providers["trackpad"].held, [])
+        self.assertEqual(providers["trackpad"].snapshot(), {"available": True})
+
+
 class ContextBarThroughTheHubTest(unittest.TestCase):
     """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
 
@@ -1288,7 +1344,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 
