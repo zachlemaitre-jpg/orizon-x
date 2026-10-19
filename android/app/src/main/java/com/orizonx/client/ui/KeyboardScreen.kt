@@ -8,15 +8,17 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -47,6 +49,7 @@ import com.orizonx.client.keyboard.KeyEvent
 import com.orizonx.client.keyboard.KeySpec
 import com.orizonx.client.keyboard.KeyVisual
 import com.orizonx.client.keyboard.KeyboardActions
+import com.orizonx.client.keyboard.KeyboardGeometry
 import com.orizonx.client.keyboard.KeyboardLayout
 import com.orizonx.client.keyboard.KeyboardState
 import kotlinx.coroutines.delay
@@ -54,6 +57,9 @@ import org.json.JSONObject
 
 private val KeyShape = RoundedCornerShape(8.dp)
 private const val TICK_MS = 11L
+private val CloseRowHeight = 40.dp
+private val KeyboardMargin = 6.dp
+private val KeyGap = 4.dp
 
 /**
  * The PC keyboard over the whole Actions body (the context bar stays above it): every key is a physical key sent by scan
@@ -94,39 +100,53 @@ fun KeyboardScreen(
         }
     }
 
-    Column(modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().height(40.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            val closeDescription = tr(S.KEYBOARD_CLOSE_DESC)
-            Box(
-                Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable { tap(); onClose() }
-                    .semantics { contentDescription = closeDescription },
-                contentAlignment = Alignment.Center,
-            ) {
-                BasicText("✕", style = TextStyle(color = Color.White, fontSize = 20.sp))
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        // Square keys: the grid unit is what both the width and the height can hold, the block keeps its proportions.
+        val unit = KeyboardGeometry.unit(
+            maxWidth.value, (maxHeight - CloseRowHeight).value, KeyboardGeometry.COLUMNS, layout.rows.size, KeyboardMargin.value,
+        )
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().height(CloseRowHeight), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                val closeDescription = tr(S.KEYBOARD_CLOSE_DESC)
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { tap(); onClose() }
+                        .semantics { contentDescription = closeDescription },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    BasicText("✕", style = TextStyle(color = Color.White, fontSize = 20.sp))
+                }
             }
-        }
-        Column(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            for ((index, row) in layout.rows.withIndex()) {
-                // The function row is shorter than the rest.
-                Row(Modifier.fillMaxWidth().weight(if (index == 0) 0.7f else 1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (cell in row) {
-                        when (cell) {
-                            is Gap -> Spacer(Modifier.weight(cell.width))
-                            is KeySpec -> KeyCap(
-                                cell,
-                                visuals[cell.id] ?: KeyVisual.UP,
-                                Modifier.weight(cell.width).fillMaxHeight(),
-                                onDown = {
-                                    val pointer = pointerCounter[0]++
-                                    tap()
-                                    emit(state.touchDown(pointer, cell))
-                                    pointer
-                                },
-                                onUp = { pointer -> emit(state.touchUp(pointer)) },
-                            )
+            // Free space goes above the keyboard, which sits at the bottom, centred.
+            Spacer(Modifier.weight(1f))
+            Column(Modifier.align(Alignment.CenterHorizontally).padding(bottom = KeyboardMargin)) {
+                for (row in layout.rows) {
+                    Row(Modifier.height(unit.dp)) {
+                        for (cell in row) {
+                            when (cell) {
+                                is Gap -> Spacer(Modifier.width((cell.width * unit).dp))
+                                is KeySpec -> Box(
+                                    Modifier
+                                        .width((cell.width * unit).dp)
+                                        .height(unit.dp)
+                                        .padding(KeyGap / 2),
+                                ) {
+                                    KeyCap(
+                                        cell,
+                                        visuals[cell.id] ?: KeyVisual.UP,
+                                        Modifier.fillMaxSize(),
+                                        onDown = {
+                                            val pointer = pointerCounter[0]++
+                                            tap()
+                                            emit(state.touchDown(pointer, cell))
+                                            pointer
+                                        },
+                                        onUp = { pointer -> emit(state.touchUp(pointer)) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
