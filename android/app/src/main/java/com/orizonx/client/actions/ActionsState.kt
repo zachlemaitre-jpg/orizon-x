@@ -97,6 +97,7 @@ data class ActionsState(
     val notice: Notice? = null,
     val context: ContextBar? = null,
     val keyboard: KeyboardInfo? = null,
+    val trackpad: Boolean = false,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -142,6 +143,7 @@ data class ActionsState(
             },
             context = context(json),
             keyboard = available(json, "keyboard")?.let { KeyboardInfo(KeyboardLayoutId.fromWire(it.opt("layout") as? String)) },
+            trackpad = available(json, "trackpad") != null,
         )
 
         /**

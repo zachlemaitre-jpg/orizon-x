@@ -1,5 +1,6 @@
 package com.orizonx.client.ui
 
+import android.content.Context
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -49,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +78,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -119,6 +122,7 @@ import com.orizonx.client.actions.WifiIcon
 import com.orizonx.client.actions.WifiState
 import com.orizonx.client.i18n.LangPref
 import com.orizonx.client.keyboard.KeyLayouts
+import com.orizonx.client.trackpad.TrackpadStore
 import com.orizonx.client.i18n.LocalLang
 import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
@@ -201,6 +205,10 @@ fun ActionsScreen(
     var pageVersion by remember { mutableIntStateOf(0) }
     var stripHeightPx by remember { mutableIntStateOf(0) }
     var keyboardOpen by remember { mutableStateOf(false) }
+    var trackpadOpen by remember { mutableStateOf(false) }
+    val appContext = LocalContext.current
+    val trackpadStore = remember { TrackpadStore(appContext.getSharedPreferences("orizonx", Context.MODE_PRIVATE)) }
+    var trackpadSensitivity by remember { mutableFloatStateOf(trackpadStore.load()) }
 
     val volumeThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.volumeSet(it)) } }
     val brightnessThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.brightnessSet(it)) } }
@@ -223,6 +231,7 @@ fun ActionsScreen(
             val keyboardInfo = state?.keyboard
             // The keyboard screen replaces the tiles; it closes by itself when the PC stops offering a keyboard.
             val showKeyboard = keyboardOpen && keyboardInfo != null
+            val showTrackpad = trackpadOpen && !showKeyboard && state?.trackpad == true
             val contextStrip: @Composable () -> Unit = {
                 if (contextBar != null) {
                     ContextBarStrip(
@@ -240,11 +249,28 @@ fun ActionsScreen(
                     // The context bar stays, above the keyboard.
                     Box(Modifier.padding(top = 8.dp)) { contextStrip() }
                     // Clock, battery, sound and brightness stay too; the keyboard gets the height that is left.
-                    if (state != null) KeyboardTopRow(state, controls)
+                    if (state != null) OverlayTopRow(state, controls)
                     KeyboardScreen(
                         KeyLayouts.of(keyboardInfo.layout),
                         onAction = { send(it) },
                         onClose = { keyboardOpen = false },
+                        tap = tap,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            } else if (showTrackpad) {
+                Column(Modifier.fillMaxSize()) {
+                    // Same header as the keyboard: context bar, then clock, battery, sound and brightness.
+                    Box(Modifier.padding(top = 8.dp)) { contextStrip() }
+                    if (state != null) OverlayTopRow(state, controls)
+                    TrackpadScreen(
+                        sensitivity = trackpadSensitivity,
+                        onSensitivity = {
+                            trackpadSensitivity = it
+                            trackpadStore.save(it)
+                        },
+                        onAction = { send(it) },
+                        onClose = { trackpadOpen = false },
                         tap = tap,
                         modifier = Modifier.weight(1f),
                     )
@@ -256,7 +282,11 @@ fun ActionsScreen(
                             LangPill(langPref, onLangPref)
                             if (keyboardInfo != null) {
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                            }
+                            if (state?.trackpad == true) {
+                                Spacer(Modifier.width(10.dp))
+                                Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
                             }
                             Spacer(Modifier.width(10.dp))
                             Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
@@ -278,7 +308,7 @@ fun ActionsScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
-                        bottom = if (contextBar != null && !showKeyboard) {
+                        bottom = if (contextBar != null && !showKeyboard && !showTrackpad) {
                             24.dp + maxOf(ContextBarHeight, with(LocalDensity.current) { stripHeightPx.toDp() }) + ContextBarBottomMargin
                         } else {
                             24.dp
@@ -444,7 +474,7 @@ private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit
  * when they fit.
  */
 @Composable
-private fun KeyboardTopRow(state: ActionsState, c: Controls) {
+private fun OverlayTopRow(state: ActionsState, c: Controls) {
     val keep = KeyboardTopCards.of(state)
     if (!keep.any) return
     val brightness = state.brightness

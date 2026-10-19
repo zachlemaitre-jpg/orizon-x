@@ -406,6 +406,15 @@ class ActionsStateTest {
     }
 
     @Test
+    fun trackpadSectionIsParsed() {
+        assertEquals(true, parse("""{"trackpad":{"available":true}}""").trackpad)
+        assertEquals(false, parse("{}").trackpad)
+        assertEquals(false, parse("""{"trackpad":null}""").trackpad)
+        assertEquals(false, parse("""{"trackpad":{"available":false}}""").trackpad)
+        assertEquals(false, parse("""{"trackpad":{}}""").trackpad)
+    }
+
+    @Test
     fun nowPlayingCoverIdStillParsed() {
         val n = parse(
             """{"now_playing":{"available":true,"app":"Spotify","title":"T","playing":true,"artwork":"0123456789abcdef0123456789abcdef01234567"}}""",
