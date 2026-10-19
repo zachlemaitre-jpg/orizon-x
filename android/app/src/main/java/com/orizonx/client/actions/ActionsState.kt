@@ -42,11 +42,17 @@ data class NowPlaying(
 
 data class Notice(val code: String, val drive: String?)
 
-/** [icon] is a name from the spec list (see [ContextIcons]); it may be unknown, the UI then shows a dot. */
-data class ContextButton(val id: String, val icon: String, val label: String)
+/**
+ * [icon] is a name from the spec list (see [ContextIcons]); it may be unknown, the UI then shows a dot.
+ * [active] marks the current item on a scrolling page (the selected browser tab).
+ */
+data class ContextButton(val id: String, val icon: String, val label: String, val active: Boolean = false)
 
-/** One page of the bar (Tools, Edit, View...): at most [ContextBar.MAX_BUTTONS] buttons, never empty once parsed. */
-data class ContextPage(val id: String, val label: String, val buttons: List<ContextButton>)
+/**
+ * One page of the bar (Tools, Edit, View...), never empty once parsed: at most [ContextBar.MAX_BUTTONS] buttons, or
+ * [ContextBar.MAX_SCROLL_BUTTONS] when [scroll] (a row of wide buttons that scrolls, like the browser tabs).
+ */
+data class ContextPage(val id: String, val label: String, val buttons: List<ContextButton>, val scroll: Boolean = false)
 
 /**
  * Contextual bar for the PC's foreground app: [app] is the display name, [profile] changes with the app.
@@ -62,6 +68,7 @@ data class ContextBar(
 ) {
     companion object {
         const val MAX_BUTTONS = 8
+        const val MAX_SCROLL_BUTTONS = 24
         const val MAX_PAGES = 4
         const val MAIN_PAGE = "main"
     }
@@ -149,22 +156,23 @@ data class ActionsState(
             }
             val pages = (0 until pagesArray.length()).mapNotNull { i ->
                 val p = pagesArray.optJSONObject(i) ?: return@mapNotNull null
-                val buttons = buttons(p.optJSONArray("buttons"))
+                val scroll = p.opt("scroll") == true
+                val buttons = buttons(p.optJSONArray("buttons"), if (scroll) ContextBar.MAX_SCROLL_BUTTONS else ContextBar.MAX_BUTTONS)
                 if (buttons.isEmpty()) return@mapNotNull null
                 val id = text(p, "id") ?: "page${i + 1}"
-                ContextPage(id, text(p, "label") ?: id, buttons)
+                ContextPage(id, text(p, "label") ?: id, buttons, scroll)
             }.take(ContextBar.MAX_PAGES)
             if (pages.isEmpty()) return null
             return ContextBar(app, profile, pages[0].buttons, pages, icon)
         }
 
-        private fun buttons(array: JSONArray?): List<ContextButton> {
+        private fun buttons(array: JSONArray?, max: Int = ContextBar.MAX_BUTTONS): List<ContextButton> {
             if (array == null) return emptyList()
             return (0 until array.length()).mapNotNull { i ->
                 val b = array.optJSONObject(i) ?: return@mapNotNull null
                 val id = text(b, "id") ?: return@mapNotNull null
-                ContextButton(id, text(b, "icon") ?: "", text(b, "label") ?: "")
-            }.take(ContextBar.MAX_BUTTONS)
+                ContextButton(id, text(b, "icon") ?: "", text(b, "label") ?: "", b.opt("active") == true)
+            }.take(max)
         }
 
         /** The section object when the PC reports it with `available: true`, else null. */

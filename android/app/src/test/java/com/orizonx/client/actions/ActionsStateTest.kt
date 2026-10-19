@@ -325,6 +325,57 @@ class ActionsStateTest {
         assertEquals(listOf("tools"), c.pages.map { it.id })
     }
 
+    private fun tabsJson(count: Int, pageExtra: String = ""): String {
+        val buttons = (1..count).joinToString(",") { """{"id":"tab.$it","icon":"tab","label":"Tab $it","active":${it == 2}}""" }
+        return """{"context":{"available":true,"app":"Chrome","profile":"browser","buttons":[],
+            "pages":[{"id":"tabs","label":"Tabs",$pageExtra"buttons":[$buttons]}]}}"""
+    }
+
+    @Test
+    fun scrollPageKeepsUpToTwentyFourButtons() {
+        val page = parse(tabsJson(30, "\"scroll\":true,")).context!!.pages[0]
+        assertEquals(true, page.scroll)
+        assertEquals((1..24).map { "tab.$it" }, page.buttons.map { it.id })
+    }
+
+    @Test
+    fun otherPagesStillKeepEightButtons() {
+        val page = parse(tabsJson(24)).context!!.pages[0]
+        assertEquals(false, page.scroll)
+        assertEquals((1..8).map { "tab.$it" }, page.buttons.map { it.id })
+        val explicitFalse = parse(tabsJson(24, "\"scroll\":false,")).context!!.pages[0]
+        assertEquals(8, explicitFalse.buttons.size)
+    }
+
+    @Test
+    fun scrollFlagIsTolerant() {
+        for (raw in listOf("\"scroll\":null,", "\"scroll\":\"true\",", "\"scroll\":1,", "\"scroll\":{},", "")) {
+            assertEquals(raw, false, parse(tabsJson(3, raw)).context!!.pages[0].scroll)
+        }
+    }
+
+    @Test
+    fun activeFlagIsParsedAndTolerant() {
+        val buttons = parse(tabsJson(3, "\"scroll\":true,")).context!!.pages[0].buttons
+        assertEquals(listOf(false, true, false), buttons.map { it.active })
+        assertEquals(ContextButton("tab.2", "tab", "Tab 2", active = true), buttons[1])
+        val c = parse(
+            """{"context":{"available":true,"app":"X","profile":"x","buttons":[
+                {"id":"a","icon":"copy","label":"A"},{"id":"b","icon":"copy","label":"B","active":null},
+                {"id":"c","icon":"copy","label":"C","active":"true"},{"id":"d","icon":"copy","label":"D","active":1},
+                {"id":"e","icon":"copy","label":"E","active":true}]}}""",
+        ).context!!
+        assertEquals(listOf(false, false, false, false, true), c.buttons.map { it.active })
+    }
+
+    @Test
+    fun legacyButtonsListIsStillLimitedToEight() {
+        val buttons = (1..12).joinToString(",") { """{"id":"b$it","icon":"copy","label":"B$it"}""" }
+        val c = parse("""{"context":{"available":true,"app":"X","profile":"x","buttons":[$buttons]}}""").context!!
+        assertEquals(8, c.buttons.size)
+        assertEquals(false, c.pages[0].scroll)
+    }
+
     @Test
     fun nowPlayingCoverIdStillParsed() {
         val n = parse(

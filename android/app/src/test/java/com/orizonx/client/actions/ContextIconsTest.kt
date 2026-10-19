@@ -15,9 +15,9 @@ class ContextIconsTest {
     }
 
     @Test
-    fun specListHasOneHundredSixteenNames() {
-        // 38 from the first bar + 36 creative-tool names + 42 for Premiere Pro, After Effects, InDesign and Lightroom.
-        assertEquals(116, ContextIcons.NAMES.size)
+    fun specListHasOneHundredSeventeenNames() {
+        // 38 from the first bar + 36 creative-tool names + 42 for Premiere Pro, After Effects, InDesign and Lightroom + `tab` for the browser tabs page.
+        assertEquals(117, ContextIcons.NAMES.size)
         assertEquals(ContextIcons.NAMES.size, ContextIcons.NAMES.toSet().size)
     }
 
@@ -49,6 +49,15 @@ class ContextIconsTest {
             assertTrue("$name missing from NAMES", name in ContextIcons.NAMES)
             assertNotEquals("$name maps to the dot", R.drawable.ctx_unknown, ContextIcons.drawable(name))
         }
+    }
+
+    @Test
+    fun tabIconIsMappedAndDistinctFromTabNewAndTabClose() {
+        assertTrue("tab" in ContextIcons.NAMES)
+        val tab = ContextIcons.drawable("tab")
+        assertNotEquals(R.drawable.ctx_unknown, tab)
+        assertNotEquals(ContextIcons.drawable("tab_new"), tab)
+        assertNotEquals(ContextIcons.drawable("tab_close"), tab)
     }
 
     @Test

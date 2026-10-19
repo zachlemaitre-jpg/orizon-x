@@ -28,6 +28,8 @@ object ContextIcons {
         "precompose", "solid", "keyframes", "go_start", "go_end", "keyframe_prev", "keyframe_next", "render",
         "rect_frame", "place", "preview", "grid", "loupe", "develop", "compare", "spot", "pick", "reject", "unflag",
         "star", "auto", "copy_settings", "paste_settings", "before_after", "fullscreen",
+        // Browser tabs page.
+        "tab",
     )
 
     /** Drawable resource id for [name] (case-insensitive); [R.drawable.ctx_unknown] when it is not in [NAMES]. */
@@ -148,6 +150,7 @@ object ContextIcons {
         "paste_settings" -> R.drawable.ctx_paste_settings
         "before_after" -> R.drawable.ctx_before_after
         "fullscreen" -> R.drawable.ctx_fullscreen
+        "tab" -> R.drawable.ctx_tab
         else -> R.drawable.ctx_unknown
     }
 }

@@ -55,6 +55,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,6 +108,7 @@ import com.orizonx.client.actions.ContextButton
 import com.orizonx.client.actions.ContextIcons
 import com.orizonx.client.actions.ContextPage
 import com.orizonx.client.actions.ContextPageMemory
+import com.orizonx.client.actions.ContextScroll
 import com.orizonx.client.actions.NowPlaying
 import com.orizonx.client.actions.UsbDrive
 import com.orizonx.client.actions.UsbKind
@@ -119,7 +121,9 @@ import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -410,6 +414,7 @@ private val ContextBarBottomMargin = 8.dp
 private val ContextBarShape = RoundedCornerShape(22.dp)
 private val ContextKeyShape = RoundedCornerShape(14.dp)
 private val ContextKeyMinWidth = 64.dp
+private val ContextScrollKeyWidth = 132.dp
 private val ContextTabsRowHeight = 34.dp
 private val ContextIconSize = 28.dp
 private val ContextIconShape = RoundedCornerShape(6.dp)
@@ -557,7 +562,8 @@ private fun ContextAppLabel(app: String, icon: ImageBitmap?, nameWidth: Dp) {
 private fun tabsFitInline(bar: ContextBar, hasName: Boolean, nameWidth: Dp, available: Dp): Boolean {
     val tabs = bar.pages.sumOf { it.label.length * 7 + 26 + TAB_GAP_DP }.dp
     val name = if (hasName) nameWidth + 12.dp else 0.dp
-    val keys = ContextKeyMinWidth * bar.pages.maxOf { it.buttons.size }
+    // A scrolling page (the tabs) never needs its whole width on the line: count a few keys for it.
+    val keys = ContextKeyMinWidth * bar.pages.maxOf { if (it.scroll) 4 else it.buttons.size }
     return available - 28.dp - name - tabs - 12.dp >= keys
 }
 
@@ -593,7 +599,11 @@ private fun ContextTabs(pages: List<ContextPage>, current: ContextPage, onPage: 
     }
 }
 
-/** The buttons of [page], crossfaded (~150 ms) when the page changes, with the swipe that moves to the neighbour page. */
+/**
+ * The buttons of [page], crossfaded (~150 ms) when the page changes, with the swipe that moves to the neighbour page.
+ * A [ContextPage.scroll] page (the browser tabs) is a row of wide buttons that scrolls; its active button is brought
+ * to the middle when the page appears.
+ */
 @Composable
 private fun ContextButtonsArea(
     page: ContextPage,
@@ -603,61 +613,97 @@ private fun ContextButtonsArea(
     modifier: Modifier,
 ) {
     val scroll = rememberScrollState()
-    val threshold = with(LocalDensity.current) { ContextSwipeThreshold.toPx() }
+    val density = LocalDensity.current
+    val threshold = with(density) { ContextSwipeThreshold.toPx() }
+    val keyPx = with(density) { ContextScrollKeyWidth.roundToPx() }
     val latestNeighbour by rememberUpdatedState(neighbour)
     val latestOnPage by rememberUpdatedState(onPage)
-    LaunchedEffect(page.id) { scroll.scrollTo(0) }
+    val latestPage by rememberUpdatedState(page)
+    var viewportPx by remember { mutableIntStateOf(0) }
+    // A page keeps showing its own buttons while it fades out, and a content update (a new active tab) does not re-fade.
+    val pagesById = remember { mutableMapOf<String, ContextPage>() }
+    pagesById[page.id] = page
+    LaunchedEffect(page.id, viewportPx > 0) {
+        val p = latestPage
+        if (!p.scroll) {
+            scroll.scrollTo(0)
+        } else if (viewportPx > 0) {
+            val target = ContextScroll.target(p.buttons.indexOfFirst { it.active }, keyPx, viewportPx)
+            // Wait for the row to be measured (its range is 0 before), but not for ever when it is shorter than the view.
+            if (target > 0) withTimeoutOrNull(500) { snapshotFlow { scroll.maxValue }.first { it > 0 } }
+            scroll.scrollTo(target)
+        }
+    }
     Box(
-        modifier.pointerInput(threshold) {
-            // Watches the gesture before the buttons see it and consumes nothing: taps and the row's own scrolling keep working.
-            // It changes page only for a mostly horizontal swipe during which the row did not move (nothing to scroll, or at its end).
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                val startScroll = scroll.value
-                var last = down.position
-                while (true) {
-                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                    last = change.position
-                    if (!change.pressed) break
+        modifier
+            .onSizeChanged { viewportPx = it.width }
+            .pointerInput(threshold) {
+                // Watches the gesture before the buttons see it and consumes nothing: taps and the row's own scrolling keep working.
+                // It changes page only for a mostly horizontal swipe during which the row did not move (nothing to scroll, or at its end).
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val startScroll = scroll.value
+                    var last = down.position
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        last = change.position
+                        if (!change.pressed) break
+                    }
+                    val dx = last.x - down.position.x
+                    val dy = last.y - down.position.y
+                    if (kotlin.math.abs(dx) >= threshold && kotlin.math.abs(dx) > 2 * kotlin.math.abs(dy) && scroll.value == startScroll) {
+                        latestNeighbour(if (dx < 0) 1 else -1)?.let { latestOnPage(it) }
+                    }
                 }
-                val dx = last.x - down.position.x
-                val dy = last.y - down.position.y
-                if (kotlin.math.abs(dx) >= threshold && kotlin.math.abs(dx) > 2 * kotlin.math.abs(dy) && scroll.value == startScroll) {
-                    latestNeighbour(if (dx < 0) 1 else -1)?.let { latestOnPage(it) }
-                }
-            }
-        },
+            },
     ) {
-        Crossfade(targetState = page, animationSpec = tween(CONTEXT_PAGE_FADE_MS), label = "contextPage") { p ->
+        Crossfade(targetState = page.id, animationSpec = tween(CONTEXT_PAGE_FADE_MS), label = "contextPage") { id ->
+            val p = if (id == latestPage.id) latestPage else pagesById[id] ?: latestPage
             BoxWithConstraints(Modifier.fillMaxSize()) {
-                if (maxWidth / p.buttons.size >= ContextKeyMinWidth) {
-                    Row(Modifier.fillMaxSize()) { ContextKeys(p.buttons, c, spread = true) }
+                if (p.scroll) {
+                    Row(Modifier.fillMaxSize().horizontalScroll(scroll)) { ContextKeys(p.buttons, c, ContextScrollKeyWidth) }
+                } else if (maxWidth / p.buttons.size >= ContextKeyMinWidth) {
+                    Row(Modifier.fillMaxSize()) { ContextKeys(p.buttons, c, keyWidth = null) }
                 } else {
-                    Row(Modifier.fillMaxSize().horizontalScroll(scroll)) { ContextKeys(p.buttons, c, spread = false) }
+                    Row(Modifier.fillMaxSize().horizontalScroll(scroll)) { ContextKeys(p.buttons, c, ContextKeyMinWidth) }
                 }
             }
         }
     }
 }
 
+/** The keys of a row: all [keyWidth] wide, or evenly spread over the row when it is null. */
 @Composable
-private fun RowScope.ContextKeys(buttons: List<ContextButton>, c: Controls, spread: Boolean) {
+private fun RowScope.ContextKeys(buttons: List<ContextButton>, c: Controls, keyWidth: Dp?) {
     for (button in buttons) {
         ContextKey(
             button, c,
-            if (spread) Modifier.weight(1f).fillMaxHeight() else Modifier.width(ContextKeyMinWidth).fillMaxHeight(),
+            if (keyWidth == null) Modifier.weight(1f).fillMaxHeight() else Modifier.width(keyWidth).fillMaxHeight(),
         )
     }
 }
 
-/** 24 dp pictogram over a one-line 11 sp label; a tap sends `context.press` for this button. */
+/**
+ * 24 dp pictogram over a one-line 11 sp label; a tap sends `context.press` for this button.
+ * The [ContextButton.active] one is styled like the selected page tab: lighter fill and a border.
+ */
 @Composable
 private fun ContextKey(button: ContextButton, c: Controls, modifier: Modifier) {
+    val active = button.active
     Column(
         modifier
             .padding(vertical = 6.dp, horizontal = 2.dp)
             .clip(ContextKeyShape)
+            .then(
+                if (active) {
+                    Modifier
+                        .background(Color.White.copy(alpha = 0.30f))
+                        .border(1.dp, Color.White.copy(alpha = 0.8f), ContextKeyShape)
+                } else {
+                    Modifier
+                },
+            )
             .clickable {
                 c.tap()
                 c.send(ActionMessages.contextPress(button.id))
@@ -670,7 +716,12 @@ private fun ContextKey(button: ContextButton, c: Controls, modifier: Modifier) {
         Spacer(Modifier.height(4.dp))
         BasicText(
             button.label,
-            style = TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp, textAlign = TextAlign.Center),
+            style = TextStyle(
+                color = Color.White.copy(alpha = if (active) 1f else 0.85f),
+                fontSize = 11.sp,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                textAlign = TextAlign.Center,
+            ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
