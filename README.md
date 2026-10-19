@@ -78,6 +78,14 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
 - **Luminosité**.
 - **Wi-Fi** (avec barres de signal), **Bluetooth** et **mode avion**.
 - **Clés et disques USB** : **Ouvrir** dans l'Explorateur, **Éjecter** proprement. Si l'éjection est refusée (clé utilisée), un message le dit.
+- **Barre contextuelle** (en bas) : des boutons adaptés à l'app au premier plan sur le PC, avec son icône au-dessus de son nom.
+  - Apps : Spotify, PowerPoint, Word, Excel, VS Code, Explorateur, Illustrator, Photoshop, InDesign, Premiere Pro, After Effects, Lightroom Classic, et Canva et Figma (app ou site, reconnus par l'adresse).
+  - Les apps créatives ont plusieurs pages (Outils, Édition, Affichage…), à choisir par onglets ou par balayage.
+  - **Navigateurs** (Chrome, Edge, Opera, Firefox, Brave, Vivaldi, Arc…) : une page **Onglets** liste les onglets ouverts ; un tap bascule sur l'onglet.
+- **Clavier** : le bouton **Clavier** ouvre un clavier de PC complet (AZERTY ou QWERTY selon le PC), avec l'heure, le son et la luminosité au-dessus.
+  - Les touches sont envoyées par leur position, comme un vrai clavier : accents, AltGr et raccourcis marchent.
+  - Maj, Ctrl, Alt et AltGr : un tap les garde pour la touche suivante, un double tap les verrouille. Win s'utilise comme sur un vrai clavier (un tap ouvre Démarrer ; Win + lettre à deux doigts).
+  - Une touche tenue se répète ; tout est relâché à la fermeture du clavier ou au débranchement.
 
 ### Mode Tableau (Frame)
 
