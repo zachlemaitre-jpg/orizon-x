@@ -69,7 +69,7 @@ class KeyboardState(private val clock: () -> Long) {
         if (touch.consumed) return emptyList()
         val key = touch.key
         if (key.modifier) {
-            if (touch.used) return listOf(up(key))
+            if (touch.used || !key.latch) return listOf(up(key))
             latched[key.id] = Latch(key, ++seq, clock())
             return emptyList()
         }

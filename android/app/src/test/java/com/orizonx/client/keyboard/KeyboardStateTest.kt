@@ -14,9 +14,33 @@ class KeyboardStateTest {
     private val ctrl = layout.key(0x1D, false)!!
     private val altGr = layout.key(0x38, true)!!
     private val caps = layout.key(0x3A, false)!!
+    private val win = layout.key(0x5B, true)!!
+    private val d = layout.key(0x20, false)!! // d
 
     private fun down(k: KeySpec) = KeyEvent(k.sc, k.ext, true)
     private fun up(k: KeySpec) = KeyEvent(k.sc, k.ext, false)
+
+    @Test
+    fun winTappedAloneIsPressedAndReleasedLikeARealKeyboard() {
+        // A tap on Win opens Start; it never stays latched (it would hold Win down on the PC).
+        assertEquals(listOf(down(win)), kb.touchDown(1, win))
+        now = 80
+        assertEquals(listOf(up(win)), kb.touchUp(1))
+        now = 200
+        assertEquals(listOf(down(win)), kb.touchDown(2, win))
+        now = 260
+        assertEquals(listOf(up(win)), kb.touchUp(2))
+        assertEquals(listOf(down(a)), kb.touchDown(3, a))
+        assertEquals(listOf(up(a)), kb.touchUp(3))
+    }
+
+    @Test
+    fun winHeldWithAnotherFingerMakesAShortcut() {
+        assertEquals(listOf(down(win)), kb.touchDown(1, win))
+        assertEquals(listOf(down(d)), kb.touchDown(2, d))
+        assertEquals(listOf(up(d)), kb.touchUp(2))
+        assertEquals(listOf(up(win)), kb.touchUp(1))
+    }
 
     @Test
     fun simpleKeyIsDownThenUp() {

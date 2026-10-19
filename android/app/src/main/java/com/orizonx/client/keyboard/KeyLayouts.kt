@@ -33,6 +33,8 @@ data class KeySpec(
     override val width: Float = 1f,
     val modifier: Boolean = false,
     val repeat: Boolean = true,
+    /** A modifier tapped alone stays down for the next key; false for Win, whose tap opens Start on a real keyboard. */
+    val latch: Boolean = true,
 ) : KeyCell {
     /** Identity of the physical key: the scan code, plus 0x100 for the extended (E0) ones. */
     val id: Int get() = sc or (if (ext) 0x100 else 0)
@@ -79,7 +81,7 @@ object KeyLayouts {
     private fun space() = key(0x39, "", width = 6f)
 
     private fun bottomRow(altGr: String, menu: String): List<KeyCell> = listOf(
-        mod(0x1D, false, "Ctrl", 1.5f), mod(0x5B, true, "Win", 1.5f), mod(0x38, false, "Alt", 1.5f),
+        mod(0x1D, false, "Ctrl", 1.5f), KeySpec(0x5B, true, "Win", width = 1.5f, modifier = true, latch = false), mod(0x38, false, "Alt", 1.5f),
         space(),
         mod(0x38, true, altGr, 1.5f), ext(0x5D, menu, 1.5f), mod(0x1D, true, "Ctrl", 1.5f),
         Gap(0.25f), ext(0x4B, "←"), ext(0x50, "↓"), ext(0x4D, "→"),
