@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icône keyframe_next: Material Icons "arrow_forward_ios" (Google), licence Apache-2.0, https://github.com/google/material-design-icons -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5.88,4.12L13.76,12l-7.88,7.88L8,22l10,-10L8,2z" />
+</vector>

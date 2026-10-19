@@ -15,9 +15,9 @@ class ContextIconsTest {
     }
 
     @Test
-    fun specListHasSeventyFourNames() {
-        // 38 from the first bar + 36 creative-tool names (the creative `comment` already existed).
-        assertEquals(74, ContextIcons.NAMES.size)
+    fun specListHasOneHundredSixteenNames() {
+        // 38 from the first bar + 36 creative-tool names + 42 for Premiere Pro, After Effects, InDesign and Lightroom.
+        assertEquals(116, ContextIcons.NAMES.size)
         assertEquals(ContextIcons.NAMES.size, ContextIcons.NAMES.toSet().size)
     }
 
@@ -46,6 +46,23 @@ class ContextIconsTest {
         )
         assertEquals(37, creative.size)
         for (name in creative) {
+            assertTrue("$name missing from NAMES", name in ContextIcons.NAMES)
+            assertNotEquals("$name maps to the dot", R.drawable.ctx_unknown, ContextIcons.drawable(name))
+        }
+    }
+
+    @Test
+    fun everyVideoPhotoAndLayoutToolNameIsMapped() {
+        val names = listOf(
+            "track_select", "ripple_edit", "razor", "slip", "add_edit", "ripple_delete", "mark_in", "mark_out", "export",
+            "frame_prev", "frame_next", "edit_prev", "edit_next", "timeline_fit",
+            "rotate", "anchor", "split_layer", "precompose", "solid", "keyframes", "go_start", "go_end",
+            "keyframe_prev", "keyframe_next", "render",
+            "rect_frame", "place", "preview", "grid", "loupe", "develop", "compare", "spot", "pick", "reject", "unflag",
+            "star", "auto", "copy_settings", "paste_settings", "before_after", "fullscreen",
+        )
+        assertEquals(42, names.size)
+        for (name in names) {
             assertTrue("$name missing from NAMES", name in ContextIcons.NAMES)
             assertNotEquals("$name maps to the dot", R.drawable.ctx_unknown, ContextIcons.drawable(name))
         }

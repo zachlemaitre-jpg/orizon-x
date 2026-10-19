@@ -22,6 +22,12 @@ object ContextIcons {
         "group", "ungroup", "lock", "unlock", "layer_new", "layer_duplicate", "merge", "deselect", "transform",
         "component", "hide", "paste_front",
         "hand", "zoom_fit", "zoom_100", "zoom_selection", "outline", "rulers", "brush_smaller", "brush_larger", "present",
+        // Premiere Pro, After Effects, InDesign, Lightroom.
+        "track_select", "ripple_edit", "razor", "slip", "add_edit", "ripple_delete", "mark_in", "mark_out", "export",
+        "frame_prev", "frame_next", "edit_prev", "edit_next", "timeline_fit", "rotate", "anchor", "split_layer",
+        "precompose", "solid", "keyframes", "go_start", "go_end", "keyframe_prev", "keyframe_next", "render",
+        "rect_frame", "place", "preview", "grid", "loupe", "develop", "compare", "spot", "pick", "reject", "unflag",
+        "star", "auto", "copy_settings", "paste_settings", "before_after", "fullscreen",
     )
 
     /** Drawable resource id for [name] (case-insensitive); [R.drawable.ctx_unknown] when it is not in [NAMES]. */
@@ -100,6 +106,48 @@ object ContextIcons {
         "brush_smaller" -> R.drawable.ctx_brush_smaller
         "brush_larger" -> R.drawable.ctx_brush_larger
         "present" -> R.drawable.ctx_present
+        "track_select" -> R.drawable.ctx_track_select
+        "ripple_edit" -> R.drawable.ctx_ripple_edit
+        "razor" -> R.drawable.ctx_razor
+        "slip" -> R.drawable.ctx_slip
+        "add_edit" -> R.drawable.ctx_add_edit
+        "ripple_delete" -> R.drawable.ctx_ripple_delete
+        "mark_in" -> R.drawable.ctx_mark_in
+        "mark_out" -> R.drawable.ctx_mark_out
+        "export" -> R.drawable.ctx_export
+        "frame_prev" -> R.drawable.ctx_frame_prev
+        "frame_next" -> R.drawable.ctx_frame_next
+        "edit_prev" -> R.drawable.ctx_edit_prev
+        "edit_next" -> R.drawable.ctx_edit_next
+        "timeline_fit" -> R.drawable.ctx_timeline_fit
+        "rotate" -> R.drawable.ctx_rotate
+        "anchor" -> R.drawable.ctx_anchor
+        "split_layer" -> R.drawable.ctx_split_layer
+        "precompose" -> R.drawable.ctx_precompose
+        "solid" -> R.drawable.ctx_solid
+        "keyframes" -> R.drawable.ctx_keyframes
+        "go_start" -> R.drawable.ctx_go_start
+        "go_end" -> R.drawable.ctx_go_end
+        "keyframe_prev" -> R.drawable.ctx_keyframe_prev
+        "keyframe_next" -> R.drawable.ctx_keyframe_next
+        "render" -> R.drawable.ctx_render
+        "rect_frame" -> R.drawable.ctx_rect_frame
+        "place" -> R.drawable.ctx_place
+        "preview" -> R.drawable.ctx_preview
+        "grid" -> R.drawable.ctx_grid
+        "loupe" -> R.drawable.ctx_loupe
+        "develop" -> R.drawable.ctx_develop
+        "compare" -> R.drawable.ctx_compare
+        "spot" -> R.drawable.ctx_spot
+        "pick" -> R.drawable.ctx_pick
+        "reject" -> R.drawable.ctx_reject
+        "unflag" -> R.drawable.ctx_unflag
+        "star" -> R.drawable.ctx_star
+        "auto" -> R.drawable.ctx_auto
+        "copy_settings" -> R.drawable.ctx_copy_settings
+        "paste_settings" -> R.drawable.ctx_paste_settings
+        "before_after" -> R.drawable.ctx_before_after
+        "fullscreen" -> R.drawable.ctx_fullscreen
         else -> R.drawable.ctx_unknown
     }
 }
