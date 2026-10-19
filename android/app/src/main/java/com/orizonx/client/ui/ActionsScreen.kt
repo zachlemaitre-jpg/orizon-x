@@ -460,8 +460,12 @@ private fun KeyboardTopRow(state: ActionsState, c: Controls) {
         if (wide) {
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (keep.clock) {
-                    BoxWithConstraints(Modifier.weight(0.8f), contentAlignment = Alignment.Center) {
-                        ClockBlock(state.clock, state.battery, min(KeyboardClockSp, maxWidth.value / 4.1f), 16f)
+                    // Pas de BoxWithConstraints ici : la rangée mesure ses enfants en taille intrinsèque, ce qu'un
+                    // SubcomposeLayout refuse (plantage). La largeur de l'horloge se déduit de celle de la rangée.
+                    val weights = 0.8f + (if (keep.sound) 1f else 0f) + (if (brightness != null) 1f else 0f)
+                    val clockWidth = width.value * 0.8f / weights
+                    Box(Modifier.weight(0.8f), contentAlignment = Alignment.Center) {
+                        ClockBlock(state.clock, state.battery, min(KeyboardClockSp, clockWidth / 4.1f), 16f)
                     }
                 }
                 cards()
