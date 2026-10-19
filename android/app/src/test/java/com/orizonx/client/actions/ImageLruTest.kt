@@ -79,6 +79,27 @@ class ImageLruTest {
     }
 
     @Test
+    fun pinnedIdsAreNeverEvicted() {
+        // The icon of the app in front stays while many covers arrive (Spotify in front for 16+ songs).
+        val lru = ImageLru<String>(3)
+        lru.put("icon", "I")
+        for (id in listOf("c1", "c2", "c3", "c4")) lru.put(id, id, pinned = setOf("icon", id))
+        assertEquals(listOf("icon", "c3", "c4"), lru.keys())
+        assertEquals("I", lru["icon"])
+    }
+
+    @Test
+    fun goesOverCapacityOnlyWhenEverythingIsPinned() {
+        val lru = ImageLru<String>(2)
+        lru.put("a", "A")
+        lru.put("b", "B")
+        lru.put("c", "C", pinned = setOf("a", "b", "c"))
+        assertEquals(3, lru.size)
+        lru.put("d", "D")
+        assertEquals(listOf("c", "d"), lru.keys())
+    }
+
+    @Test
     fun clearEmptiesIt() {
         val lru = ImageLru<String>(2)
         lru.put("a", "A")

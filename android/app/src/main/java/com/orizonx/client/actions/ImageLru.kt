@@ -2,7 +2,8 @@ package com.orizonx.client.actions
 
 /**
  * Least-recently-used cache of decoded images keyed by the sha1 id the PC announces (cover art and app icons share it).
- * Both [put] and [get] mark an entry as most recently used; going over [capacity] drops the least recently used one.
+ * Both [put] and [get] mark an entry as most recently used; going over [capacity] drops the least recently used one
+ * that is not pinned (the images on screen), so the cache may briefly exceed [capacity] when everything is pinned.
  * Not thread-safe: the owner serialises access.
  */
 class ImageLru<V : Any>(val capacity: Int = DEFAULT_CAPACITY) {
@@ -14,12 +15,11 @@ class ImageLru<V : Any>(val capacity: Int = DEFAULT_CAPACITY) {
 
     val size: Int get() = map.size
 
-    fun put(id: String, value: V) {
+    fun put(id: String, value: V, pinned: Set<String> = emptySet()) {
         map[id] = value
         while (map.size > capacity) {
-            val eldest = map.entries.iterator()
-            eldest.next()
-            eldest.remove()
+            val victim = map.keys.firstOrNull { it != id && it !in pinned } ?: break
+            map.remove(victim)
         }
     }
 

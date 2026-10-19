@@ -124,12 +124,21 @@ class UiModel(val frame: FrameController) : Session.Listener {
                 val bitmap = runCatching { ArtworkDecoder.decode(bytes) }.getOrNull() ?: return@execute
                 synchronized(imageCache) {
                     if (epoch == artworkEpoch) {
-                        imageCache.put(id, bitmap)
+                        imageCache.put(id, bitmap, pinned = imagesOnScreen())
                         images = imageCache.snapshot()
                     }
                 }
             }
         }
+    }
+
+    /** Ids of the cover and the bar icon the current Actions state shows: never evicted from [imageCache]. */
+    private fun imagesOnScreen(): Set<String> {
+        val state = actionsState ?: return emptySet()
+        return setOfNotNull(
+            state.optJSONObject("now_playing")?.optString("artwork")?.takeIf { it.isNotBlank() },
+            state.optJSONObject("context")?.optString("icon")?.takeIf { it.isNotBlank() },
+        )
     }
 
     fun showWaiting(reason: Msg?) {
