@@ -86,6 +86,14 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
   - Les touches sont envoyées par leur position, comme un vrai clavier : accents, AltGr et raccourcis marchent.
   - Maj, Ctrl, Alt et AltGr : un tap les garde pour la touche suivante, un double tap les verrouille. Win s'utilise comme sur un vrai clavier (un tap ouvre Démarrer ; Win + lettre à deux doigts).
   - Une touche tenue se répète ; tout est relâché à la fermeture du clavier ou au débranchement.
+- **Trackpad** : un grand pavé tactile qui pilote la souris, avec les mêmes gestes qu'un pavé tactile Windows.
+  - Un doigt déplace, un tap clique, un tap à deux doigts fait un clic droit, un double tap tenu fait glisser.
+  - Deux doigts font défiler ou zoomer (pincer). Trois doigts vers le haut ou le bas ouvrent l'affichage des tâches ou le bureau ; vers la gauche ou la droite, ils changent d'app.
+  - Deux boutons sous le pavé font le clic gauche et le clic droit. La vitesse se règle avec −/+.
+- **Manette** : la tablette devient une manette Xbox 360 que Windows et les jeux reconnaissent (pilote ViGEmBus, installé par la case « Manette Xbox virtuelle » de l'installateur).
+  - Deux sticks, la croix, A/B/X/Y, LB/RB/LT/RT, View/Xbox/Menu ; un double tap sur un stick fait L3 ou R3.
+  - « ✕ Fermer la manette » en haut, ou le geste Retour d'Android, la referme.
+  - Vérifier dans Windows : Win+R, `joy.cpl`.
 
 ### Mode Tableau (Frame)
 
