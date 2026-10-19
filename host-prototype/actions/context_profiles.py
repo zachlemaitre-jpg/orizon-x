@@ -42,6 +42,8 @@ ICON_NAMES = frozenset({
     "precompose", "solid", "keyframes", "go_start", "go_end", "keyframe_prev", "keyframe_next", "render",
     "rect_frame", "place", "preview", "grid", "loupe", "develop", "compare", "spot", "pick", "reject", "unflag",
     "star", "auto", "copy_settings", "paste_settings", "before_after", "fullscreen",
+    # browser tabs page (spec 2026-10-19 browser-tabs)
+    "tab",
 })
 
 LANGS = ("en", "fr")

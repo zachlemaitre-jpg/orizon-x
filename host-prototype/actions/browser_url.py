@@ -54,7 +54,8 @@ def host_matches(host: Optional[str], domain: str) -> bool:
 
 
 class UiaLayer:
-    """The real UI Automation calls: the value of the first Edit control of a window (a browser's address bar)."""
+    """The real UI Automation calls: the value of the first Edit control of a window (a browser's address bar), and the
+    tab items of a browser window (actions.browser_tabs)."""
 
     def __init__(self) -> None:
         self._uia: Any = None
@@ -70,6 +71,31 @@ class UiaLayer:
         self._client = client
         self._uia = comtypes.client.CreateObject(client.CUIAutomation, interface=client.IUIAutomation)
         self._thread = threading.get_ident()
+
+    def list_tabs(self, hwnd: int) -> list:
+        """The TabItem elements of the window, in tab-strip order: [(accessible name, selected, element)]. Read-only."""
+        self._ensure()
+        client = self._client
+        element = self._uia.ElementFromHandle(hwnd)
+        condition = self._uia.CreatePropertyCondition(client.UIA_ControlTypePropertyId, client.UIA_TabItemControlTypeId)
+        found = element.FindAll(client.TreeScope_Descendants, condition)
+        tabs = []
+        for i in range(found.Length):
+            item = found.GetElement(i)
+            try:
+                selected = bool(item.GetCurrentPattern(client.UIA_SelectionItemPatternId).QueryInterface(
+                    client.IUIAutomationSelectionItemPattern).CurrentIsSelected)
+            except Exception:  # noqa: BLE001 - an item without the pattern is just not the selected one
+                selected = False
+            tabs.append((item.CurrentName, selected, item))
+        return tabs
+
+    def select_tab(self, item: Any) -> None:
+        """SelectionItemPattern.Select() on a TabItem element given by list_tabs: switches to that tab."""
+        self._ensure()
+        client = self._client
+        item.GetCurrentPattern(client.UIA_SelectionItemPatternId).QueryInterface(
+            client.IUIAutomationSelectionItemPattern).Select()
 
     def address_bar_value(self, hwnd: int) -> Optional[str]:
         self._ensure()
