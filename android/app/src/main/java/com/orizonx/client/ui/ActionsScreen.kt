@@ -70,6 +70,7 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -127,6 +128,7 @@ import com.orizonx.client.actions.ContextPage
 import com.orizonx.client.actions.ContextPageMemory
 import com.orizonx.client.actions.ContextScroll
 import com.orizonx.client.actions.NowPlaying
+import com.orizonx.client.actions.NowPlayingLayout
 import com.orizonx.client.actions.UsbDrive
 import com.orizonx.client.actions.UsbKind
 import com.orizonx.client.actions.VolumeIcon
@@ -1075,24 +1077,38 @@ private fun VolumeSlider(audio: AudioState, c: Controls, modifier: Modifier) {
     )
 }
 
-/** Cover on the left; title, artist · album, app and the three keys under them on the right (centred when [stretch]). */
+/**
+ * The now-playing block. The cover grows with the block ([NowPlayingLayout]): beside the text it is as tall as the block,
+ * but the text column keeps at least ~180 dp; in a block much taller than wide it sits above the text, as wide as the block.
+ * The bitmap is only scaled (high quality) to the drawn size; the title, artist, app and the three keys follow.
+ * With [stretch] the content is centred in the block.
+ */
 @Composable
 private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
     val cover = now.artworkId?.let { c.images[it] }
     GlassCard(modifier) {
-        if (stretch) Spacer(Modifier.weight(1f))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(112.dp).clip(CoverShape).background(Color.White.copy(alpha = 0.10f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (cover != null) {
-                    Image(cover, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                } else {
-                    Picto(R.drawable.ic_action_music_note, 52.dp, alpha = 0.6f)
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f, fill = stretch)) {
+            val plan = NowPlayingLayout.plan(maxWidth.value, if (maxHeight.value.isFinite()) maxHeight.value else NowPlayingLayout.MIN_COVER)
+            val side = plan.coverSide.dp
+            val art: @Composable () -> Unit = {
+                Box(
+                    Modifier.size(side).clip(CoverShape).background(Color.White.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (cover != null) {
+                        Image(
+                            cover,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                            filterQuality = FilterQuality.High,
+                        )
+                    } else {
+                        Picto(R.drawable.ic_action_music_note, (plan.coverSide * 0.46f).dp, alpha = 0.6f)
+                    }
                 }
             }
-            Column(Modifier.weight(1f)) {
+            val texts: @Composable () -> Unit = {
                 OneLine(now.title.ifBlank { tr(S.NOW_PLAYING) }, 18.sp, FontWeight.Bold, 1f)
                 val details = listOf(now.artist, now.album).filter { it.isNotBlank() }.joinToString(" · ")
                 if (details.isNotEmpty()) OneLine(details, 14.sp, FontWeight.Normal, 0.8f)
@@ -1108,8 +1124,23 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                     RoundIconKey(R.drawable.ox_next_right) { c.tap(); c.send(ActionMessages.mediaNext()) }
                 }
             }
+            if (plan.vertical) {
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    art()
+                    Spacer(Modifier.height(10.dp))
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { texts() }
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(NowPlayingLayout.GAP.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    art()
+                    Column(Modifier.weight(1f)) { texts() }
+                }
+            }
         }
-        if (stretch) Spacer(Modifier.weight(1f))
     }
 }
 
