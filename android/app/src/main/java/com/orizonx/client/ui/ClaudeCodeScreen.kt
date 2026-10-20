@@ -63,7 +63,6 @@ import com.orizonx.client.claude.ClaudeInfo
 import com.orizonx.client.claude.ClaudeLimit
 import com.orizonx.client.claude.ClaudeSelection
 import com.orizonx.client.claude.ClaudeSession
-import com.orizonx.client.claude.ClaudeTask
 import com.orizonx.client.i18n.LocalLang
 import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
@@ -268,7 +267,17 @@ private fun RightPanel(
                     }
                 }
                 ChangesLine(appForSession?.changes ?: session.changes)
-                ResultsBlock(appForSession?.results?.takeIf { it.isNotEmpty() } ?: session.files)
+                val files = appForSession?.results?.takeIf { it.isNotEmpty() } ?: session.files
+                if (wide) {
+                    // Results on the left, background tasks on the right, same height: no scrolling on a tablet.
+                    Row(Modifier.fillMaxWidth().height(LowerBlocksHeight), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ResultsBlock(files, Modifier.weight(1f).fillMaxHeight())
+                        TasksBlock(appForSession, Modifier.weight(1f).fillMaxHeight(), showContext)
+                    }
+                } else {
+                    ResultsBlock(files, Modifier.fillMaxWidth().height(LowerBlocksHeight))
+                    TasksBlock(appForSession, Modifier.fillMaxWidth().height(LowerBlocksHeight), showContext)
+                }
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { CloseButton(tap, onClose) }
                 LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.fillMaxWidth(), showUsage)
@@ -280,6 +289,7 @@ private fun RightPanel(
 }
 
 private val LimitBlockHeight = 140.dp
+private val LowerBlocksHeight = 170.dp
 
 @Composable
 private fun Header(session: ClaudeSession, tap: () -> Unit, send: (JSONObject) -> Unit, onClose: () -> Unit, back: (() -> Unit)?) {
@@ -351,8 +361,6 @@ private fun ContextBlock(session: ClaudeSession, app: ClaudeApp?, modifier: Modi
             )
             BasicText(tr(S.CLAUDE_CONTEXT_NOTE), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
         }
-        // Only for the conversation open in the app (its panel is what the PC read).
-        if (app != null) TasksSection(app.tasks)
         }
     }
 }
@@ -392,13 +400,13 @@ private fun ChangesLine(changes: ClaudeChanges?) {
 }
 
 @Composable
-private fun ResultsBlock(files: List<String>) {
-    Panel(Modifier.fillMaxWidth()) {
+private fun ResultsBlock(files: List<String>, modifier: Modifier) {
+    Panel(modifier) {
         Label(tr(S.CLAUDE_RESULTS))
         if (files.isEmpty()) {
             BasicText(tr(S.CLAUDE_NONE), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 14.sp))
         } else {
-            Column(Modifier.fillMaxWidth().heightIn(max = 170.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
                 for (file in files) {
                     BasicText(
                         file,
@@ -406,6 +414,50 @@ private fun ResultsBlock(files: List<String>) {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The background tasks of the conversation open in the app: a dot (green and pulsing while running, grey once completed),
+ * the name and the elapsed time, then how many are completed. [app] is null when the chosen session is not the open one.
+ * Tapping it brings the app forward with its right rail.
+ */
+@Composable
+private fun TasksBlock(app: ClaudeApp?, modifier: Modifier, onClick: () -> Unit) {
+    Panel(modifier, onClick = onClick) {
+        Label(tr(S.CLAUDE_TASKS))
+        when {
+            app == null -> BasicText(tr(S.CLAUDE_TASKS_UNAVAILABLE), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
+            app.tasks.isEmpty() && app.tasksDone == 0 ->
+                BasicText(tr(S.CLAUDE_NO_TASKS), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
+            else -> {
+                Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (task in app.tasks) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            StatusDot(task.running)
+                            Spacer(Modifier.width(10.dp))
+                            BasicText(
+                                task.name,
+                                style = TextStyle(color = Color.White.copy(alpha = if (task.running) 0.95f else 0.7f), fontSize = 14.sp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (task.elapsed.isNotEmpty()) {
+                                Spacer(Modifier.width(10.dp))
+                                BasicText(task.elapsed, style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp), maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                if (app.tasksDone > 0) {
+                    BasicText(
+                        tr(S.CLAUDE_TASKS_DONE, "n" to app.tasksDone),
+                        style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp),
                     )
                 }
             }
@@ -504,31 +556,5 @@ private fun Chip(text: String) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         BasicText(text, style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp), maxLines = 1)
-    }
-}
-
-/** "Background tasks" inside the context block: one line per task with its status, or a note when there are none. */
-@Composable
-private fun TasksSection(tasks: List<ClaudeTask>) {
-    Spacer(Modifier.height(4.dp))
-    Label(tr(S.CLAUDE_TASKS))
-    if (tasks.isEmpty()) {
-        BasicText(tr(S.CLAUDE_NO_TASKS), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
-    } else {
-        for (task in tasks) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                BasicText(
-                    task.name,
-                    style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (task.status.isNotEmpty()) {
-                    Spacer(Modifier.width(10.dp))
-                    BasicText(task.status, style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp), maxLines = 1)
-                }
-            }
-        }
     }
 }

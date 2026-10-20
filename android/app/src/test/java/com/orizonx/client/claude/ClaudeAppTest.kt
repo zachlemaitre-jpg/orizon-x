@@ -223,4 +223,33 @@ class ClaudeAppTest {
         val tasks = (1..50).joinToString(",") { """{"name":"t$it"}""" }
         assertEquals(30, parse(section("""{"tasks":[$tasks]}""")).app!!.tasks.size)
     }
+
+    @Test
+    fun taskElapsedAndStatusAreParsed() {
+        val app = parse(
+            section(
+                """{"tasks":[{"name":"npm run dev","status":"running","elapsed":"2 min"},{"name":"tests","status":"completed","elapsed":"14 s"},
+                    {"name":"bare","status":"Running"},{"name":"odd","status":5,"elapsed":7}],"tasks_done":3}""",
+            ),
+        ).app!!
+        assertEquals(listOf("npm run dev", "tests", "bare", "odd"), app.tasks.map { it.name })
+        assertEquals(listOf("2 min", "14 s", "", "7"), app.tasks.map { it.elapsed })
+        assertEquals(listOf(true, false, true, false), app.tasks.map { it.running })
+        assertEquals(3, app.tasksDone)
+    }
+
+    @Test
+    fun tasksDoneIsZeroWhenMissingNegativeOrNotANumber() {
+        assertEquals(0, parse(section("{}")).app!!.tasksDone)
+        assertEquals(0, parse(section("""{"tasks_done":-2}""")).app!!.tasksDone)
+        assertEquals(0, parse(section("""{"tasks_done":"3"}""")).app!!.tasksDone)
+        assertEquals(0, parse(section("""{"tasks_done":null}""")).app!!.tasksDone)
+        assertEquals(12, parse(section("""{"tasks_done":12}""")).app!!.tasksDone)
+    }
+
+    @Test
+    fun aTaskWithoutAStatusIsNotRunning() {
+        assertTrue(!ClaudeTask("x", "").running)
+        assertTrue(ClaudeTask("x", "RUNNING").running)
+    }
 }

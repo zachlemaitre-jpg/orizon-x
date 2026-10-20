@@ -29,8 +29,13 @@ data class ClaudeContext(
     val deferred: List<ClaudeContextItem>,
 )
 
-/** A background task of the open conversation: its [name] and the app's own [status] text ("running", "done"...). */
-data class ClaudeTask(val name: String, val status: String)
+/**
+ * A background task of the open conversation: its [name], its [status] ("running" or "completed") and the app's own
+ * [elapsed] text ("2 min", "14 s"), empty when unknown.
+ */
+data class ClaudeTask(val name: String, val status: String, val elapsed: String = "") {
+    val running: Boolean get() = status.equals("running", ignoreCase = true)
+}
 
 /** A usage limit: [percent] used and the app's own text for the reset ("1 h 12 min", "sam. 11:00"). */
 data class ClaudeLimit(val percent: Int, val reset: String)
@@ -51,6 +56,8 @@ data class ClaudeApp(
     val changes: ClaudeChanges?,
     val usage: ClaudeUsage?,
     val tasks: List<ClaudeTask> = emptyList(),
+    /** How many tasks the app lists as completed (its own count, which can exceed the rows shown); 0 when unknown. */
+    val tasksDone: Int = 0,
 ) {
     /** True when the app has [session] open: same title, ignoring case and surrounding spaces. */
     fun isOpen(session: ClaudeSession): Boolean =
@@ -73,6 +80,7 @@ data class ClaudeApp(
                 changes = ClaudeChanges.parse(obj.optJSONObject("changes")),
                 usage = usage(obj.optJSONObject("usage")),
                 tasks = tasks(obj.optJSONArray("tasks")),
+                tasksDone = (obj.opt("tasks_done") as? Number)?.toInt()?.coerceAtLeast(0) ?: 0,
             )
         }
 
@@ -100,7 +108,7 @@ data class ClaudeApp(
             return (0 until array.length()).mapNotNull { i ->
                 val task = array.optJSONObject(i) ?: return@mapNotNull null
                 val name = text(task.opt("name")).ifEmpty { return@mapNotNull null }
-                ClaudeTask(name, text(task.opt("status")))
+                ClaudeTask(name, text(task.opt("status")), text(task.opt("elapsed")))
             }.take(MAX_TASKS)
         }
 
