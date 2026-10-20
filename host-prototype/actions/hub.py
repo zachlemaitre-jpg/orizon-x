@@ -12,7 +12,7 @@ One thread owns everything:
   as it lasts.
 
 State shape: ``{"v": 1, "clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-"usb": [...], "now_playing", "context", "keyboard", "trackpad", "gamepad", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
+"usb": [...], "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
 ``airplane`` come from ``merge_radio_state(radios, wifi_info, bt_info)`` (see actions.radios); ``usb`` is the list
 of drives. A section whose provider is missing or raising is ``{"available": False}`` (``[]`` for usb) until the
 provider answers again; the failure is logged once per streak.
@@ -43,6 +43,10 @@ in the slow group. The ``trackpad`` section (actions.trackpad, the device's trac
 the ``gamepad`` section (actions.gamepad, the virtual Xbox controller) is ``{"available": True}`` or
 ``{"available": False, "reason": ...}``, read in the slow group.
 
+The ``claude`` section (actions.claude_code, the Claude Code sessions of the PC, read-only) is read in the slow group: it is
+``{"available": False}`` or the sessions and connectors. ``claude.focus`` is a normal action (hub thread, a poll
+afterwards, a ``claude_not_running`` notice when the Claude app is not running).
+
 Input actions (``keyboard.*``: about 30 a second while a key repeats, ``trackpad.*``: up to 60 moves a second,
 ``gamepad.*``: up to 125 reports a second) run on their OWN thread (``actions-input``), started and stopped with the hub:
 the poll of the slow group can block the hub thread for a second or more (brightness, Bluetooth, Wi-Fi, media), and the
@@ -60,7 +64,7 @@ point is dropped (the providers' ``stop()`` releases everything that is held). T
 device leaves, the connection drops, the role changes, the engine stops).
 
 Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
-now_playing, context, keyboard, trackpad, gamepad.
+now_playing, context, keyboard, trackpad, gamepad, claude.
 """
 from __future__ import annotations
 
@@ -92,12 +96,13 @@ _ROUTES = (
     ("keyboard.", "keyboard"),
     ("trackpad.", "trackpad"),
     ("gamepad.", "gamepad"),
+    ("claude.", "claude"),
 )
 _QUIET = ("keyboard.", "trackpad.", "gamepad.")  # input actions: own thread, no re-poll (see the module docstring)
 _MERGE_LIMIT = 2000.0  # the provider clamp of a move / scroll: a merged delta never goes beyond it
 
 _FAST = ("audio", "context")
-_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard", "trackpad", "gamepad")
+_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard", "trackpad", "gamepad", "claude")
 _UNAVAILABLE = {"available": False}
 
 _COINIT_MULTITHREADED = 0
@@ -422,6 +427,7 @@ class ActionsHub:
         state["keyboard"] = self._section("keyboard")
         state["trackpad"] = self._section("trackpad")
         state["gamepad"] = self._section("gamepad")
+        state["claude"] = self._section("claude")
         return state
 
     def _log_artwork_once(self, artwork_id: str, line: str) -> None:
@@ -585,6 +591,10 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
         from actions.trackpad import TrackpadProvider
         return TrackpadProvider(log=log)
 
+    def claude() -> Any:
+        from actions.claude_code import ClaudeCodeProvider  # reads nothing until the first snapshot
+        return ClaudeCodeProvider(log=log)
+
     def gamepad() -> Any:
         from actions.gamepad import GamepadProvider  # the DLL is loaded on the first snapshot, not here
         return GamepadProvider(log=log)
@@ -600,6 +610,6 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),
                           ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing),
-                          ("context", context), ("keyboard", keyboard), ("trackpad", trackpad), ("gamepad", gamepad)):
+                          ("context", context), ("keyboard", keyboard), ("trackpad", trackpad), ("gamepad", gamepad), ("claude", claude)):
         add(name, factory)
     return providers

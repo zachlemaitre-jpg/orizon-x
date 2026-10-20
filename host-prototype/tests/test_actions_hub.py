@@ -85,6 +85,7 @@ def make_providers():
         "keyboard": FakeProvider({"available": True, "layout": "azerty"}),
         "trackpad": FakeProvider({"available": True}),
         "gamepad": FakeProvider({"available": True}),
+        "claude": FakeProvider({"available": True, "sessions": [], "connectors": []}),
     }
 
 
@@ -137,6 +138,7 @@ class StateTest(unittest.TestCase):
             "keyboard": {"available": True, "layout": "azerty"},
             "trackpad": {"available": True},
             "gamepad": {"available": True},
+            "claude": {"available": True, "sessions": [], "connectors": []},
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -1537,6 +1539,74 @@ class InputThreadTest(unittest.TestCase):
         self.assertFalse(self.hub._input_thread.is_alive())
 
 
+class ClaudeHubTest(unittest.TestCase):
+    SESSION = {"id": "abc", "title": "T", "project": "p", "branch": "main", "updated": 1, "status": "idle",
+               "model": "", "effort": "", "mode": "", "tokens": None, "last_prompt": "", "last_result": "",
+               "files": [], "entry": "cli"}
+
+    def harness(self, snap=None, result=None):
+        providers = make_providers()
+        providers["claude"] = FakeProvider(snap or {"available": True, "sessions": [self.SESSION], "connectors": []},
+                                           result=result)
+        return Harness(providers)
+
+    def test_claude_section_is_the_providers_snapshot(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.sent[0]["claude"], {"available": True, "sessions": [self.SESSION], "connectors": []})
+
+    def test_unavailable_when_there_is_no_claude_folder_or_no_provider(self):
+        h = self.harness({"available": False})
+        h.tick()
+        self.assertEqual(h.sent[0]["claude"], {"available": False})
+        providers = make_providers()
+        del providers["claude"]
+        h2 = Harness(providers)
+        h2.tick()
+        self.assertEqual(h2.sent[0]["claude"], {"available": False})
+
+    def test_claude_is_read_in_the_slow_poll_and_broadcast(self):
+        h = self.harness()
+        h.tick()
+        h.providers["claude"].snap = {"available": True, "sessions": [dict(self.SESSION, status="working")],
+                                      "connectors": []}
+        h.tick(0.3)  # fast poll only
+        self.assertEqual(h.sent[-1]["claude"]["sessions"][0]["status"], "idle")
+        h.tick(1.0)
+        self.assertEqual(h.sent[-1]["claude"]["sessions"][0]["status"], "working")
+
+    def test_focus_goes_through_the_normal_path_and_a_missing_app_gives_the_notice(self):
+        h = self.harness(result="claude_not_running")
+        h.tick()
+        before = h.providers["usb"].snapshots
+        h.hub.handle({"id": "claude.focus"})
+        h.hub._tick(h.clock.t)
+        self.assertEqual(h.providers["claude"].handled, [{"id": "claude.focus"}])
+        self.assertEqual(h.sent[-1]["notice"], {"code": "claude_not_running"})
+        self.assertEqual(h.providers["usb"].snapshots, before + 1)  # a normal action: the hub polls again
+
+    def test_focus_is_not_an_input_action(self):
+        self.assertFalse("claude.focus".startswith(hub_mod._QUIET))
+
+    def test_focus_runs_on_the_hub_thread_not_the_input_thread(self):
+        providers = make_providers()
+        providers["claude"] = FakeProvider({"available": True, "sessions": [], "connectors": []})
+        sent = []
+        hub = ActionsHub(providers, sent.append, poll_fast_s=0.01, poll_slow_s=0.02, log=lambda _l: None)
+        hub.start()
+        try:
+            hub.handle({"id": "claude.focus"})
+            self.assertTrue(wait_until(lambda: providers["claude"].handled))
+            self.assertEqual(providers["claude"].handle_threads[0], hub._thread.ident)
+        finally:
+            hub.stop()
+
+    def test_default_providers_include_claude_without_reading_anything(self):
+        providers = default_providers(lambda _l: None)
+        self.assertIn("claude", providers)
+        self.assertTrue(callable(providers["claude"].snapshot) and callable(providers["claude"].handle))
+
+
 class ContextBarThroughTheHubTest(unittest.TestCase):
     """The real ContextProvider behind the hub, with a fake foreground and a fake key sender (nothing is typed)."""
 
@@ -1643,7 +1713,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 

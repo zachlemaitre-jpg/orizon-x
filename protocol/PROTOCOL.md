@@ -158,6 +158,25 @@ L'appareil devient une manette Xbox 360 : Windows et les jeux voient une vraie m
 - `{"id":"gamepad.close"}` : rapport neutre (tout à 0), puis la manette est débranchée. Le PC le fait aussi à la fin de la session Actions.
 - Ces actions ne produisent jamais de `notice` et, comme `keyboard.*` et `trackpad.*`, ne provoquent pas de nouveau relevé complet des fournisseurs. Exclus : les vibrations renvoyées par le jeu, les gâchettes progressives, plusieurs manettes, la manette DualShock 4.
 
+### Sessions Claude Code (`claude`, `claude.focus`)
+
+En lecture seule, le PC décrit les sessions Claude Code récentes (fichiers `~/.claude/projects/<projet>/<id>.jsonl`) et leurs connecteurs MCP. L'appareil n'envoie rien à Claude.
+
+```json
+"claude":{"available":true,
+  "sessions":[{"id":"…","title":"…","project":"…","branch":"main","updated":1792404007,"status":"working"|"idle",
+               "model":"…","effort":"…","mode":"…","tokens":561000,"last_prompt":"…","last_result":"…",
+               "files":["src/a.py"],"entry":"desktop"|"cli"}],
+  "connectors":[{"name":"…","type":"stdio"|"http"|"sse","scope":"global"|"<projet>"}]}
+"claude":{"available":false}
+```
+
+- `available:false` : aucun dossier `~/.claude/projects`. Sinon, jusqu'à 12 sessions, **la plus récemment modifiée en premier** (les 12 fichiers `.jsonl` de premier niveau modifiés le plus récemment, tous projets confondus ; les sous-dossiers — sous-agents, mémoire — sont ignorés). Un champ inconnu vaut `""` (`null` pour `tokens`).
+- `title` : le dernier titre personnalisé, sinon le `slug`, sinon les 8 premiers caractères de l'`id`. `project` : le dernier composant du dossier de travail. `updated` : secondes depuis l'époque (dernier horodatage de la session, sinon la date du fichier). `status` : `working` si le fichier a été modifié il y a moins de 15 s, sinon `idle`. `tokens` : `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` de la dernière réponse. `last_prompt` est coupé à 300 caractères, `last_result` (dernière réponse contenant du texte) à 1 500 ; `files` : au plus 20 fichiers suivis, relatifs au dossier de travail quand c'est possible, par ordre alphabétique. `entry` : `desktop` pour l'app Claude, `cli` sinon.
+- `connectors` : au plus 30, **uniquement le nom, le type et la portée** (`global`, ou le nom du projet) des serveurs `mcpServers` de `~/.claude.json` (globaux, et ceux des projets des sessions listées) et de `<projet>/.mcp.json`. Aucune autre clé de `.claude.json` (compte, jetons…) n'est lue vers l'état, ni commande, URL, en-tête ou variable d'environnement de serveur. Les connecteurs de claude.ai ne sont pas stockés sur le PC et n'apparaissent pas.
+- La section reste sous 40 Kio (JSON compact UTF-8) : l'`ACTIONS_STATE` entier est limité à 64 Kio. Au besoin, `last_result` est raccourci session après session, de la plus ancienne à la plus récente, puis `last_prompt`, puis `files`.
+- Action `{"id":"claude.focus"}` : met au premier plan la fenêtre principale de l'app Claude (fenêtre visible, de premier niveau, sans propriétaire, d'un processus `claude.exe` ; restaurée si réduite). Si l'app ne tourne pas, une `notice` `{"code":"claude_not_running"}` ; si Windows refuse le focus même après le contournement habituel (Alt), `action_failed`. Action normale (pas le fil d'entrée du clavier).
+
 ### Compatibilité
 
 Les ajouts sont rétrocompatibles et la version reste 1 : aucun message existant ne change. Un ancien PC ignore les types 0x86 et 0x87 (type inconnu) et reste en rôle `screen` côté tablette. Une ancienne tablette n'envoie pas `DEVICE_INFO` et reçoit l'écran comme avant.
