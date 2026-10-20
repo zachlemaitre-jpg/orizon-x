@@ -90,6 +90,79 @@ class UiaLayer:
             tabs.append((item.CurrentName, selected, item))
         return tabs
 
+    def _role(self, element: Any) -> str:
+        client = self._client
+        try:
+            kind = element.CurrentControlType
+        except Exception:  # noqa: BLE001
+            return "Other"
+        return {client.UIA_GroupControlTypeId: "Group", client.UIA_TextControlTypeId: "Text",
+                client.UIA_ButtonControlTypeId: "Button", client.UIA_ListItemControlTypeId: "ListItem",
+                client.UIA_ToolBarControlTypeId: "ToolBar", client.UIA_TreeItemControlTypeId: "TreeItem",
+                client.UIA_HyperlinkControlTypeId: "Hyperlink"}.get(kind, "Other")
+
+    def walk_nodes(self, hwnd: int, cap: int = 20000, budget_s: float = 2.5) -> list:
+        """The elements of the window in document order (RawView walker, depth first, at most ``cap`` and ``budget_s``
+        seconds): [(depth, role, accessible name)]. Read-only."""
+        import time
+        self._ensure()
+        walker = self._uia.RawViewWalker
+        deadline = time.monotonic() + budget_s
+        stack = [(self._uia.ElementFromHandle(hwnd), 0)]
+        out: list = []
+        while stack and len(out) < cap and time.monotonic() < deadline:
+            element, depth = stack.pop()
+            try:
+                name = element.CurrentName or ""
+            except Exception:  # noqa: BLE001
+                name = ""
+            out.append((depth, self._role(element), name))
+            try:
+                child, kids = walker.GetFirstChildElement(element), []
+                while child:
+                    kids.append(child)
+                    child = walker.GetNextSiblingElement(child)
+                stack.extend((k, depth + 1) for k in reversed(kids))
+            except Exception:  # noqa: BLE001 - a node that vanished: skip its subtree
+                pass
+        return out
+
+    def invoke_named(self, hwnd: int, names: tuple, cap: int = 20000, budget_s: float = 2.5) -> bool:
+        """InvokePattern.Invoke() on the first button-like element of the window whose accessible name is one of
+        ``names`` (case-insensitive) and that supports Invoke. False when there is none."""
+        import time
+        self._ensure()
+        client = self._client
+        wanted = {n.strip().lower() for n in names}
+        walker = self._uia.RawViewWalker
+        deadline = time.monotonic() + budget_s
+        stack = [self._uia.ElementFromHandle(hwnd)]
+        seen = 0
+        while stack and seen < cap and time.monotonic() < deadline:
+            element = stack.pop()
+            seen += 1
+            try:
+                name = (element.CurrentName or "").strip().lower()
+            except Exception:  # noqa: BLE001
+                name = ""
+            if name in wanted and self._role(element) in ("Button", "ListItem", "TreeItem", "Hyperlink"):
+                try:
+                    if element.GetCurrentPropertyValue(client.UIA_IsInvokePatternAvailablePropertyId):
+                        element.GetCurrentPattern(client.UIA_InvokePatternId).QueryInterface(
+                            client.IUIAutomationInvokePattern).Invoke()
+                        return True
+                except Exception:  # noqa: BLE001 - not invokable after all: keep looking
+                    pass
+            try:
+                child, kids = walker.GetFirstChildElement(element), []
+                while child:
+                    kids.append(child)
+                    child = walker.GetNextSiblingElement(child)
+                stack.extend(reversed(kids))
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
     def select_tab(self, item: Any) -> None:
         """SelectionItemPattern.Select() on a TabItem element given by list_tabs: switches to that tab."""
         self._ensure()

@@ -71,6 +71,8 @@ class Base(unittest.TestCase):
         self.provider = self.make()
 
     def make(self, **kw):
+        kw.setdefault("git_runner", lambda *a: None)  # never a real git process in these tests
+        kw.setdefault("git_threaded", False)
         return ClaudeCodeProvider(home=self.home, clock=self.clock, fs=self.fs, log=self.logs.append, **kw)
 
     def write(self, name, lines, project="proj-a", age=100.0, mode="w"):
@@ -137,7 +139,7 @@ class FieldsTest(Base):
         self.assertEqual(s["status"], "idle")
         self.assertEqual(s["updated"], iso("2026-10-19T10:00:07Z"))
         self.assertEqual(set(s), {"id", "title", "project", "branch", "updated", "status", "model", "effort", "mode",
-                                  "tokens", "last_prompt", "last_result", "files", "entry"})
+                                  "tokens", "last_prompt", "last_result", "files", "entry", "changes"})
 
     def test_the_last_one_wins(self):
         s = self.one([

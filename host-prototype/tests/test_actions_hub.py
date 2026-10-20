@@ -1585,6 +1585,17 @@ class ClaudeHubTest(unittest.TestCase):
         self.assertEqual(h.sent[-1]["notice"], {"code": "claude_not_running"})
         self.assertEqual(h.providers["usb"].snapshots, before + 1)  # a normal action: the hub polls again
 
+    def test_the_app_panel_actions_are_routed_to_claude_and_their_notice_is_sent(self):
+        h = self.harness(result="claude_ui_not_found")
+        h.tick()
+        for a in ({"id": "claude.watch", "open": True}, {"id": "claude.new"}, {"id": "claude.artifacts"},
+                  {"id": "claude.customize"}, {"id": "claude.more"}, {"id": "claude.open", "title": "T"}):
+            h.hub.handle(a)
+        h.hub._tick(h.clock.t)
+        self.assertEqual([a["id"] for a in h.providers["claude"].handled],
+                         ["claude.watch", "claude.new", "claude.artifacts", "claude.customize", "claude.more", "claude.open"])
+        self.assertEqual(h.sent[-1]["notice"], {"code": "claude_ui_not_found"})
+
     def test_focus_is_not_an_input_action(self):
         self.assertFalse("claude.focus".startswith(hub_mod._QUIET))
 

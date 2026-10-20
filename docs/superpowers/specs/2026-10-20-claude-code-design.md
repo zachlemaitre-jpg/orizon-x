@@ -142,8 +142,12 @@ Règles :
   {"session_title":"…","seen_at":<epoch s>,
    "context":{"percent":61,"used":"598.5k","window":"1M","items":[{"name":"Messages","tokens":"540.3k","percent":"54,0 %"},…],"deferred":[{"name","tokens"}]},
    "connected":1,"results":["…"],"changes":{"added":2140,"removed":9},
-   "usage":{"session":{"percent":42,"reset":"1 h 12 min"},"weekly":{"percent":34,"reset":"sam. 11:00"}|null}}
+   "usage":{"session":{"percent":42,"reset":"1 h 12 min"},"weekly":{"percent":34,"reset":"sam. 11:00"}|null},
+   "tasks":[{"name":"…","status":"running"|"completed","elapsed":"3min 46s"}],"tasks_done":3}
   ```
+  - `tasks` : la carte « Tâches en arrière-plan » (EN « Background tasks »), au plus 10 lignes de 120 caractères ; `running` si la ligne a son bouton « Arrêter cette tâche », sinon `completed`. `tasks_done` : son résumé « N terminé(s) ». Les deux n'existent que si la carte est présente ; `tasks` vaut `[]` quand elle ne liste rien.
+  - `session_title` vient du bouton « <titre>, renommer la session » de la barre d'outils de la session (le titre de la fenêtre Windows est simplement « Claude »).
+  - Les lignes de la liste de contexte sans pourcentage (compteurs d'outils, de fichiers, d'agents) ne sont pas des tranches de la fenêtre et sont ignorées ; les lignes « deferred » n'ont pas de pourcentage et vont dans `deferred`.
 - Chaque session locale gagne `"changes":{"added","removed"}|null`. Ce sont les statistiques git du `cwd` (`git diff --shortstat` contre la base de la branche principale `main`/`master`, puis les fichiers non suivis exclus). Elles sont mises en cache 30 s et calculées pour les 12 sessions au plus.
 - Nouvelles `ACTION` :
   - `{"id":"claude.watch","open":bool}` ;

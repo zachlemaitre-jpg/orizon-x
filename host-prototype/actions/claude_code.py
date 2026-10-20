@@ -22,6 +22,17 @@ Size: the whole section stays under ``SECTION_MAX_BYTES`` (compact UTF-8 JSON). 
 exceed 64 KiB (protocol.MAX_JSON) and the other sections need room, so the budget is lower than 64 KiB; ``last_result``
 is shortened session after session, the oldest first, then ``last_prompt``, then the file lists, until it fits.
 
+App panel (spec §7): while the device has its Claude screen open (``claude.watch {"open": true}``), at most every 3 s
+(1 s while the app's accessibility tree is still waking up), the right-hand panel of the Claude app is read with UI
+Automation (actions.claude_app_ui) into ``section["app"]``: context, connectors, results, changes, usage limits. Only
+panel labels and values are kept, never conversation text. Each session also carries ``changes``
+(``{"added", "removed"}`` or None): ``git diff --shortstat`` of its ``cwd`` against the merge-base with ``main`` /
+``master`` (tracked files only), computed by ``GitStats`` in a background thread and cached for 30 s.
+
+``claude.new`` / ``claude.artifacts`` / ``claude.customize`` / ``claude.more`` bring the app to the front, then invoke
+(``InvokePattern``, never the mouse) the sidebar button of that name; ``claude.open {"title"}`` invokes the sidebar item
+with that title. Notice ``claude_ui_not_found`` when the app or the button cannot be found.
+
 ``claude.focus``: brings the main window of the Claude app to the front (``Win32Focus``, injectable): the visible,
 unowned, titled top-level window of a ``claude.exe`` process; ``SW_RESTORE`` if minimised, ``SetForegroundWindow``, and on
 refusal an Alt key press and release (``keybd_event``, the usual workaround) and one more try. Returns the notice code
@@ -32,9 +43,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
+import re
+import subprocess
+import threading
 import time
 from datetime import datetime
 from typing import Any, Callable, Optional
+
+from actions.claude_app_ui import SIDEBAR_BUTTONS, ClaudeAppReader, ClaudeAppUi
 
 _log = logging.getLogger("orizonx.actions.claude_code")
 
@@ -50,8 +67,16 @@ CONFIG_MAX_BYTES = 32 * 1024 * 1024
 _CACHE_KEEP = 32
 
 NOT_RUNNING = "claude_not_running"
+UI_NOT_FOUND = "claude_ui_not_found"
 ACTION_FAILED = "action_failed"
 FOCUS_ID = "claude.focus"
+WATCH_ID = "claude.watch"
+OPEN_ID = "claude.open"
+APP_READ_S = 3.0
+APP_WARMUP_RETRY_S = 1.0
+GIT_CACHE_S = 30.0
+GIT_TIMEOUT_S = 5.0
+MAX_TITLE = 200
 
 _SERVER_TYPES = ("stdio", "http", "sse")
 
@@ -233,11 +258,116 @@ class _JsonCache:
         return data
 
 
+# --- git statistics ------------------------------------------------------------------------------------------------
+
+def default_git_runner(args: "list[str]", cwd: str, timeout: float) -> "Optional[tuple[int, str]]":
+    """(exit code, stdout) of a git command run in ``cwd`` without a console window, never waiting for input; None if git
+    cannot run (not installed, timeout)."""
+    try:
+        done = subprocess.run(args, cwd=cwd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                              env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.returncode, done.stdout.decode("utf-8", "replace")
+
+
+_INSERTIONS = re.compile(r"(\d+) insertion")
+_DELETIONS = re.compile(r"(\d+) deletion")
+
+
+class GitStats:
+    """``{"added", "removed"}`` per working folder: ``git diff --shortstat`` against the merge-base with main / master
+    (the working tree against ``HEAD`` when there is no such branch); untracked files are not counted. ``get()`` answers
+    from the cache at once (None while unknown or when the folder is not a repository) and refreshes a value older than
+    ``GIT_CACHE_S`` in a background thread, so the hub is never held by a git process."""
+
+    def __init__(self, runner: Optional[Callable[..., Any]] = None, clock: Callable[[], float] = time.monotonic,
+                 isdir: Callable[[str], bool] = os.path.isdir, threaded: bool = True,
+                 log: Optional[Callable[[str], None]] = None) -> None:
+        self._run = runner or default_git_runner
+        self._clock = clock
+        self._isdir = isdir
+        self._threaded = threaded
+        self._log = log or _log.info
+        self._cache: "dict[str, tuple[float, Optional[dict]]]" = {}
+        self._pending: set = set()
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._lock = threading.Lock()
+        self._worker: Optional[threading.Thread] = None
+        self._logged = False
+
+    def get(self, cwd: str) -> Optional[dict]:
+        if not cwd or "\0" in cwd:
+            return None
+        key = _norm_path(cwd)
+        with self._lock:
+            entry = self._cache.get(key)
+            stale = entry is None or self._clock() - entry[0] >= GIT_CACHE_S
+            schedule = stale and key not in self._pending
+            if schedule:
+                self._pending.add(key)
+        if schedule:
+            if self._threaded:
+                if self._worker is None or not self._worker.is_alive():
+                    self._worker = threading.Thread(target=self._loop, name="orizonx-git-stats", daemon=True)
+                    self._worker.start()
+                self._queue.put(cwd)
+            else:
+                self._refresh(cwd)
+                entry = self._cache.get(key)
+        return entry[1] if entry else None
+
+    def wait_idle(self, timeout: float = 5.0) -> bool:
+        """For tests."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._pending:
+                    return True
+            time.sleep(0.002)
+        return False
+
+    def _loop(self) -> None:
+        while True:
+            self._refresh(self._queue.get())
+
+    def _refresh(self, cwd: str) -> None:
+        key = _norm_path(cwd)
+        try:
+            value = self._compute(cwd)
+        except Exception as e:  # noqa: BLE001
+            value = None
+            if not self._logged:
+                self._logged = True
+                self._log(f"claude: git statistics failed ({type(e).__name__}: {e})")
+        with self._lock:
+            self._cache[key] = (self._clock(), value)
+            self._pending.discard(key)
+
+    def _compute(self, cwd: str) -> Optional[dict]:
+        if not self._isdir(cwd):
+            return None
+        base = None
+        for branch in ("main", "master"):
+            result = self._run(["git", "merge-base", "HEAD", branch], cwd, GIT_TIMEOUT_S)
+            if result is not None and result[0] == 0 and result[1].strip():
+                base = result[1].strip().splitlines()[0]
+                break
+        result = self._run(["git", "-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--shortstat", base or "HEAD"],
+                           cwd, GIT_TIMEOUT_S)
+        if result is None or result[0] != 0:
+            return None
+        added, removed = _INSERTIONS.search(result[1]), _DELETIONS.search(result[1])
+        return {"added": int(added.group(1)) if added else 0, "removed": int(removed.group(1)) if removed else 0}
+
+
 # --- provider ----------------------------------------------------------------------------------------------------
 
 class ClaudeCodeProvider:
     def __init__(self, root: Optional[str] = None, clock: Callable[[], float] = time.time, fs: Any = None,
-                 home: Optional[str] = None, win32: Any = None, log: Optional[Callable[[str], None]] = None) -> None:
+                 home: Optional[str] = None, win32: Any = None, log: Optional[Callable[[str], None]] = None,
+                 ui: Any = None, git_runner: Optional[Callable[..., Any]] = None, git_threaded: bool = True) -> None:
         self._home = home or os.path.expanduser("~")
         self._root = root or os.path.join(self._home, ".claude", "projects")
         self._config = os.path.join(self._home, ".claude.json")
@@ -248,6 +378,12 @@ class ClaudeCodeProvider:
         self._cache: "dict[str, _Cached]" = {}
         self._json = _JsonCache(self._fs)
         self._logged: set = set()
+        self._ui = ui if ui is not None else ClaudeAppUi()
+        self._app_reader = ClaudeAppReader(self._ui, self._log)
+        self._git = GitStats(git_runner, isdir=self._fs.isdir, threaded=git_threaded, log=self._log)
+        self._watch = False
+        self._app: Optional[dict] = None
+        self._app_next = 0.0
 
     # --- provider API ---
 
@@ -261,17 +397,39 @@ class ClaudeCodeProvider:
                 if session is not None:
                     sessions.append(session)
             connectors = self._connectors(sessions)
+            for session, cwd in sessions:
+                session["changes"] = self._git.get(cwd)
             section = {"available": True, "sessions": [s[0] for s in sessions], "connectors": connectors}
+            app = self._read_app()
+            if app is not None:
+                section["app"] = app
             return _fit(section)
         except Exception as e:  # noqa: BLE001 - the hub marks a failing provider unavailable; keep the bar alive
             self._note("snapshot", e)
             return {"available": False}
 
     def handle(self, action: dict) -> Optional[str]:
-        if action.get("id") != FOCUS_ID:
-            self._log(f"claude: unknown action {action.get('id')!r}")
-            return ACTION_FAILED
-        return self._focus()
+        action_id = action.get("id")
+        if action_id == FOCUS_ID:
+            return self._focus()
+        if action_id == WATCH_ID:
+            opened = action.get("open")
+            if type(opened) is not bool:
+                self._log(f"claude: watch ignored, not a boolean: {opened!r}")
+                return None
+            self._watch = opened
+            self._app, self._app_next = None, 0.0  # a fresh read at the next poll; nothing kept while closed
+            return None
+        if action_id in SIDEBAR_BUTTONS:
+            return self._invoke(SIDEBAR_BUTTONS[action_id])
+        if action_id == OPEN_ID:
+            title = action.get("title")
+            if not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE:
+                self._log(f"claude: open ignored, bad title: {title!r}")
+                return UI_NOT_FOUND
+            return self._invoke((title.strip(),))
+        self._log(f"claude: unknown action {action_id!r}")
+        return ACTION_FAILED
 
     # --- sessions ---
 
@@ -403,25 +561,67 @@ class ClaudeCodeProvider:
     # --- focus ---
 
     def _focus(self) -> Optional[str]:
+        return self._focus_window()[1]
+
+    def _focus_window(self) -> "tuple[int, Optional[str]]":
+        """(window, None) once the Claude window is in front; (0, notice code) otherwise."""
         try:
             if self._win32 is None:
                 self._win32 = Win32Focus()
             win32 = self._win32
             hwnd = win32.find_window()
             if not hwnd:
-                return NOT_RUNNING
+                return 0, NOT_RUNNING
             if win32.is_iconic(hwnd):
                 win32.restore(hwnd)
             if win32.set_foreground(hwnd):
-                return None
+                return hwnd, None
             win32.alt_tap()  # Windows refuses focus changes from a background process unless a key was just pressed
             if win32.set_foreground(hwnd):
-                return None
+                return hwnd, None
             self._log("claude: Windows refused to bring the Claude window to the front")
-            return ACTION_FAILED
+            return 0, ACTION_FAILED
         except Exception as e:  # noqa: BLE001
             self._note("focus", e)
-            return ACTION_FAILED
+            return 0, ACTION_FAILED
+
+    def _invoke(self, names: "tuple[str, ...]") -> Optional[str]:
+        """Bring the app to the front, then invoke its sidebar button named ``names`` (never a mouse click)."""
+        hwnd, code = self._focus_window()
+        if code is not None:
+            return code
+        try:
+            if self._ui.invoke(hwnd, names):
+                return None
+        except Exception as e:  # noqa: BLE001
+            self._note("sidebar", e)
+        self._log(f"claude: no sidebar button {names[0]!r} found in the Claude app")
+        return UI_NOT_FOUND
+
+    # --- app panel ---
+
+    def _read_app(self) -> Optional[dict]:
+        """The panel of the Claude app while the device watches (at most every 3 s); the last read otherwise."""
+        if not self._watch:
+            return None
+        now = self._clock()
+        if now < self._app_next:
+            return self._app
+        self._app_next = now + APP_READ_S
+        try:
+            if self._win32 is None:
+                self._win32 = Win32Focus()
+            hwnd = self._win32.find_window()
+            if not hwnd:
+                self._app = None
+                return None
+            self._app = self._app_reader.read(hwnd, self._win32.window_title(hwnd), now)
+            if self._app is None and self._app_reader.warming_up:
+                self._app_next = now + APP_WARMUP_RETRY_S
+        except Exception as e:  # noqa: BLE001
+            self._note("app panel", e)
+            self._app = None
+        return self._app
 
     def _note(self, what: str, error: Exception) -> None:
         kind = (what, type(error).__name__)
@@ -436,6 +636,12 @@ def _fit(section: dict) -> dict:
 
     def size() -> int:
         return len(json.dumps(section, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    app = section.get("app")
+    if app is not None:  # the tail of the app's results goes first
+        section["app"] = app = dict(app, results=list(app.get("results") or []))
+        while size() > SECTION_MAX_BYTES and app["results"]:
+            app["results"].pop()
 
     for field in ("last_result", "last_prompt", "files"):
         for session in reversed(sessions):  # the list is newest first: the oldest is shortened first
@@ -511,6 +717,9 @@ class Win32Focus:
 
     def set_foreground(self, hwnd: int) -> bool:
         return bool(self._u.SetForegroundWindow(hwnd))
+
+    def window_title(self, hwnd: int) -> str:
+        return self._api.window_title(hwnd)
 
     def alt_tap(self) -> None:
         self._u.keybd_event(self.VK_MENU, 0, 0, 0)
