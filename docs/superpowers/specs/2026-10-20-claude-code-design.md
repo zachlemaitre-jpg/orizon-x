@@ -113,3 +113,61 @@ La version reste 1.
   - la dernière réponse ;
   - les fichiers ;
   - le bouton qui met Claude au premier plan.
+
+## 7. Révision (2026-10-20, après essai réel) : nouvelle disposition et lecture du panneau de l'app
+
+L'utilisateur a validé le bloc et demandé la disposition de sa maquette. Il a aussi demandé les informations du panneau de droite de l'app Claude (Contexte détaillé, Connecteurs, Résultats, Modifications, limites d'utilisation).
+
+### 7.1 Lecture du panneau de l'app Claude (PC, `actions/claude_app_ui.py`, UI Automation, lecture seule)
+
+Un essai réel en lecture seule a montré que l'app Claude (Electron) expose son arbre d'accessibilité après une première requête. Le premier appel renvoie 24 éléments ; un second, quelques secondes plus tard, en renvoie 641 en environ 180 ms. On y lit :
+- **Contexte** : « 61 % utilisé » ; des paires nom/valeur (Messages 540.3k, System tools, MCP tools, Skills, System prompt, Custom agents, Memory files, « Depuis la dernière mise à jour », Autocompact buffer, Free space, MCP tools (deferred), System tools (deferred)) ; le total « 598.5k / 1M » quand il est présent ;
+- **Connecteurs** : « 1 connecté(s) » ;
+- **Résultats** : les noms de fichiers ;
+- **Modifications** : `+N` et `−M` ;
+- **Usage** : « Utilisation : 42 % de la limite de session et Réinitialisation dans 1 h 12 min » ; la limite hebdomadaire n'est lue que si elle apparaît (ligne « Hebdomadaire … % … Réinitialisation … »).
+
+Règles :
+- **Libellés** : en français ou en anglais selon la langue de l'app. L'analyse repose sur la structure (paires libellé/valeur dans l'ordre), avec des listes de libellés FR et EN.
+- **Fenêtre** : c'est celle de `claude.exe` décrite au §4. On ne lit que le sous-arbre du panneau de droite si on peut l'isoler, sinon toute la fenêtre. Seuls les libellés et valeurs du panneau sont gardés : aucun texte de la conversation n'est conservé ni envoyé.
+- **Session** : le titre de la fenêtre de l'app (par exemple « OrizonX App ») désigne la conversation ouverte. On la relie à une session locale par son `title`.
+- **Coût** : la lecture n'a lieu que pendant que l'écran Claude Code est ouvert sur l'appareil, ce qui est signalé par l'action `claude.watch` `{"open":true|false}`. Elle se fait au plus toutes les 3 s, dans le cycle lent ; elle prend environ 200 ms.
+- **Réveil** : si la lecture renvoie moins de 100 éléments, l'arbre est considéré comme pas encore réveillé, et on réessaie au cycle suivant.
+- **Échec** : la section `app` est absente.
+
+### 7.2 Protocole (ajouts)
+
+- La section `claude` gagne `"app"`. Elle n'existe que si le panneau a été lu.
+  ```json
+  {"session_title":"…","seen_at":<epoch s>,
+   "context":{"percent":61,"used":"598.5k","window":"1M","items":[{"name":"Messages","tokens":"540.3k","percent":"54,0 %"},…],"deferred":[{"name","tokens"}]},
+   "connected":1,"results":["…"],"changes":{"added":2140,"removed":9},
+   "usage":{"session":{"percent":42,"reset":"1 h 12 min"},"weekly":{"percent":34,"reset":"sam. 11:00"}|null}}
+  ```
+- Chaque session locale gagne `"changes":{"added","removed"}|null`. Ce sont les statistiques git du `cwd` (`git diff --shortstat` contre la base de la branche principale `main`/`master`, puis les fichiers non suivis exclus). Elles sont mises en cache 30 s et calculées pour les 12 sessions au plus.
+- Nouvelles `ACTION` :
+  - `{"id":"claude.watch","open":bool}` ;
+  - `{"id":"claude.new"}`, `{"id":"claude.artifacts"}`, `{"id":"claude.customize"}`, `{"id":"claude.more"}` : elles mettent l'app au premier plan puis invoquent le bouton de la barre latérale qui porte ce nom (FR : « Nouveau », « Artéfacts », « Personnalisation », « Plus » ; EN : « New », « Artifacts », « Customize », « More ») par `InvokePattern` ;
+  - `{"id":"claude.open","title":"…"}` : elle met l'app au premier plan puis invoque l'élément de la barre latérale portant ce titre.
+  - En cas d'échec, la notice `claude_ui_not_found` est envoyée.
+
+### 7.3 Disposition de l'appareil (maquette de l'utilisateur, sans couleurs, style verre de l'app)
+
+- **En haut, sur toute la largeur** : la barre contextuelle.
+- **Colonne de gauche** (environ 32 %), de haut en bas :
+  - heure, date et batterie (le bloc horloge existant) ;
+  - quatre boutons empilés : « + Nouveau », « Artéfacts », « Personnalisation », « Plus » ;
+  - un bloc « Conversations » : les sessions **groupées par projet**, comme la barre latérale de l'app. L'en-tête de groupe porte le nom du projet ; dessous, les titres avec leur pastille d'état. Le bloc défile.
+  - Un tap sur une conversation l'ouvre dans l'app (`claude.open`) et la sélectionne sur l'appareil.
+- **Panneau de droite** :
+  - **barre d'en-tête** : titre de la session, `projet · branche`, pastille d'état, modèle et mode, et le bouton « Mettre au premier plan » ;
+  - **Contexte détaillé** (grand bloc) :
+    - si `app` correspond à la session choisie : « 61 % utilisé · 598.5k / 1M », une barre, puis la liste nom / jetons / %, puis les entrées « deferred » en atténué ;
+    - sinon : le total de jetons local, et la mention « Détail disponible pour la conversation ouverte dans l'app » ;
+  - **Modifications** (une ligne) : `+2140 −9` en vert et rouge, depuis `app.changes` si c'est la session ouverte, sinon depuis les statistiques git locales ;
+  - **Résultats** : la liste des fichiers (`app.results`, sinon `files` en local), qui défile ;
+  - **Limite de session** : pourcentage, barre et « Réinitialisation dans … », avec « vu à HH:MM » ;
+  - **Hebdomadaire · tous les modèles** : pareil s'il est disponible, sinon « Ouvre le panneau des limites dans l'app pour l'actualiser ».
+  - Les limites sont globales : elles s'affichent quelle que soit la session choisie.
+- **Portrait** : la colonne de gauche, puis le panneau de droite en dessous ou en vue séparée (bouton « ← »).
+- Le style suit celui de l'app : verre, sans les couleurs de la maquette. Seuls les `+` et `−` sont en vert et rouge.
