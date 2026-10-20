@@ -94,6 +94,10 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
   - Deux sticks, la croix, A/B/X/Y, LB/RB/LT/RT, View/Xbox/Menu ; un double tap sur un stick fait L3 ou R3.
   - « ✕ Fermer la manette » en haut, ou le geste Retour d'Android, la referme.
   - Vérifier dans Windows : Win+R, `joy.cpl`.
+- **Claude Code** : les sessions Claude Code du PC, en lecture seule, groupées par projet.
+  - À gauche : l'heure, les boutons « + Nouveau », « Artéfacts », « Personnalisation », « Plus » (ils agissent dans l'app Claude) et les conversations ; un tap ouvre la conversation dans l'app.
+  - À droite : contexte détaillé (avec les tâches en arrière-plan), limite de session et limite hebdomadaire, modifications (+/−) et résultats. Un tap sur le contexte ou sur une limite ouvre la vue correspondante dans l'app.
+  - Le détail du contexte et les limites sont lus dans le panneau de droite de l'app Claude, pour la conversation qui y est ouverte. Aucun texte de conversation ne quitte le PC.
 
 ### Mode Tableau (Frame)
 
