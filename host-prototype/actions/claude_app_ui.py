@@ -56,7 +56,7 @@ MAX_TASKS = 10
 # * context: the card header Button "Contexte" supports ExpandCollapsePattern only (no Invoke); the card lives in the
 #   right rail, which the toggle button "Panneau des sessions" (TogglePattern) shows or hides.
 USAGE_BUTTON = r"^(?:Utilisation|Usage)\s*:"
-CONTEXT_HEADER = r"^(?:Contexte|Context)$"
+CONTEXT_HEADER = r"^(?:Contexte|Context)(?:[\s ]+\d{1,3}[\s ]?%)?$"  # "Contexte 64 %" when collapsed
 RAIL_TOGGLES = ("Panneau des sessions", "Session panel", "Sessions panel")
 
 _SPACES = re.compile(r"[\s  ]+")

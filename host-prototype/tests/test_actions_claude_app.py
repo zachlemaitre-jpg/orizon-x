@@ -692,8 +692,8 @@ class ShowViewsTest(ProviderBase):
         for name in ("Utilisation du CPU", "Limite d'utilisation de session bientôt atteinte", "Compacter la session"):
             self.assertFalse(usage.search(name), name)
         context = re.compile(ui_mod.CONTEXT_HEADER, re.I)
-        for name in ("Contexte", "Context"):
-            self.assertTrue(context.search(name))
+        for name in ("Contexte", "Context", "Contexte 64 %", "Context 7 %"):  # collapsed card shows its percent
+            self.assertTrue(context.search(name), name)
         for name in ("Contexte détaillé", "Réorganiser la carte Contexte", "Environnement"):
             self.assertFalse(context.search(name))
 
