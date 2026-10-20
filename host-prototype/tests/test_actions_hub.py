@@ -64,6 +64,10 @@ class FakeClock:
         return self.t
 
 
+LAUNCHERS = {"settings": True, "discord": False, "spotify": False, "downloads": True,
+             "icons": {"discord": None, "spotify": None}}
+
+
 def make_providers():
     return {
         "clock": FakeProvider({"epoch_ms": 1000, "utc_offset_min": 120}),
@@ -86,6 +90,7 @@ def make_providers():
         "trackpad": FakeProvider({"available": True}),
         "gamepad": FakeProvider({"available": True}),
         "claude": FakeProvider({"available": True, "sessions": [], "connectors": []}),
+        "launchers": FakeProvider(dict(LAUNCHERS)),
     }
 
 
@@ -139,6 +144,7 @@ class StateTest(unittest.TestCase):
             "trackpad": {"available": True},
             "gamepad": {"available": True},
             "claude": {"available": True, "sessions": [], "connectors": []},
+            "launchers": dict(LAUNCHERS, available=True),
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -1539,6 +1545,131 @@ class InputThreadTest(unittest.TestCase):
         self.assertFalse(self.hub._input_thread.is_alive())
 
 
+ICON_D = "d" * 40
+ICON_S = "5" * 40
+PNG_D = b"\x89PNG-discord"
+PNG_S = b"\x89PNG-spotify"
+
+
+class FakeLaunchers(FakeProvider):
+    def __init__(self, discord=ICON_D, spotify=ICON_S, images=None):
+        super().__init__({"settings": True, "discord": True, "spotify": True, "downloads": True,
+                          "icons": {"discord": discord, "spotify": spotify}})
+        self.images = dict(images) if images is not None else {ICON_D: PNG_D, ICON_S: PNG_S}
+        self.artwork_requests = []
+
+    def artwork_bytes(self, icon_id):
+        self.artwork_requests.append(icon_id)
+        return self.images.get(icon_id)
+
+
+class LaunchersHubTest(unittest.TestCase):
+    def harness(self, provider=None, **kw):
+        providers = make_providers()
+        providers["launchers"] = provider or FakeLaunchers()
+        providers["now_playing"].snap["artwork"] = None
+        return Harness(providers, **kw)
+
+    def test_the_section_is_the_providers_snapshot(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.sent[0]["launchers"]["icons"], {"discord": ICON_D, "spotify": ICON_S})
+        self.assertTrue(h.sent[0]["launchers"]["settings"])
+
+    def test_missing_provider_is_unavailable(self):
+        providers = make_providers()
+        del providers["launchers"]
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["launchers"], {"available": False})
+
+    def test_launcher_icons_are_sent_before_the_state(self):
+        h = self.harness()
+        h.tick()
+        self.assertEqual(h.events[:2], [("artwork", ICON_D), ("artwork", ICON_S)])
+        self.assertEqual(h.events[2][0], "state")
+        self.assertEqual(h.artworks, [(ICON_D, PNG_D), (ICON_S, PNG_S)])
+
+    def test_an_unchanged_icon_is_not_sent_again_a_changed_one_is(self):
+        h = self.harness()
+        h.tick()
+        for _ in range(5):
+            h.tick(1.0)
+        self.assertEqual(len(h.artworks), 2)
+        h.providers["launchers"].snap["icons"]["spotify"] = "6" * 40
+        h.providers["launchers"].images["6" * 40] = b"\x89PNG-new"
+        h.tick(1.0)
+        self.assertEqual([a for a, _ in h.artworks], [ICON_D, ICON_S, "6" * 40])
+
+    def test_each_icon_is_tracked_on_its_own(self):
+        h = self.harness()
+        h.tick()
+        h.providers["launchers"].snap["icons"]["discord"] = None
+        h.tick(1.0)
+        h.providers["launchers"].snap["icons"]["discord"] = ICON_D
+        h.tick(1.0)
+        self.assertEqual([a for a, _ in h.artworks].count(ICON_D), 2)  # null then the same id: sent again
+        self.assertEqual([a for a, _ in h.artworks].count(ICON_S), 1)
+
+    def test_no_icon_sends_nothing(self):
+        h = self.harness(FakeLaunchers(discord=None, spotify=None))
+        h.tick()
+        self.assertEqual(h.artworks, [])
+
+    def test_missing_bytes_null_the_icon_without_failing_the_state(self):
+        h = self.harness(FakeLaunchers(images={ICON_S: PNG_S}))
+        h.tick()
+        self.assertEqual([a for a, _ in h.artworks], [ICON_S])
+        self.assertIsNone(h.sent[0]["launchers"]["icons"]["discord"])
+        self.assertEqual(h.sent[0]["launchers"]["icons"]["spotify"], ICON_S)
+
+    def test_without_send_artwork_the_state_references_no_icon(self):
+        h = self.harness(send_artwork=None)
+        h.tick()
+        self.assertEqual(h.sent[0]["launchers"]["icons"], {"discord": None, "spotify": None})
+
+    def test_unencodable_icon_is_dropped_and_not_retried(self):
+        calls = []
+
+        def send_artwork(artwork_id, image):
+            calls.append(artwork_id)
+            if artwork_id == ICON_D:
+                raise ValueError("too big")
+        h = self.harness(send_artwork=send_artwork)
+        h.tick()
+        h.tick(1.0)
+        h.tick(1.0)
+        self.assertEqual(calls.count(ICON_D), 1)
+        self.assertIsNone(h.sent[-1]["launchers"]["icons"]["discord"])
+        self.assertEqual(h.sent[-1]["launchers"]["icons"]["spotify"], ICON_S)
+
+    def test_cover_and_context_icon_behave_as_before(self):
+        providers = make_providers()
+        providers["launchers"] = FakeLaunchers()
+        h = Harness(providers)  # the default now_playing cover
+        h.tick()
+        self.assertEqual([a for a, _ in h.artworks][0], ID_A)
+        self.assertEqual(len(h.artworks), 3)
+
+    def test_launch_open_is_a_normal_action_with_its_notice(self):
+        provider = FakeLaunchers()
+        provider.result = "app_not_found"
+        h = self.harness(provider)
+        h.tick()
+        before = h.providers["usb"].snapshots
+        h.hub.handle({"id": "launch.open", "target": "discord"})
+        h.hub._tick(h.clock.t)
+        self.assertEqual(provider.handled, [{"id": "launch.open", "target": "discord"}])
+        self.assertEqual(h.sent[-1]["notice"], {"code": "app_not_found"})
+        self.assertEqual(h.providers["usb"].snapshots, before + 1)
+        self.assertFalse("launch.open".startswith(hub_mod._QUIET))
+
+    def test_default_providers_include_the_launchers_without_launching_anything(self):
+        providers = default_providers(lambda _l: None)
+        self.assertIn("launchers", providers)
+        self.assertTrue(callable(providers["launchers"].snapshot) and callable(providers["launchers"].handle))
+
+
 class ClaudeHubTest(unittest.TestCase):
     SESSION = {"id": "abc", "title": "T", "project": "p", "branch": "main", "updated": 1, "status": "idle",
                "model": "", "effort": "", "mode": "", "tokens": None, "last_prompt": "", "last_result": "",
@@ -1724,7 +1855,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude", "launchers"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 

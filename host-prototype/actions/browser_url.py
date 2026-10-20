@@ -205,9 +205,10 @@ class UiaLayer:
         except Exception:  # noqa: BLE001
             return False
 
-    def expand_matching(self, hwnd: int, pattern: str, wait_s: float = 0.0) -> bool:
+    def expand_matching(self, hwnd: int, pattern: str, wait_s: float = 0.0, toggle: bool = False) -> bool:
         """ExpandCollapsePattern.Expand() on the first Button whose name matches ``pattern`` (Invoke if it has no
-        ExpandCollapse), unless it is already expanded. True when such a button exists, waiting up to ``wait_s``."""
+        ExpandCollapse), unless it is already expanded; with ``toggle`` an expanded one is collapsed instead. True when
+        such a button exists, waiting up to ``wait_s``."""
         import re
         import time
         self._ensure()
@@ -230,8 +231,11 @@ class UiaLayer:
         if self._has(element, client.UIA_IsExpandCollapsePatternAvailablePropertyId):
             pat = element.GetCurrentPattern(client.UIA_ExpandCollapsePatternId).QueryInterface(
                 client.IUIAutomationExpandCollapsePattern)
-            if pat.CurrentExpandCollapseState == 0:  # ExpandCollapseState_Collapsed
+            state = pat.CurrentExpandCollapseState
+            if state == 0:  # ExpandCollapseState_Collapsed
                 pat.Expand()
+            elif toggle and state in (1, 2):  # Expanded, PartiallyExpanded
+                pat.Collapse()
         else:
             element.GetCurrentPattern(client.UIA_InvokePatternId).QueryInterface(client.IUIAutomationInvokePattern).Invoke()
         return True

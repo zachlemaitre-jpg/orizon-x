@@ -12,7 +12,7 @@ One thread owns everything:
   as it lasts.
 
 State shape: ``{"v": 1, "clock", "battery", "audio", "media", "brightness", "wifi", "bluetooth", "airplane",
-"usb": [...], "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
+"usb": [...], "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude", "launchers", optional "notice"}``. Every object section carries ``"available"``; ``wifi`` / ``bluetooth`` /
 ``airplane`` come from ``merge_radio_state(radios, wifi_info, bt_info)`` (see actions.radios); ``usb`` is the list
 of drives. A section whose provider is missing or raising is ``{"available": False}`` (``[]`` for usb) until the
 provider answers again; the failure is logged once per streak.
@@ -47,6 +47,11 @@ The ``claude`` section (actions.claude_code, the Claude Code sessions of the PC,
 ``{"available": False}`` or the sessions and connectors. ``claude.focus`` is a normal action (hub thread, a poll
 afterwards, a ``claude_not_running`` notice when the Claude app is not running).
 
+The ``launchers`` section (actions.launchers: Settings, Discord, Spotify, Downloads tiles) is read in the slow group; its
+``icons`` (sha1 of the real icon of Discord's and Spotify's exe) are sent as MEDIA_ARTWORK before the state that
+references them, whenever one changes to an id other than the last broadcast one, like the context bar's icon.
+``launch.open`` is a normal action (hub thread, a poll afterwards, the notice ``app_not_found`` on failure).
+
 Input actions (``keyboard.*``: about 30 a second while a key repeats, ``trackpad.*``: up to 60 moves a second,
 ``gamepad.*``: up to 125 reports a second) run on their OWN thread (``actions-input``), started and stopped with the hub:
 the poll of the slow group can block the hub thread for a second or more (brightness, Bluetooth, Wi-Fi, media), and the
@@ -64,7 +69,7 @@ point is dropped (the providers' ``stop()`` releases everything that is held). T
 device leaves, the connection drops, the role changes, the engine stops).
 
 Provider keys in the ``providers`` dict: clock, battery, audio, media, brightness, radios, wifi_info, bt_info, usb,
-now_playing, context, keyboard, trackpad, gamepad, claude.
+now_playing, context, keyboard, trackpad, gamepad, claude, launchers.
 """
 from __future__ import annotations
 
@@ -97,12 +102,13 @@ _ROUTES = (
     ("trackpad.", "trackpad"),
     ("gamepad.", "gamepad"),
     ("claude.", "claude"),
+    ("launch.", "launchers"),
 )
 _QUIET = ("keyboard.", "trackpad.", "gamepad.")  # input actions: own thread, no re-poll (see the module docstring)
 _MERGE_LIMIT = 2000.0  # the provider clamp of a move / scroll: a merged delta never goes beyond it
 
 _FAST = ("audio", "context")
-_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard", "trackpad", "gamepad", "claude")
+_SLOW = ("clock", "battery", "media", "brightness", "radios", "wifi_info", "bt_info", "usb", "now_playing", "keyboard", "trackpad", "gamepad", "claude", "launchers")
 _UNAVAILABLE = {"available": False}
 
 _COINIT_MULTITHREADED = 0
@@ -140,6 +146,14 @@ def _comparable(state: dict) -> dict:
     if isinstance(clock, dict):
         cmp["clock"] = {k: v for k, v in clock.items() if k != "epoch_ms"}
     return cmp
+
+
+def _container(state: dict, path: str) -> Any:
+    """``state["a"]["b"]`` for the dotted path ``"a.b"`` (None if a step is missing)."""
+    node: Any = state
+    for step in path.split("."):
+        node = node.get(step) if isinstance(node, dict) else None
+    return node
 
 
 def _number(value: Any) -> bool:
@@ -204,6 +218,7 @@ class ActionsHub:
         self._artwork_logged: Optional[str] = None
         self._icon_broadcast: Optional[str] = None  # context.icon of the last state sent
         self._icons_refused: set[str] = set()  # icons send_artwork could not encode: never retried
+        self._launcher_broadcast: dict = {}  # launchers.icons of the last state sent: name -> id
 
     # --- public API ---
 
@@ -428,6 +443,7 @@ class ActionsHub:
         state["trackpad"] = self._section("trackpad")
         state["gamepad"] = self._section("gamepad")
         state["claude"] = self._section("claude")
+        state["launchers"] = self._section("launchers")
         return state
 
     def _log_artwork_once(self, artwork_id: str, line: str) -> None:
@@ -437,10 +453,10 @@ class ActionsHub:
 
     def _pending_one(self, state: dict, section_name: str, field: str, provider_key: str,
                      held: Callable[[str], bool], refused: Callable[[str], bool]) -> Optional[tuple]:
-        """The image ``state[section_name][field]`` references, if it has to be sent before this state:
+        """The image ``state[section_name][field]`` (``section_name`` may be a dotted path) references, if it has to be sent before this state:
         (section, field, id, bytes). One that cannot be sent (no send_artwork, no bytes, refused before) is replaced
         by None in the state, so that no state references an image the device lacks. ``held``: the device has it."""
-        section = state.get(section_name)
+        section = _container(state, section_name)
         if not isinstance(section, dict) or field not in section:
             return None
         artwork_id = section[field]
@@ -473,6 +489,10 @@ class ActionsHub:
             self._pending_one(state, "context", "icon", "context",
                               lambda i: i == self._icon_broadcast, lambda i: i in self._icons_refused),
         ]
+        for name in ("discord", "spotify"):  # the real icons of the launcher tiles
+            pending.append(self._pending_one(
+                state, "launchers.icons", name, "launchers",
+                lambda i, name=name: i == self._launcher_broadcast.get(name), lambda i: i in self._icons_refused))
         return [p for p in pending if p is not None]
 
     def _note_send_failure(self, e: Exception) -> None:
@@ -497,19 +517,19 @@ class ActionsHub:
             try:
                 self._send_artwork(artwork_id, data)
             except ValueError as e:  # not encodable (too big...): the state goes without it
-                if field == "icon":
-                    self._icons_refused.add(artwork_id)
-                else:
+                if section_name == "now_playing":
                     self._artwork_refused = artwork_id
+                else:
+                    self._icons_refused.add(artwork_id)
                 self._log_artwork_once(artwork_id, f"hub: artwork {artwork_id} not sent: {e}")
-                out[section_name][field] = None
-                state[section_name][field] = None
+                _container(out, section_name)[field] = None
+                _container(state, section_name)[field] = None
                 cmp = _comparable(state)
             except Exception as e:  # noqa: BLE001 - the socket closed: no state either (it would reference it)
                 self._note_send_failure(e)
                 return
             else:
-                if field == "artwork":
+                if section_name == "now_playing":
                     self._artwork_sent = artwork_id
         try:
             self._send(out)
@@ -522,6 +542,8 @@ class ActionsHub:
         self._last_sent_at = now
         context = state.get("context")
         self._icon_broadcast = context.get("icon") if isinstance(context, dict) else None
+        icons = _container(state, "launchers.icons")
+        self._launcher_broadcast = dict(icons) if isinstance(icons, dict) else {}
 
 
 def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "fr") -> dict:
@@ -591,6 +613,10 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
         from actions.trackpad import TrackpadProvider
         return TrackpadProvider(log=log)
 
+    def launchers() -> Any:
+        from actions.launchers import LaunchersProvider  # detection and icons are read at the first snapshot
+        return LaunchersProvider(log=log)
+
     def claude() -> Any:
         from actions.claude_code import ClaudeCodeProvider  # reads nothing until the first snapshot
         return ClaudeCodeProvider(log=log)
@@ -610,6 +636,6 @@ def default_providers(log: Optional[Callable[[str], None]] = None, lang: str = "
     for name, factory in (("clock", clock), ("battery", battery), ("media", media), ("audio", audio),
                           ("brightness", brightness), ("radios", radios), ("wifi_info", wifi_info),
                           ("bt_info", bt_info), ("usb", usb), ("now_playing", now_playing),
-                          ("context", context), ("keyboard", keyboard), ("trackpad", trackpad), ("gamepad", gamepad), ("claude", claude)):
+                          ("context", context), ("keyboard", keyboard), ("trackpad", trackpad), ("gamepad", gamepad), ("claude", claude), ("launchers", launchers)):
         add(name, factory)
     return providers

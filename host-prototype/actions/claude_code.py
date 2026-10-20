@@ -34,9 +34,11 @@ panel labels and values are kept, never conversation text. Each session also car
 with that title. Notice ``claude_ui_not_found`` when the app or the button cannot be found.
 
 ``claude.show_usage`` / ``claude.show_context`` (the tablet's usage and Context blocks): bring the app to the front, then
-expand (``ExpandCollapsePattern``; neither element has an InvokePattern) the status-bar button "Utilisation : NN % de la
-limite de session…" that opens the plan usage-limits popover, or show the right rail (its toggle) and expand the "Contexte"
-card. ``usage.weekly``, readable only while that popover is open, is kept with its own ``weekly_seen_at`` after it closes.
+``show_usage`` TOGGLES (``ExpandCollapsePattern``, no InvokePattern: expand if collapsed, collapse if expanded) the
+status-bar button "Utilisation : …" that opens the plan usage-limits popover; ``show_context`` shows the right rail (its
+toggle) and expands the "Contexte" card. ``claude.compact`` invokes the context card's "Compacter la session" button.
+That status-bar button shows ONE limit at a time (the session's or the weekly's), so each limit is kept on its own, with
+its own time (``usage.session_seen_at`` / ``usage.weekly_seen_at``): a read that brings only one never drops the other.
 
 ``claude.focus``: brings the main window of the Claude app to the front (``Win32Focus``, injectable): the visible,
 unowned, titled top-level window of a ``claude.exe`` process; ``SW_RESTORE`` if minimised, ``SetForegroundWindow``, and on
@@ -56,8 +58,8 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from actions.claude_app_ui import (CONTEXT_HEADER, RAIL_TOGGLES, SIDEBAR_BUTTONS, USAGE_BUTTON, ClaudeAppReader,
-                                   ClaudeAppUi)
+from actions.claude_app_ui import (COMPACT_NAMES, CONTEXT_HEADER, RAIL_TOGGLES, SIDEBAR_BUTTONS, USAGE_BUTTON,
+                                   ClaudeAppReader, ClaudeAppUi)
 
 _log = logging.getLogger("orizonx.actions.claude_code")
 
@@ -79,6 +81,7 @@ FOCUS_ID = "claude.focus"
 WATCH_ID = "claude.watch"
 SHOW_USAGE_ID = "claude.show_usage"
 SHOW_CONTEXT_ID = "claude.show_context"
+COMPACT_ID = "claude.compact"
 OPEN_ID = "claude.open"
 APP_READ_S = 3.0
 APP_WARMUP_RETRY_S = 1.0
@@ -392,7 +395,7 @@ class ClaudeCodeProvider:
         self._watch = False
         self._app: Optional[dict] = None
         self._app_next = 0.0
-        self._weekly: "Optional[tuple[dict, int]]" = None  # the last weekly limit seen, with when
+        self._limits: "dict[str, tuple[dict, int]]" = {}  # the last session / weekly limit seen, with when
 
     # --- provider API ---
 
@@ -432,7 +435,9 @@ class ClaudeCodeProvider:
         if action_id in SIDEBAR_BUTTONS:
             return self._invoke(SIDEBAR_BUTTONS[action_id])
         if action_id == SHOW_USAGE_ID:
-            return self._show(lambda hwnd: self._ui.expand(hwnd, USAGE_BUTTON), "usage limits button")
+            return self._show(lambda hwnd: self._ui.toggle(hwnd, USAGE_BUTTON), "usage limits button")
+        if action_id == COMPACT_ID:
+            return self._invoke(COMPACT_NAMES)
         if action_id == SHOW_CONTEXT_ID:
             def show_context(hwnd: int) -> bool:
                 try:  # the right rail holds the card; not an error if its toggle is not there
@@ -646,7 +651,7 @@ class ClaudeCodeProvider:
             if not hwnd:
                 self._app = None
                 return None
-            self._app = self._keep_weekly(self._app_reader.read(hwnd, self._win32.window_title(hwnd), now))
+            self._app = self._keep_limits(self._app_reader.read(hwnd, self._win32.window_title(hwnd), now))
             if self._app is None and self._app_reader.warming_up:
                 self._app_next = now + APP_WARMUP_RETRY_S
         except Exception as e:  # noqa: BLE001
@@ -654,15 +659,19 @@ class ClaudeCodeProvider:
             self._app = None
         return self._app
 
-    def _keep_weekly(self, app: Optional[dict]) -> Optional[dict]:
-        """The weekly limit is only readable while the usage popover is open: keep the last one seen, with its own time."""
+    def _keep_limits(self, app: Optional[dict]) -> Optional[dict]:
+        """Each usage limit (session, weekly) is kept on its own with the time it was read: the status-bar button shows
+        one of them at a time, the popover both. A read that brings only one never drops the other."""
         if app is None:
             return None
         usage = app["usage"]
-        if usage.get("weekly"):
-            self._weekly = (usage["weekly"], usage["weekly_seen_at"])
-        elif self._weekly is not None:
-            usage["weekly"], usage["weekly_seen_at"] = self._weekly
+        for kind in ("session", "weekly"):
+            if usage.get(kind):
+                self._limits[kind] = (usage[kind], usage[f"{kind}_seen_at"])
+            elif kind in self._limits:
+                usage[kind], usage[f"{kind}_seen_at"] = self._limits[kind]
+            else:
+                usage[f"{kind}_seen_at"] = None
         return app
 
     def _note(self, what: str, error: Exception) -> None:

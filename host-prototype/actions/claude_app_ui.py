@@ -12,7 +12,8 @@ once (``walk``: the elements in document order as ``Node(depth, role, name)``), 
 
 The ``app`` object: ``{"session_title", "seen_at", "context": {"percent", "used", "window", "items": [{"name",
 "tokens", "percent"}], "deferred": [{"name", "tokens"}]} | None, "connected": int | None, "results": [file names],
-"changes": {"added", "removed"} | None, "usage": {"session": {"percent", "reset"} | None, "weekly": {...} | None, "weekly_seen_at": epoch s | None},
+"changes": {"added", "removed"} | None, "usage": {"session": {"percent", "reset"} | None, "weekly": {...} | None, "session_seen_at": epoch s | None,
+"weekly_seen_at": epoch s | None},
 "tasks": [{"name", "status": "running" | "completed", "elapsed"}], "tasks_done": int}``; the parts that are not found
 are ``None`` (``[]`` for the results). ``tasks`` (the "Background tasks" card, at most 10 rows) and ``tasks_done`` (its
 "N completed" summary) are present only when the card is. None when nothing of the panel is found.
@@ -58,6 +59,8 @@ MAX_TASKS = 10
 USAGE_BUTTON = r"^(?:Utilisation|Usage)\s*:"
 CONTEXT_HEADER = r"^(?:Contexte|Context)(?:[\s ]+\d{1,3}[\s ]?%)?$"  # "Contexte 64 %" when collapsed
 RAIL_TOGGLES = ("Panneau des sessions", "Session panel", "Sessions panel")
+# The button of the context card that compacts the conversation (Button with InvokePattern in the real tree).
+COMPACT_NAMES = ("Compacter la session", "Compact session")
 
 _SPACES = re.compile(r"[\s  ]+")
 _TOKENS = re.compile(r"^\d[\d.,]*\s?[kKmM]?$")
@@ -216,7 +219,11 @@ def _parse_usage(nodes: "list[Node]", seen_at: int = 0) -> dict:
             weekly = weekly or entry
         elif "session" in low:
             session = session or entry
-    return {"session": session, "weekly": weekly, "weekly_seen_at": int(seen_at) if weekly else None}
+    # The status-bar button shows ONE limit at a time (the session's "Utilisation : 76 % de la limite de session…" or the
+    # weekly's "Utilisation : Hebdomadaire · tous les modèles : 62% et Réinitialisation le sam. 11:00"), so a single read
+    # almost never carries both: the provider keeps each with its own time.
+    return {"session": session, "weekly": weekly, "session_seen_at": int(seen_at) if session else None,
+            "weekly_seen_at": int(seen_at) if weekly else None}
 
 
 def _parse_tasks(sub: "list[Node]") -> dict:
@@ -321,6 +328,10 @@ class ClaudeAppUi:
     def expand(self, hwnd: int, pattern: str, wait_s: float = 0.0) -> bool:
         """Expand (or invoke) the first Button whose name matches ``pattern``, waiting up to ``wait_s`` for it to exist."""
         return bool(self._get().expand_matching(hwnd, pattern, wait_s))
+
+    def toggle(self, hwnd: int, pattern: str) -> bool:
+        """Expand the first Button whose name matches ``pattern`` if it is collapsed, collapse it if it is expanded."""
+        return bool(self._get().expand_matching(hwnd, pattern, 0.0, True))
 
     def ensure_on(self, hwnd: int, names: "tuple[str, ...]") -> bool:
         """Turn on the toggle button of that name if it is off; True if the button exists."""

@@ -119,7 +119,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(app["results"], ["plan.md", "src/app.py"])
         self.assertEqual(app["changes"], {"added": 2198, "removed": 9})
         self.assertEqual(app["usage"], {"session": {"percent": 44, "reset": "1 h 10 min"}, "weekly": None,
-                                        "weekly_seen_at": None})
+                                        "session_seen_at": 1000, "weekly_seen_at": None})
         self.assertNotIn("tasks", app)
         json.dumps(app)
 
@@ -167,7 +167,8 @@ class ParseTest(unittest.TestCase):
         app = parse_panel("t", nodes, 1)
         self.assertEqual(app["results"], ["only.txt"])
         self.assertIsNone(app["context"])
-        self.assertEqual(app["usage"], {"session": None, "weekly": None, "weekly_seen_at": None})
+        self.assertEqual(app["usage"], {"session": None, "weekly": None, "session_seen_at": None,
+                                        "weekly_seen_at": None})
 
     def test_changes_from_plus_and_minus_texts(self):
         nodes = filler(100) + [G(33, "Modifications"), T(36, "+2140"), T(36, "−9")]
@@ -329,6 +330,13 @@ class FakeUi:
 
     def invoke(self, hwnd, names):
         self.invoked.append((hwnd, names))
+        if self.error:
+            raise self.error
+        return self.invoke_result
+
+    def toggle(self, hwnd, pattern):
+        self.toggled_views = getattr(self, "toggled_views", [])
+        self.toggled_views.append((hwnd, pattern))
         if self.error:
             raise self.error
         return self.invoke_result
@@ -697,12 +705,12 @@ class ShowViewsTest(ProviderBase):
         for name in ("Contexte détaillé", "Réorganiser la carte Contexte", "Environnement"):
             self.assertFalse(context.search(name))
 
-    def test_show_usage_brings_the_app_up_then_expands_the_usage_button(self):
+    def test_show_usage_brings_the_app_up_then_toggles_the_usage_button(self):
         order = []
         self.win32.set_foreground = lambda h: order.append("front") or True
-        self.ui.expand = lambda h, p, w=0.0: order.append(("expand", h, p)) or True
+        self.ui.toggle = lambda h, p: order.append(("toggle", h, p)) or True
         self.assertIsNone(self.act("claude.show_usage"))
-        self.assertEqual(order, ["front", ("expand", 77, ui_mod.USAGE_BUTTON)])
+        self.assertEqual(order, ["front", ("toggle", 77, ui_mod.USAGE_BUTTON)])
 
     def test_show_context_shows_the_rail_then_expands_the_context_card(self):
         self.assertIsNone(self.act("claude.show_context"))
@@ -729,6 +737,188 @@ class ShowViewsTest(ProviderBase):
     def test_nothing_is_clicked_with_the_mouse(self):
         self.act("claude.show_usage")
         self.assertEqual(self.ui.invoked, [])  # only the pattern-based calls above
+
+
+class CompactTest(ProviderBase):
+    def test_compact_brings_the_app_up_then_invokes_the_panel_button(self):
+        order = []
+        self.win32.set_foreground = lambda h: order.append("front") or True
+        self.ui.invoke = lambda h, names: order.append(("invoke", h, names)) or True
+        self.assertIsNone(self.act("claude.compact"))
+        self.assertEqual(order, ["front", ("invoke", 77, ("Compacter la session", "Compact session"))])
+
+    def test_compact_failures(self):
+        self.ui.invoke_result = False
+        self.assertEqual(self.act("claude.compact"), "claude_ui_not_found")
+        self.ui.error = OSError("COM")
+        self.assertEqual(self.act("claude.compact"), "claude_ui_not_found")
+        self.win32.hwnd = 0
+        self.ui.error = None
+        self.assertEqual(self.act("claude.compact"), "claude_not_running")
+
+    def test_the_names_are_the_real_button_names(self):
+        self.assertIn("Compacter la session", ui_mod.COMPACT_NAMES)  # read on the real tree
+        self.assertIn("Compact session", ui_mod.COMPACT_NAMES)
+
+
+class FakeElement:
+    def __init__(self, name, ctype, expand_state=None, children=()):
+        self.CurrentName = name
+        self.CurrentControlType = ctype
+        self.expand_state = expand_state
+        self.children = list(children)
+        self.calls = []
+
+    def GetCurrentPropertyValue(self, prop):
+        if prop == "prop_expand":
+            return self.expand_state is not None
+        return False
+
+    def GetCurrentPattern(self, pattern_id):
+        return self
+
+    def QueryInterface(self, iface):
+        return self
+
+    @property
+    def CurrentExpandCollapseState(self):
+        return self.expand_state
+
+    def Expand(self):
+        self.calls.append("Expand")
+        self.expand_state = 1
+
+    def Collapse(self):
+        self.calls.append("Collapse")
+        self.expand_state = 0
+
+
+class FakeWalker:
+    def __init__(self):
+        self.parent = {}
+
+    def register(self, element):
+        for child in element.children:
+            self.parent[id(child)] = element
+            self.register(child)
+
+    def GetFirstChildElement(self, element):
+        return element.children[0] if element.children else None
+
+    def GetNextSiblingElement(self, element):
+        parent = self.parent.get(id(element))
+        if parent is None:
+            return None
+        siblings = parent.children
+        i = siblings.index(element)
+        return siblings[i + 1] if i + 1 < len(siblings) else None
+
+
+class ToggleLayerTest(unittest.TestCase):
+    """UiaLayer.expand_matching on a fake UI Automation: expand when collapsed, collapse when expanded (toggle)."""
+
+    BUTTON = 50000
+
+    def layer(self, state):
+        import threading
+        from actions.browser_url import UiaLayer
+        button = FakeElement("Utilisation : 76 % de la limite de session et Réinitialisation dans 48 min", self.BUTTON, state)
+        other = FakeElement("Utilisation du CPU", self.BUTTON, 0)
+        root = FakeElement("Claude", 0, None, [other, FakeElement("bar", 0, None, [button])])
+        walker = FakeWalker()
+        walker.register(root)
+
+        class Uia:
+            RawViewWalker = walker
+
+            def ElementFromHandle(self, hwnd):
+                return root
+
+        client = type("Client", (), {
+            "UIA_GroupControlTypeId": 1, "UIA_TextControlTypeId": 2, "UIA_ButtonControlTypeId": self.BUTTON,
+            "UIA_ListItemControlTypeId": 4, "UIA_ToolBarControlTypeId": 5, "UIA_TreeItemControlTypeId": 6,
+            "UIA_HyperlinkControlTypeId": 7, "UIA_IsExpandCollapsePatternAvailablePropertyId": "prop_expand",
+            "UIA_IsInvokePatternAvailablePropertyId": "prop_invoke", "UIA_ExpandCollapsePatternId": 1,
+            "UIA_InvokePatternId": 2, "IUIAutomationExpandCollapsePattern": object,
+            "IUIAutomationInvokePattern": object})
+        layer = UiaLayer()
+        layer._uia, layer._client, layer._thread = Uia(), client, threading.get_ident()
+        return layer, button
+
+    def test_collapsed_is_expanded_by_both_modes(self):
+        for toggle in (False, True):
+            layer, button = self.layer(0)
+            self.assertTrue(layer.expand_matching(1, ui_mod.USAGE_BUTTON, 0.0, toggle))
+            self.assertEqual(button.calls, ["Expand"])
+
+    def test_expanded_is_collapsed_only_when_toggling(self):
+        layer, button = self.layer(1)
+        self.assertTrue(layer.expand_matching(1, ui_mod.USAGE_BUTTON, 0.0, False))
+        self.assertEqual(button.calls, [])  # show_context: already open, left alone
+        self.assertTrue(layer.expand_matching(1, ui_mod.USAGE_BUTTON, 0.0, True))
+        self.assertEqual(button.calls, ["Collapse"])
+
+    def test_toggling_twice_goes_back_and_forth(self):
+        layer, button = self.layer(0)
+        for _ in range(3):
+            layer.expand_matching(1, ui_mod.USAGE_BUTTON, 0.0, True)
+        self.assertEqual(button.calls, ["Expand", "Collapse", "Expand"])
+
+    def test_no_such_button(self):
+        layer, button = self.layer(0)
+        self.assertFalse(layer.expand_matching(1, r"^Rien$", 0.0, True))
+        self.assertEqual(button.calls, [])
+
+
+class IndependentLimitsTest(ProviderBase):
+    SESSION = B(32, f"Utilisation : 76{NB}% de la limite de session et Réinitialisation dans 48 min")
+    WEEKLY = B(32, f"Utilisation : Hebdomadaire · tous les modèles : 62% et Réinitialisation le sam. 11:00")
+
+    def read(self, button):
+        self.ui.nodes = filler(120) + [G(33, "Résultats"), T(38, "a.txt"), Node(30, "Other", ""), button]
+        self.clock.t += 4
+        usage = self.provider.snapshot()["app"]["usage"]
+        return usage, int(self.clock.t)
+
+    def test_the_status_button_shows_one_limit_at_a_time(self):
+        usage = parse_panel("t", filler(100) + [self.WEEKLY], 5)["usage"]
+        self.assertEqual(usage["weekly"], {"percent": 62, "reset": "sam. 11:00"})
+        self.assertIsNone(usage["session"])
+        usage = parse_panel("t", filler(100) + [self.SESSION], 5)["usage"]
+        self.assertEqual(usage["session"], {"percent": 76, "reset": "48 min"})
+        self.assertIsNone(usage["weekly"])
+
+    def test_each_limit_survives_a_read_that_brings_only_the_other(self):
+        self.act("claude.watch", open=True)
+        usage, t_session = self.read(self.SESSION)
+        self.assertEqual((usage["session"]["percent"], usage["session_seen_at"]), (76, t_session))
+        self.assertIsNone(usage["weekly"])
+        self.assertIsNone(usage["weekly_seen_at"])
+        usage, t_weekly = self.read(self.WEEKLY)
+        self.assertEqual((usage["weekly"]["percent"], usage["weekly_seen_at"]), (62, t_weekly))
+        self.assertEqual((usage["session"]["percent"], usage["session_seen_at"]), (76, t_session))  # kept, own time
+        usage, _ = self.read(self.SESSION)
+        self.assertEqual(usage["weekly_seen_at"], t_weekly)  # and the weekly one survives in turn
+        self.assertEqual(usage["weekly"]["percent"], 62)
+
+    def test_a_new_value_replaces_the_old_one_with_a_new_time(self):
+        self.act("claude.watch", open=True)
+        self.read(self.SESSION)
+        usage, t = self.read(B(32, f"Utilisation : 81{NB}% de la limite de session et Réinitialisation dans 30 min"))
+        self.assertEqual((usage["session"]["percent"], usage["session_seen_at"]), (81, t))
+
+    def test_a_read_with_neither_keeps_both(self):
+        self.act("claude.watch", open=True)
+        self.read(self.SESSION)
+        self.read(self.WEEKLY)
+        usage, _ = self.read(T(32, "something else"))
+        self.assertEqual((usage["session"]["percent"], usage["weekly"]["percent"]), (76, 62))
+
+    def test_never_read_stays_none_with_no_time(self):
+        self.act("claude.watch", open=True)
+        usage, _ = self.read(T(32, "nothing"))
+        self.assertEqual((usage["session"], usage["weekly"], usage["session_seen_at"], usage["weekly_seen_at"]),
+                         (None, None, None, None))
 
 
 class WeeklyKeptTest(ProviderBase):
