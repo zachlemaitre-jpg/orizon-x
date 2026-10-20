@@ -1211,6 +1211,43 @@ private fun AirplaneTile(plane: AirplaneState, c: Controls, modifier: Modifier) 
     }
 }
 
+/**
+ * A launcher block: the icon and the name of what it opens on the PC. [image] is the PC's own icon of the application
+ * (full colour, from the image cache), or null while it has not arrived: then the neutral [fallback] drawable is shown.
+ * A tap opens [target] on the PC. The icon grows with the block.
+ */
+@Composable
+private fun LauncherTile(target: String, label: String, fallback: Int, image: ImageBitmap?, c: Controls, modifier: Modifier) {
+    BoxWithConstraints(
+        modifier
+            .clip(TileShape)
+            .background(Color.White.copy(alpha = 0.12f))
+            .border(1.dp, Color.White.copy(alpha = 0.28f), TileShape)
+            .clickable {
+                c.tap()
+                c.send(ActionMessages.launchOpen(target))
+            }
+            .padding(10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val icon = (min(maxWidth.value, maxHeight.value) * 0.42f).coerceIn(28f, 96f).dp
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            if (image != null) {
+                Image(image, contentDescription = null, modifier = Modifier.size(icon).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Fit, filterQuality = FilterQuality.High)
+            } else {
+                Picto(fallback, icon)
+            }
+            Spacer(Modifier.height(6.dp))
+            BasicText(
+                label,
+                style = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 /** The drives of the USB block, one chip each; it scrolls on its own when there are more than fit. */
 @Composable
 private fun UsbBlock(usb: List<UsbDrive>, c: Controls, modifier: Modifier, mode: UsbMode) {
@@ -1237,6 +1274,10 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
         BlockId.BLUETOOTH -> state.bluetooth?.let { BluetoothTile(it, c, modifier) }
         BlockId.AIRPLANE -> state.airplane?.let { AirplaneTile(it, c, modifier) }
         BlockId.USB -> UsbBlock(state.usb, c, modifier, UsbContent.mode(cols))
+        BlockId.SETTINGS -> LauncherTile("settings", tr(S.BLOCK_SETTINGS), R.drawable.ox_settings, null, c, modifier)
+        BlockId.DISCORD -> LauncherTile("discord", tr(S.BLOCK_DISCORD), R.drawable.ox_apps, state.launchers?.discordIcon?.let { c.images[it] }, c, modifier)
+        BlockId.SPOTIFY -> LauncherTile("spotify", tr(S.BLOCK_SPOTIFY), R.drawable.ox_apps, state.launchers?.spotifyIcon?.let { c.images[it] }, c, modifier)
+        BlockId.DOWNLOADS -> LauncherTile("downloads", tr(S.BLOCK_DOWNLOADS), R.drawable.ox_download, null, c, modifier)
     }
 }
 

@@ -32,5 +32,7 @@ object ActionMessages {
     fun claudeMore(): JSONObject = id("claude.more")
     fun claudeOpen(title: String): JSONObject = id("claude.open").put("title", title)
     fun claudeShowContext(): JSONObject = id("claude.show_context")
+    fun claudeCompact(): JSONObject = id("claude.compact")
+    fun launchOpen(target: String): JSONObject = id("launch.open").put("target", target)
     fun claudeShowUsage(): JSONObject = id("claude.show_usage")
 }

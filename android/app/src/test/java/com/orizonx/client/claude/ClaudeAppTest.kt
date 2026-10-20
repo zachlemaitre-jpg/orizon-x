@@ -252,4 +252,47 @@ class ClaudeAppTest {
         assertTrue(!ClaudeTask("x", "").running)
         assertTrue(ClaudeTask("x", "RUNNING").running)
     }
+
+    // --- Each limit keeps its own reading time -----------------------------------------------------------------------
+
+    @Test
+    fun eachLimitHasItsOwnSeenAt() {
+        val app = parse(
+            section(
+                """{"seen_at":1000,"usage":{"session":{"percent":42,"reset":"1 h"},"weekly":{"percent":34,"reset":"sam."},
+                    "session_seen_at":990,"weekly_seen_at":400}}""",
+            ),
+        ).app!!
+        assertEquals(990L, app.sessionLimitSeenAt())
+        assertEquals(400L, app.weeklyLimitSeenAt())
+    }
+
+    @Test
+    fun withoutItsOwnTimeALimitUsesThePanelsSeenAt() {
+        val app = parse(section("""{"seen_at":1000,"usage":{"session":{"percent":42,"reset":"1 h"},"weekly":null}}""")).app!!
+        assertEquals(1000L, app.sessionLimitSeenAt())
+        assertEquals(1000L, app.weeklyLimitSeenAt())
+    }
+
+    @Test
+    fun theWeeklyTimeSurvivesWhenOnlyTheSessionIsFresh() {
+        // The PC keeps the old weekly value and time while a new reading only brings the session limit.
+        val app = parse(
+            section(
+                """{"seen_at":5000,"usage":{"session":{"percent":10,"reset":"4 h"},"weekly":{"percent":34,"reset":"sam."},
+                    "session_seen_at":5000,"weekly_seen_at":1200}}""",
+            ),
+        ).app!!
+        assertEquals(10, app.usage!!.session!!.percent)
+        assertEquals(34, app.usage!!.weekly!!.percent)
+        assertEquals(5000L, app.sessionLimitSeenAt())
+        assertEquals(1200L, app.weeklyLimitSeenAt())
+    }
+
+    @Test
+    fun badSeenAtValuesAreIgnored() {
+        val app = parse(section("""{"seen_at":7,"usage":{"session":{"percent":1,"reset":""},"session_seen_at":"x","weekly_seen_at":-3}}""")).app!!
+        assertEquals(7L, app.sessionLimitSeenAt())
+        assertEquals(7L, app.weeklyLimitSeenAt())
+    }
 }

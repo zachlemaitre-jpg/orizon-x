@@ -5,8 +5,12 @@ import com.orizonx.client.actions.BlockId.AIRPLANE
 import com.orizonx.client.actions.BlockId.BLUETOOTH
 import com.orizonx.client.actions.BlockId.BRIGHTNESS
 import com.orizonx.client.actions.BlockId.CLOCK
+import com.orizonx.client.actions.BlockId.DISCORD
+import com.orizonx.client.actions.BlockId.DOWNLOADS
 import com.orizonx.client.actions.BlockId.NOW_PLAYING
+import com.orizonx.client.actions.BlockId.SETTINGS
 import com.orizonx.client.actions.BlockId.SOUND
+import com.orizonx.client.actions.BlockId.SPOTIFY
 import com.orizonx.client.actions.BlockId.USB
 import com.orizonx.client.actions.BlockId.WIFI
 import org.json.JSONObject
@@ -42,6 +46,10 @@ class BlockGridTest {
             Triple(BLUETOOTH, Span(1, 1), Span(1, 1)),
             Triple(AIRPLANE, Span(1, 1), Span(1, 1)),
             Triple(USB, Span(3, 1), Span(2, 1)),
+            Triple(SETTINGS, Span(1, 1), Span(1, 1)),
+            Triple(DISCORD, Span(1, 1), Span(1, 1)),
+            Triple(SPOTIFY, Span(1, 1), Span(1, 1)),
+            Triple(DOWNLOADS, Span(1, 1), Span(1, 1)),
         )
         for ((id, default, min) in table) {
             assertEquals(id.name, default, id.defaultSize())
@@ -68,8 +76,14 @@ class BlockGridTest {
 
     @Test
     fun defaultOrder() {
-        assertEquals(listOf(CLOCK, NOW_PLAYING, SOUND, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE, USB), BlockId.DEFAULT_ORDER)
-        assertEquals(listOf("clock", "now_playing", "sound", "brightness", "wifi", "bluetooth", "airplane", "usb"), BlockId.DEFAULT_ORDER.map { it.wire })
+        assertEquals(
+            listOf(CLOCK, NOW_PLAYING, SOUND, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE, USB, SETTINGS, DISCORD, SPOTIFY, DOWNLOADS),
+            BlockId.DEFAULT_ORDER,
+        )
+        assertEquals(
+            listOf("clock", "now_playing", "sound", "brightness", "wifi", "bluetooth", "airplane", "usb", "settings", "discord", "spotify", "downloads"),
+            BlockId.DEFAULT_ORDER.map { it.wire },
+        )
     }
 
     // --- What the Sound and USB blocks show ----------------------------------------------------------------------------------
@@ -146,6 +160,11 @@ class BlockGridTest {
                 at(BLUETOOTH, 10, 1, 1, 1),
                 at(AIRPLANE, 0, 2, 1, 1),
                 at(USB, 1, 2, 3, 1),
+                // The launchers come last and take the first free cells.
+                at(SETTINGS, 4, 2, 1, 1),
+                at(DISCORD, 5, 2, 1, 1),
+                at(SPOTIFY, 6, 2, 1, 1),
+                at(DOWNLOADS, 7, 2, 1, 1),
             ),
             place(columns = 11),
         )
@@ -172,6 +191,10 @@ class BlockGridTest {
                 at(BLUETOOTH, 0, 3, 1, 1),
                 at(AIRPLANE, 1, 3, 1, 1),
                 at(USB, 2, 3, 3, 1),
+                at(SETTINGS, 5, 3, 1, 1),
+                at(DISCORD, 6, 3, 1, 1),
+                at(SPOTIFY, 0, 4, 1, 1),
+                at(DOWNLOADS, 1, 4, 1, 1),
             ),
             place(columns = 7),
         )
@@ -362,7 +385,8 @@ class BlockGridTest {
                 "now_playing":{"available":true,"app":"S","title":"T","playing":true},
                 "brightness":{"available":true,"value":0.5},"wifi":{"available":true,"on":true},
                 "bluetooth":{"available":true,"on":false},"airplane":{"available":true,"on":false},
-                "usb":[{"drive":"E:","label":"K","kind":"stick"}]}""",
+                "usb":[{"drive":"E:","label":"K","kind":"stick"}],
+                "launchers":{"settings":true,"discord":true,"spotify":true,"downloads":true,"icons":{"discord":null,"spotify":null}}}""",
         )
         assertEquals(BlockId.entries.toSet(), ActionsBlocks.present(all))
     }
@@ -380,6 +404,42 @@ class BlockGridTest {
             setOf(NOW_PLAYING),
             ActionsBlocks.present(state("""{"media":{"available":true},"now_playing":{"available":true,"title":"T"}}""")),
         )
+    }
+
+    @Test
+    fun launcherBlocksFollowTheLaunchersSection() {
+        assertEquals(emptySet<BlockId>(), ActionsBlocks.present(state("{}"))) // an older PC: none
+        assertEquals(
+            setOf(SETTINGS, DOWNLOADS),
+            ActionsBlocks.present(state("""{"launchers":{"settings":true,"discord":false,"spotify":false,"downloads":true}}""")),
+        )
+        assertEquals(
+            setOf(DISCORD),
+            ActionsBlocks.present(state("""{"launchers":{"settings":false,"discord":true,"icons":{"discord":"abc"}}}""")),
+        )
+        assertEquals(emptySet<BlockId>(), ActionsBlocks.present(state("""{"launchers":{"settings":"yes","discord":1}}""")))
+    }
+
+    @Test
+    fun newLauncherBlocksJoinAnExistingSavedLayoutAtTheFirstFreeCells() {
+        // A layout saved before the launchers existed: the eight blocks have cells, the four new ids do not.
+        val saved = mapOf(
+            CLOCK to CellPos(0, 0), NOW_PLAYING to CellPos(4, 0), SOUND to CellPos(7, 0), BRIGHTNESS to CellPos(7, 1),
+            WIFI to CellPos(10, 0), BLUETOOTH to CellPos(10, 1), AIRPLANE to CellPos(0, 4), USB to CellPos(1, 4),
+        )
+        val p = place(BlockId.DEFAULT_ORDER, columns = 11, saved = saved)
+        // The old blocks did not move; the launchers fill the first free cells, row by row.
+        for ((id, pos) in saved) assertEquals(pos, p.first { it.id == id }.pos)
+        assertEquals(at(SETTINGS, 0, 2, 1, 1), p[8])
+        assertEquals(at(DISCORD, 1, 2, 1, 1), p[9])
+        assertEquals(at(SPOTIFY, 2, 2, 1, 1), p[10])
+        assertEquals(at(DOWNLOADS, 3, 2, 1, 1), p[11])
+    }
+
+    @Test
+    fun anOldSavedOrderWithoutTheNewIdsAppendsThemInTheDefaultOrder() {
+        val l = ActionsLayout.fromJson("""{"order":["usb","clock"],"hidden":[]}""")
+        assertEquals(listOf(SETTINGS, DISCORD, SPOTIFY, DOWNLOADS), l.order.takeLast(4))
     }
 
     @Test

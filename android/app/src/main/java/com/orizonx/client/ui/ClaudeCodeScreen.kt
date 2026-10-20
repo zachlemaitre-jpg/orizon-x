@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,9 +64,11 @@ import com.orizonx.client.claude.ClaudeInfo
 import com.orizonx.client.claude.ClaudeLimit
 import com.orizonx.client.claude.ClaudeSelection
 import com.orizonx.client.claude.ClaudeSession
+import com.orizonx.client.claude.CompactConfirm
 import com.orizonx.client.i18n.LocalLang
 import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import kotlin.math.min
 
@@ -244,6 +247,7 @@ private fun RightPanel(
     val open: (JSONObject) -> () -> Unit = { action -> { tap(); send(action) } }
     val showContext = open(ActionMessages.claudeShowContext())
     val showUsage = open(ActionMessages.claudeShowUsage())
+    val compact: () -> Unit = { send(ActionMessages.claudeCompact()) }
     BoxWithConstraints(modifier) {
         val wide = !portrait
         // Roughly square, half the panel, but short enough that the changes and the results stay above the fold.
@@ -253,17 +257,17 @@ private fun RightPanel(
                 Header(session, tap, send, onClose, back)
                 if (wide) {
                     Row(Modifier.fillMaxWidth().height(topHeight), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ContextBlock(session, appForSession, Modifier.weight(1f).fillMaxHeight(), true, showContext)
+                        ContextBlock(session, appForSession, Modifier.weight(1f).fillMaxHeight(), true, showContext, compact, tap)
                         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.weight(1f).fillMaxWidth(), showUsage)
-                            LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state, Modifier.weight(1f).fillMaxWidth(), showUsage)
+                            LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app?.sessionLimitSeenAt() ?: 0L, state, Modifier.weight(1f).fillMaxWidth(), showUsage)
+                            LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app?.weeklyLimitSeenAt() ?: 0L, state, Modifier.weight(1f).fillMaxWidth(), showUsage)
                         }
                     }
                 } else {
-                    ContextBlock(session, appForSession, Modifier.fillMaxWidth(), false, showContext)
+                    ContextBlock(session, appForSession, Modifier.fillMaxWidth(), false, showContext, compact, tap)
                     Row(Modifier.fillMaxWidth().height(LimitBlockHeight), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.weight(1f).fillMaxHeight(), showUsage)
-                        LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state, Modifier.weight(1f).fillMaxHeight(), showUsage)
+                        LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app?.sessionLimitSeenAt() ?: 0L, state, Modifier.weight(1f).fillMaxHeight(), showUsage)
+                        LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app?.weeklyLimitSeenAt() ?: 0L, state, Modifier.weight(1f).fillMaxHeight(), showUsage)
                     }
                 }
                 ChangesLine(appForSession?.changes ?: session.changes)
@@ -280,8 +284,8 @@ private fun RightPanel(
                 }
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { CloseButton(tap, onClose) }
-                LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.fillMaxWidth(), showUsage)
-                LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state, Modifier.fillMaxWidth(), showUsage)
+                LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app?.sessionLimitSeenAt() ?: 0L, state, Modifier.fillMaxWidth(), showUsage)
+                LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app?.weeklyLimitSeenAt() ?: 0L, state, Modifier.fillMaxWidth(), showUsage)
             }
             Spacer(Modifier.height(4.dp))
         }
@@ -332,11 +336,23 @@ private fun Header(session: ClaudeSession, tap: () -> Unit, send: (JSONObject) -
 
 /** The big block: the app's breakdown when it is this conversation, else the local token count and a note. */
 @Composable
-private fun ContextBlock(session: ClaudeSession, app: ClaudeApp?, modifier: Modifier, fillHeight: Boolean, onClick: () -> Unit) {
+private fun ContextBlock(
+    session: ClaudeSession,
+    app: ClaudeApp?,
+    modifier: Modifier,
+    fillHeight: Boolean,
+    onClick: () -> Unit,
+    onCompact: () -> Unit,
+    onTap: () -> Unit,
+) {
     val lang = LocalLang.current
     val context = app?.context
     Panel(modifier, onClick = onClick) {
-        Label(tr(S.CLAUDE_CONTEXT))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label(tr(S.CLAUDE_CONTEXT), Modifier.weight(1f))
+            // Only for the conversation open in the app: compacting acts on the session the app has in front.
+            if (app != null) CompactButton(onCompact, onTap)
+        }
         // The content scrolls inside the block when it is taller than the block.
         val inner = if (fillHeight) Modifier.weight(1f) else Modifier.heightIn(max = 360.dp)
         Column(inner.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -467,7 +483,7 @@ private fun TasksBlock(app: ClaudeApp?, modifier: Modifier, onClick: () -> Unit)
 
 /** A usage limit (global, whatever the chosen session): percentage, bar, reset, and when the app was last read. */
 @Composable
-private fun LimitBlock(title: S, limit: ClaudeLimit?, app: ClaudeApp?, state: ActionsState, modifier: Modifier, onClick: () -> Unit) {
+private fun LimitBlock(title: S, limit: ClaudeLimit?, seenAt: Long, state: ActionsState, modifier: Modifier, onClick: () -> Unit) {
     Panel(modifier, onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Label(tr(title), Modifier.weight(1f))
@@ -479,8 +495,9 @@ private fun LimitBlock(title: S, limit: ClaudeLimit?, app: ClaudeApp?, state: Ac
             BasicText(tr(S.CLAUDE_LIMITS_HINT), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
         } else {
             ProgressBar(ClaudeFormat.fraction(limit.percent))
-            val seen = if (app != null && app.seenAt > 0) {
-                tr(S.CLAUDE_SEEN_AT, "time" to ClaudeFormat.clockTime(app.seenAt, state.clock?.utcOffsetMin ?: 0))
+            // Each limit shows its own last known value and the time that value was read.
+            val seen = if (seenAt > 0) {
+                tr(S.CLAUDE_SEEN_AT, "time" to ClaudeFormat.clockTime(seenAt, state.clock?.utcOffsetMin ?: 0))
             } else {
                 ""
             }
@@ -556,5 +573,43 @@ private fun Chip(text: String) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         BasicText(text, style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp), maxLines = 1)
+    }
+}
+
+/**
+ * "Compact session", with a two-tap confirmation: the first tap turns the label into "Confirm?" for 3 seconds, a second
+ * tap within that time sends the action ([CompactConfirm]).
+ */
+@Composable
+private fun CompactButton(onCompact: () -> Unit, tap: () -> Unit) {
+    val confirm = remember { CompactConfirm(android.os.SystemClock::elapsedRealtime) }
+    var armed by remember { mutableStateOf(false) }
+    LaunchedEffect(armed) {
+        if (armed) {
+            delay(CompactConfirm.WINDOW_MS)
+            armed = false
+        }
+    }
+    Box(
+        Modifier
+            .clip(ChipShape)
+            .background(Color.White.copy(alpha = if (armed) 0.30f else 0.12f))
+            .border(1.dp, Color.White.copy(alpha = if (armed) 0.85f else 0.3f), ChipShape)
+            .clickable {
+                tap()
+                if (confirm.tap()) {
+                    armed = false
+                    onCompact()
+                } else {
+                    armed = true
+                }
+            }
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+    ) {
+        BasicText(
+            tr(if (armed) S.CLAUDE_COMPACT_CONFIRM else S.CLAUDE_COMPACT),
+            style = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+            maxLines = 1,
+        )
     }
 }

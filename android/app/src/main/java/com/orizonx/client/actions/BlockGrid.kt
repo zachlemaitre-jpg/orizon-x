@@ -25,6 +25,10 @@ enum class BlockId(val wire: String, private val default: Span, private val min:
     BLUETOOTH("bluetooth", Span(1, 1), Span(1, 1)),
     AIRPLANE("airplane", Span(1, 1), Span(1, 1)),
     USB("usb", Span(3, 1), Span(2, 1)),
+    SETTINGS("settings", Span(1, 1), Span(1, 1)),
+    DISCORD("discord", Span(1, 1), Span(1, 1)),
+    SPOTIFY("spotify", Span(1, 1), Span(1, 1)),
+    DOWNLOADS("downloads", Span(1, 1), Span(1, 1)),
     ;
 
     /** The Sound block starts taller when it carries the media keys, so they are visible by default. */
@@ -84,6 +88,12 @@ object ActionsBlocks {
         if (state.bluetooth != null) add(BlockId.BLUETOOTH)
         if (state.airplane != null) add(BlockId.AIRPLANE)
         if (state.usb.isNotEmpty()) add(BlockId.USB)
+        state.launchers?.let { l ->
+            if (l.settings) add(BlockId.SETTINGS)
+            if (l.discord) add(BlockId.DISCORD)
+            if (l.spotify) add(BlockId.SPOTIFY)
+            if (l.downloads) add(BlockId.DOWNLOADS)
+        }
     }
 }
 

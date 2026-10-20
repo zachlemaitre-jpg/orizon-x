@@ -46,6 +46,13 @@ class ActionMessagesTest {
     }
 
     @Test
+    fun launchOpenAndCompact() {
+        assertEquals("""{"id":"launch.open","target":"settings"}""", wire(ActionMessages.launchOpen("settings")))
+        assertEquals("""{"id":"launch.open","target":"downloads"}""", wire(ActionMessages.launchOpen("downloads")))
+        assertEquals("""{"id":"claude.compact"}""", wire(ActionMessages.claudeCompact()))
+    }
+
+    @Test
     fun claudeFocus() {
         assertEquals("""{"id":"claude.focus"}""", wire(ActionMessages.claudeFocus()))
     }

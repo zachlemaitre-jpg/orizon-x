@@ -44,6 +44,36 @@ data class NowPlaying(
 
 data class Notice(val code: String, val drive: String?)
 
+/**
+ * The launcher blocks the PC offers (`launchers` section): which of the four can be shown, and the ids of the images
+ * (received like cover art) of the Discord and Spotify icons, null until they have been sent.
+ */
+data class LaunchersInfo(
+    val settings: Boolean,
+    val discord: Boolean,
+    val spotify: Boolean,
+    val downloads: Boolean,
+    val discordIcon: String? = null,
+    val spotifyIcon: String? = null,
+) {
+    companion object {
+        /** Null when the section is absent or not an object (an older PC): no launcher block is shown. Never throws. */
+        fun parse(section: JSONObject?): LaunchersInfo? {
+            if (section == null) return null
+            val icons = section.optJSONObject("icons")
+            fun icon(key: String) = (icons?.opt(key) as? String)?.takeIf { it.isNotBlank() }
+            return LaunchersInfo(
+                settings = section.opt("settings") == true,
+                discord = section.opt("discord") == true,
+                spotify = section.opt("spotify") == true,
+                downloads = section.opt("downloads") == true,
+                discordIcon = icon("discord"),
+                spotifyIcon = icon("spotify"),
+            )
+        }
+    }
+}
+
 /** What the PC reports for the virtual controller: [available], or why not ([problem]). */
 data class GamepadInfo(val available: Boolean, val problem: GamepadProblem? = null)
 
@@ -115,6 +145,7 @@ data class ActionsState(
     val trackpad: Boolean = false,
     val gamepad: GamepadInfo? = null,
     val claude: ClaudeInfo? = null,
+    val launchers: LaunchersInfo? = null,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -163,6 +194,7 @@ data class ActionsState(
             trackpad = available(json, "trackpad") != null,
             gamepad = gamepad(json),
             claude = ClaudeInfo.parse(json.optJSONObject("claude")),
+            launchers = LaunchersInfo.parse(json.optJSONObject("launchers")),
         )
 
         /**

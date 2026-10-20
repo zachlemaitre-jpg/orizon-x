@@ -48,7 +48,7 @@ class ActionsLayoutTest {
 
     @Test
     fun roundTrip() {
-        val l = ActionsLayout(listOf(USB, WIFI, CLOCK, SOUND, NOW_PLAYING, BRIGHTNESS, BLUETOOTH, AIRPLANE), setOf(WIFI, USB))
+        val l = ActionsLayout(listOf(USB, WIFI, CLOCK, SOUND, NOW_PLAYING, BRIGHTNESS, BLUETOOTH, AIRPLANE) + BlockId.entries.drop(8), setOf(WIFI, USB))
         assertEquals(l, ActionsLayout.fromJson(l.toJson()))
     }
 
@@ -56,7 +56,7 @@ class ActionsLayoutTest {
     fun theJsonHasTheDocumentedShape() {
         val json = JSONObject(ActionsLayout.DEFAULT.hide(USB).toJson())
         assertEquals("clock", json.getJSONArray("order").getString(0))
-        assertEquals(8, json.getJSONArray("order").length())
+        assertEquals(BlockId.entries.size, json.getJSONArray("order").length())
         assertEquals("usb", json.getJSONArray("hidden").getString(0))
     }
 
@@ -72,7 +72,10 @@ class ActionsLayoutTest {
     fun aNewBlockIsAddedAtTheEnd() {
         val l = ActionsLayout.fromJson("""{"order":["usb","clock","sound"],"hidden":[]}""")
         assertEquals(listOf(USB, CLOCK, SOUND), l.order.take(3))
-        assertEquals(listOf(NOW_PLAYING, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE), l.order.drop(3))
+        assertEquals(
+            listOf(NOW_PLAYING, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE) + BlockId.entries.drop(8),
+            l.order.drop(3),
+        )
     }
 
     @Test

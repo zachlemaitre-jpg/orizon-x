@@ -41,7 +41,13 @@ data class ClaudeTask(val name: String, val status: String, val elapsed: String 
 data class ClaudeLimit(val percent: Int, val reset: String)
 
 /** Usage limits are global; [weekly] is only there when the app's limits panel has been read. */
-data class ClaudeUsage(val session: ClaudeLimit?, val weekly: ClaudeLimit?)
+data class ClaudeUsage(
+    val session: ClaudeLimit?,
+    val weekly: ClaudeLimit?,
+    /** When each limit was last read (epoch seconds, PC clock); they differ because the PC keeps each one's last value. */
+    val sessionSeenAt: Long? = null,
+    val weeklySeenAt: Long? = null,
+)
 
 /**
  * What the PC read from the Claude app's right panel (spec section 7.2). It belongs to the conversation that is open in
@@ -59,6 +65,12 @@ data class ClaudeApp(
     /** How many tasks the app lists as completed (its own count, which can exceed the rows shown); 0 when unknown. */
     val tasksDone: Int = 0,
 ) {
+    /** When the session limit was last read: its own time when the PC sends one, else the time of the whole panel. */
+    fun sessionLimitSeenAt(): Long = usage?.sessionSeenAt ?: seenAt
+
+    /** When the weekly limit was last read: its own time, else the time of the whole panel. */
+    fun weeklyLimitSeenAt(): Long = usage?.weeklySeenAt ?: seenAt
+
     /** True when the app has [session] open: same title, ignoring case and surrounding spaces. */
     fun isOpen(session: ClaudeSession): Boolean =
         sessionTitle.isNotBlank() && sessionTitle.trim().equals(session.title.trim(), ignoreCase = true)
@@ -129,9 +141,17 @@ data class ClaudeApp(
             return ClaudeLimit(percent, text(obj.opt("reset")))
         }
 
+        /** An epoch-seconds time, or null when missing, not a number, or not positive. */
+        private fun seenAt(value: Any?): Long? = (value as? Number)?.toLong()?.takeIf { it > 0 }
+
         private fun usage(obj: JSONObject?): ClaudeUsage? {
             if (obj == null) return null
-            val usage = ClaudeUsage(limit(obj.optJSONObject("session")), limit(obj.optJSONObject("weekly")))
+            val usage = ClaudeUsage(
+                limit(obj.optJSONObject("session")),
+                limit(obj.optJSONObject("weekly")),
+                seenAt(obj.opt("session_seen_at")),
+                seenAt(obj.opt("weekly_seen_at")),
+            )
             return if (usage.session == null && usage.weekly == null) null else usage
         }
     }
