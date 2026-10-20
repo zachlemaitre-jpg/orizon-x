@@ -207,6 +207,7 @@ fun ActionsScreen(
     var keyboardOpen by remember { mutableStateOf(false) }
     var trackpadOpen by remember { mutableStateOf(false) }
     var gamepadOpen by remember { mutableStateOf(false) }
+    var claudeOpen by remember { mutableStateOf(false) }
     val appContext = LocalContext.current
     val trackpadStore = remember { TrackpadStore(appContext.getSharedPreferences("orizonx", Context.MODE_PRIVATE)) }
     var trackpadSensitivity by remember { mutableFloatStateOf(trackpadStore.load()) }
@@ -235,6 +236,8 @@ fun ActionsScreen(
             val showTrackpad = trackpadOpen && !showKeyboard && state?.trackpad == true
             val gamepadInfo = state?.gamepad
             val showGamepad = gamepadOpen && !showKeyboard && !showTrackpad && gamepadInfo != null
+            val claudeInfo = state?.claude
+            val showClaude = claudeOpen && !showKeyboard && !showTrackpad && !showGamepad && claudeInfo != null
             val contextStrip: @Composable () -> Unit = {
                 if (contextBar != null) {
                     ContextBarStrip(
@@ -264,6 +267,21 @@ fun ActionsScreen(
             } else if (showGamepad && gamepadInfo != null) {
                 // Full screen, no header and no context bar.
                 GamepadScreen(gamepadInfo, onAction = { send(it) }, onClose = { gamepadOpen = false }, tap = tap)
+            } else if (showClaude && claudeInfo != null) {
+                Column(Modifier.fillMaxSize()) {
+                    // Same header as the keyboard: context bar, then clock, battery, sound and brightness.
+                    Box(Modifier.padding(top = 8.dp)) { contextStrip() }
+                    if (state != null) OverlayTopRow(state, controls)
+                    ClaudeCodeScreen(
+                        info = claudeInfo,
+                        // The sessions' times are on the PC's clock: compare them with the PC's, not the device's.
+                        nowSeconds = state?.clock?.epochMs?.div(1000) ?: (System.currentTimeMillis() / 1000),
+                        onAction = { send(it) },
+                        onClose = { claudeOpen = false },
+                        tap = tap,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             } else if (showTrackpad) {
                 Column(Modifier.fillMaxSize()) {
                     // Same header as the keyboard: context bar, then clock, battery, sound and brightness.
@@ -288,15 +306,19 @@ fun ActionsScreen(
                             LangPill(langPref, onLangPref)
                             if (keyboardInfo != null) {
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; gamepadOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; gamepadOpen = false; claudeOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
                             }
                             if (state?.trackpad == true) {
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; gamepadOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
+                                Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; gamepadOpen = false; claudeOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
                             }
                             if (gamepadInfo != null) {
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.GAMEPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; gamepadOpen = true }, icon = R.drawable.ox_gamepad)
+                                Pill(tr(S.GAMEPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; claudeOpen = false; gamepadOpen = true }, icon = R.drawable.ox_gamepad)
+                            }
+                            if (claudeInfo != null) {
+                                Spacer(Modifier.width(10.dp))
+                                Pill(tr(S.CLAUDE_CODE), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; gamepadOpen = false; claudeOpen = true }, icon = R.drawable.ox_claude_code)
                             }
                             Spacer(Modifier.width(10.dp))
                             Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
@@ -318,7 +340,7 @@ fun ActionsScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
-                        bottom = if (contextBar != null && !showKeyboard && !showTrackpad && !showGamepad) {
+                        bottom = if (contextBar != null && !showKeyboard && !showTrackpad && !showGamepad && !showClaude) {
                             24.dp + maxOf(ContextBarHeight, with(LocalDensity.current) { stripHeightPx.toDp() }) + ContextBarBottomMargin
                         } else {
                             24.dp

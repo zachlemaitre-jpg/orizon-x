@@ -1,5 +1,6 @@
 package com.orizonx.client.actions
 
+import com.orizonx.client.claude.ClaudeInfo
 import com.orizonx.client.keyboard.KeyboardLayoutId
 import org.json.JSONArray
 import org.json.JSONObject
@@ -113,6 +114,7 @@ data class ActionsState(
     val keyboard: KeyboardInfo? = null,
     val trackpad: Boolean = false,
     val gamepad: GamepadInfo? = null,
+    val claude: ClaudeInfo? = null,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -160,6 +162,7 @@ data class ActionsState(
             keyboard = available(json, "keyboard")?.let { KeyboardInfo(KeyboardLayoutId.fromWire(it.opt("layout") as? String)) },
             trackpad = available(json, "trackpad") != null,
             gamepad = gamepad(json),
+            claude = ClaudeInfo.parse(json.optJSONObject("claude")),
         )
 
         /**

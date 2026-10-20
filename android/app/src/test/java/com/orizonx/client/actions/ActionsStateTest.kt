@@ -437,6 +437,25 @@ class ActionsStateTest {
     }
 
     @Test
+    fun claudeSectionIsParsedInTheState() {
+        val s = parse(
+            """{"claude":{"available":true,"sessions":[{"id":"s1","title":"T","updated":5,"status":"working"}],
+                "connectors":[{"name":"gh","type":"http","scope":"global"}]}}""",
+        )
+        assertEquals(listOf("s1"), s.claude!!.sessions.map { it.id })
+        assertEquals(true, s.claude!!.sessions[0].working)
+        assertEquals(listOf("gh"), s.claude!!.connectors.map { it.name })
+    }
+
+    @Test
+    fun claudeAbsentOrUnavailableIsNull() {
+        assertNull(parse("{}").claude)
+        assertNull(parse("""{"claude":null}""").claude)
+        assertNull(parse("""{"claude":{"available":false}}""").claude)
+        assertNull(parse("""{"claude":"yes"}""").claude)
+    }
+
+    @Test
     fun nowPlayingCoverIdStillParsed() {
         val n = parse(
             """{"now_playing":{"available":true,"app":"Spotify","title":"T","playing":true,"artwork":"0123456789abcdef0123456789abcdef01234567"}}""",

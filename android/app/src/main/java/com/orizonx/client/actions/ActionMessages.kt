@@ -24,4 +24,5 @@ object ActionMessages {
     fun usbEject(drive: String): JSONObject = id("usb.eject").put("drive", drive)
     fun contextPress(buttonId: String): JSONObject = id("context.press").put("button", buttonId)
     fun contextLang(lang: Lang): JSONObject = id("context.lang").put("lang", lang.wire)
+    fun claudeFocus(): JSONObject = id("claude.focus")
 }

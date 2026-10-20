@@ -33,6 +33,11 @@ class ActionMessagesTest {
     }
 
     @Test
+    fun claudeFocus() {
+        assertEquals("""{"id":"claude.focus"}""", wire(ActionMessages.claudeFocus()))
+    }
+
+    @Test
     fun contextLang() {
         assertEquals("""{"id":"context.lang","lang":"en"}""", wire(ActionMessages.contextLang(Lang.EN)))
         assertEquals("""{"id":"context.lang","lang":"fr"}""", wire(ActionMessages.contextLang(Lang.FR)))

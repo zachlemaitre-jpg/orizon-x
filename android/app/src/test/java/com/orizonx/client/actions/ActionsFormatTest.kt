@@ -95,6 +95,7 @@ class ActionsFormatTest {
         assertEquals("La clé est utilisée, ferme les fichiers ouverts", ActionsFormat.notice("usb_busy", Lang.FR))
         assertEquals("Impossible d'éjecter la clé", ActionsFormat.notice("usb_failed", Lang.FR))
         assertEquals("Windows refuse de changer cette radio", ActionsFormat.notice("radio_denied", Lang.FR))
+        assertEquals("Claude n'est pas lancé sur le PC", ActionsFormat.notice("claude_not_running", Lang.FR))
         assertEquals("Action impossible", ActionsFormat.notice("action_failed", Lang.FR))
         assertEquals("Action impossible", ActionsFormat.notice("something_new", Lang.FR))
     }
