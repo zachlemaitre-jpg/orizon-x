@@ -42,7 +42,7 @@ from actions.browser_url import host_of
 _log = logging.getLogger("orizonx.actions.app_icons")
 
 ICON_SIZE = 96
-SITE_PROFILES = frozenset({"canva", "figma"})
+SITE_PROFILES = frozenset({"canva", "figma", "claude_web", "chatgpt", "gemini"})
 FETCH_TIMEOUT_S = 3.0
 FETCH_MAX_BYTES = 512 * 1024
 DISK_VALID_S = 7 * 24 * 3600.0

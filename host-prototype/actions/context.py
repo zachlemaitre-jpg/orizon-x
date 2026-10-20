@@ -38,6 +38,7 @@ _log = logging.getLogger("orizonx.actions.context")
 PRESS_ID = "context.press"
 LANG_ID = "context.lang"
 ACTION_FAILED = "action_failed"
+UI_NOT_FOUND = "claude_ui_not_found"
 TABS_PAGE_LABELS = {"en": "Tabs", "fr": "Onglets"}
 _TAB_BUTTON = re.compile(r"^tab\.(\d+)$")
 
@@ -45,7 +46,8 @@ _TAB_BUTTON = re.compile(r"^tab\.(\d+)$")
 class ContextProvider:
     def __init__(self, tracker: Any = None, send_shortcut: Optional[Callable[[str], bool]] = None,
                  log: Optional[Callable[[str], None]] = None, lang: str = context_profiles.DEFAULT_LANG,
-                 url_reader: Any = None, icons: Any = None, tabs_reader: Any = None) -> None:
+                 url_reader: Any = None, icons: Any = None, tabs_reader: Any = None,
+                 uia_invoker: Optional[Callable[[int, tuple], bool]] = None) -> None:
         self.lang = context_profiles.normalize_lang(lang)
         self._tracker = tracker if tracker is not None else ForegroundTracker()
         self._send_shortcut = send_shortcut or keys.send_shortcut
@@ -54,6 +56,8 @@ class ContextProvider:
         self._url_reader = url_reader if url_reader is not None else BrowserUrlReader(uia, self._log)
         self._tabs_reader = tabs_reader if tabs_reader is not None else BrowserTabsReader(
             uia, self._log, send_shortcut=self._send_shortcut)
+        # buttons that invoke a UI Automation element of the window in front (the Claude app's sidebar); the shared layer
+        self._uia_invoker = uia_invoker if uia_invoker is not None else (lambda hwnd, names: uia.invoke_named(hwnd, names))
         self._sent_tabs: Optional[tuple] = None  # (window, [(rank, title)]) of the last snapshot with a tabs page
         self._icons = icons if icons is not None else AppIconProvider(log=self._log)
 
@@ -70,7 +74,7 @@ class ContextProvider:
             return {"available": False}
         profile, url = self._profile(app)
         pages = [{"id": page.id, "label": page.label(self.lang), "buttons": self._buttons(page)}
-                 for page in profile.pages]
+                 for page in profile.pages if page.shown]
         tabs_page = self._tabs_page(app, profile)
         if tabs_page is not None:
             pages = [tabs_page] + pages if profile.id == "browser" else pages + [tabs_page]
@@ -97,6 +101,18 @@ class ContextProvider:
                 "buttons": [{"id": f"tab.{t.index}", "icon": "tab", "label": t.title, "active": t.active}
                             for t in tabs]}
 
+    def _press_uia(self, app: Any, button: "context_profiles.Button") -> Optional[str]:
+        """A button that invokes an element of the window in front by name (the app is already in front: it is the one
+        whose profile matched). ``claude_ui_not_found`` when the element is not there."""
+        try:
+            if getattr(app, "hwnd", 0) and self._uia_invoker(app.hwnd, button.uia):
+                return None
+        except Exception as e:  # noqa: BLE001 - COM errors, a closing window...
+            self._log(f"context: {button.id!r} could not invoke {button.uia[0]!r}: {type(e).__name__}: {e}")
+            return UI_NOT_FOUND
+        self._log(f"context: {button.id!r}: no element named {button.uia[0]!r} in the window in front")
+        return UI_NOT_FOUND
+
     def _press_tab(self, app: Any, rank: int) -> None:
         sent = self._sent_tabs
         title = next((t for r, t in sent[1] if r == rank), None) if sent is not None else None
@@ -111,7 +127,7 @@ class ContextProvider:
         return self._icons.artwork_bytes(icon_id)
 
     def _buttons(self, page: context_profiles.Page) -> list:
-        return [{"id": b.id, "icon": b.icon, "label": b.label(self.lang)} for b in page.buttons]
+        return [{"id": b.id, "icon": b.icon, "label": b.label(self.lang)} for b in page.shown]
 
     def handle(self, action: dict) -> Optional[str]:
         if action.get("id") == LANG_ID:
@@ -136,6 +152,8 @@ class ContextProvider:
             self._log(f"context: button {button_id!r} ignored, it is not in the profile of the app in front "
                       f"({profile.id if app is not None else 'none'})")
             return None
+        if button.uia:
+            return self._press_uia(app, button)
         try:
             sent = self._send_shortcut(button.shortcut)
         except ValueError as e:

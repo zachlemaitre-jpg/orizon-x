@@ -103,7 +103,8 @@ class TableTest(unittest.TestCase):
         self.assertEqual([p.id for p in cp.PROFILES],
                          ["spotify", "powerpoint", "browser", "word", "excel", "vscode", "explorer",
                           "illustrator", "photoshop", "canva", "figma",
-                          "premiere", "aftereffects", "indesign", "lightroom", "generic"])
+                          "premiere", "aftereffects", "indesign", "lightroom",
+                          "claude_app", "claude_web", "chatgpt", "gemini", "generic"])
 
     def test_each_page_has_one_to_eight_buttons_with_unique_ids(self):
         seen = set()
@@ -111,12 +112,12 @@ class TableTest(unittest.TestCase):
             with self.subTest(profile.id):
                 self.assertTrue(1 <= len(profile.pages) <= 4)
                 self.assertEqual(len({p.id for p in profile.pages}), len(profile.pages))
-                self.assertEqual(profile.buttons, tuple(b for p in profile.pages for b in p.buttons))
+                self.assertEqual(profile.buttons, tuple(b for p in profile.pages for b in p.shown))
                 self.assertEqual(len({b.id for b in profile.buttons}), len(profile.buttons))
                 for page in profile.pages:
                     self.assertTrue(1 <= len(page.buttons) <= 8, page.id)
                 for b in profile.buttons:
-                    self.assertTrue(b.id and b.icon and b.labels["fr"] and b.shortcut)
+                    self.assertTrue(b.id and b.icon and b.labels["fr"] and (b.shortcut or b.uia))
                     self.assertNotIn(b.id, seen)
                     seen.add(b.id)
 
@@ -129,6 +130,8 @@ class TableTest(unittest.TestCase):
         scan = lambda ch: {"-": 0xBD, "=": 0xBB, "/": 0xBF, "`": 0xC0}.get(ch, -1)  # noqa: E731
         for profile in cp.PROFILES:
             for b in profile.buttons:
+                if b.uia:  # invokes a UI Automation element instead of pressing a shortcut
+                    continue
                 with self.subTest(profile.id + "/" + b.id):
                     self.assertTrue(keys.parse_shortcut(b.shortcut, scan))
 
@@ -563,10 +566,15 @@ class ContextProviderTest(unittest.TestCase):
                 "canva": ("Canva.exe", "Cls"), "figma": ("Figma.exe", "Cls"),
                 "premiere": ("Adobe Premiere Pro.exe", "Cls"), "aftereffects": ("AfterFX.exe", "Cls"),
                 "indesign": ("InDesign.exe", "Cls"), "lightroom": ("Lightroom.exe", "Cls"),
+                "claude_app": ("claude.exe", "Cls"), "chatgpt": ("ChatGPT.exe", "Cls"),
                 "generic": ("notepad.exe", "Cls")}
         for profile in cp.PROFILES:
+            if profile.id not in exes:  # the web profiles are picked by URL: see test_actions_ai_profiles
+                continue
             self.tracker.app = app(*exes[profile.id])
             for b in profile.buttons:
+                if b.uia:  # invoked, not pressed: see test_actions_ai_profiles
+                    continue
                 with self.subTest(b.id):
                     self.sent.clear()
                     self.assertIsNone(self.provider.handle({"id": "context.press", "button": b.id}))

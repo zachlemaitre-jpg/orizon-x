@@ -42,6 +42,8 @@ ICON_NAMES = frozenset({
     "precompose", "solid", "keyframes", "go_start", "go_end", "keyframe_prev", "keyframe_next", "render",
     "rect_frame", "place", "preview", "grid", "loupe", "develop", "compare", "spot", "pick", "reject", "unflag",
     "star", "auto", "copy_settings", "paste_settings", "before_after", "fullscreen",
+    # Claude, ChatGPT, Gemini chat page (spec 2026-10-20 ai-profiles §4); "search" already exists
+    "chat_new", "sidebar", "copy_reply", "copy_code", "input_focus", "stop",
     # browser tabs page (spec 2026-10-19 browser-tabs)
     "tab",
 })
@@ -53,10 +55,16 @@ DEFAULT_APP_NAME = {"en": "App", "fr": "Application"}
 
 @dataclass(frozen=True)
 class Button:
+    """A button of the bar. It presses ``shortcut`` (actions.keys syntax) or, when ``uia`` is given, invokes the element
+    of the window in front whose accessible name is one of those names (the first that exists). ``hidden``: shipped but
+    not offered, because its action is not known reliably yet; it is left out of the snapshot and ``context.press``
+    refuses it (the ids of the hidden buttons are listed in the spec's notes)."""
     id: str
     icon: str
     labels: dict  # {"en": ..., "fr": ...}
-    shortcut: str
+    shortcut: str = ""
+    uia: tuple = ()
+    hidden: bool = False
 
     def label(self, lang: str) -> str:
         return self.labels.get(lang) or self.labels[DEFAULT_LANG]
@@ -67,6 +75,11 @@ class Page:
     id: str
     labels: dict  # {"en": ..., "fr": ...}
     buttons: tuple
+
+    @property
+    def shown(self) -> tuple:
+        """The buttons that are offered (not hidden)."""
+        return tuple(b for b in self.buttons if not b.hidden)
 
     def label(self, lang: str) -> str:
         return self.labels.get(lang) or self.labels[DEFAULT_LANG]
@@ -81,8 +94,8 @@ class Profile:
 
     @property
     def buttons(self) -> tuple:
-        """Every button of every page, in order."""
-        return tuple(b for page in self.pages for b in page.buttons)
+        """Every button that is offered, of every page, in order (``context.press`` checks a button against it)."""
+        return tuple(b for page in self.pages for b in page.shown)
 
 
 MAX_PAGES = 4
@@ -91,6 +104,20 @@ MAX_BUTTONS_PER_PAGE = 8
 
 def _b(id: str, icon: str, en: str, fr: str, shortcut: str) -> Button:
     return Button(id, icon, {"en": en, "fr": fr}, shortcut)
+
+
+def _u(id: str, icon: str, en: str, fr: str, *names: str) -> Button:
+    """A button that invokes a UI Automation element of the window in front, by accessible name."""
+    return Button(id, icon, {"en": en, "fr": fr}, uia=tuple(names))
+
+
+def _h(id: str, icon: str, en: str, fr: str) -> Button:
+    """A button shipped hidden: its shortcut is still to be checked."""
+    return Button(id, icon, {"en": en, "fr": fr}, hidden=True)
+
+
+def _chat(*buttons: Button) -> Page:
+    return _page("chat", "Chat", "Chat", *buttons)
 
 
 def _page(id: str, en: str, fr: str, *buttons: Button) -> Page:
@@ -422,6 +449,51 @@ PROFILES = (
             _b("lr.fullscreen", "fullscreen", "Fullscreen", "Plein écran", "F"),
         ),
     )),
+    # Claude, ChatGPT, Gemini (spec 2026-10-20 ai-profiles). The Claude app is driven through its sidebar buttons (names
+    # read on the real window, French UI; the English names are the app's usual ones, to be confirmed). Buttons whose
+    # shortcut is "to check" are hidden: cl.app.input, cl.web.new/search/sidebar/input, gem.search/sidebar/copy_reply/input.
+    Profile("claude_app", ("claude.exe",), (
+        _chat(
+            _u("cl.app.new", "chat_new", "New chat", "Nouvelle discussion", "Nouveau", "New"),
+            _u("cl.app.search", "search", "Search", "Rechercher", "Rechercher", "Search"),
+            _u("cl.app.sidebar", "sidebar", "Sidebar", "Barre latérale", "Masquer la barre latérale",
+               "Afficher la barre latérale", "Hide sidebar", "Show sidebar"),
+            _h("cl.app.input", "input_focus", "Input", "Zone de saisie"),
+            _b("cl.app.stop", "stop", "Stop", "Arrêter", "Esc"),
+        ),
+    )),
+    Profile("claude_web", (), (
+        _chat(
+            _h("cl.web.new", "chat_new", "New chat", "Nouvelle discussion"),
+            _h("cl.web.search", "search", "Search", "Rechercher"),
+            _h("cl.web.sidebar", "sidebar", "Sidebar", "Barre latérale"),
+            _h("cl.web.input", "input_focus", "Input", "Zone de saisie"),
+            _b("cl.web.stop", "stop", "Stop", "Arrêter", "Esc"),
+        ),
+    )),
+    Profile("chatgpt", ("chatgpt.exe",), (
+        _chat(
+            _b("gpt.new", "chat_new", "New chat", "Nouvelle discussion", "Ctrl+Shift+O"),
+            _b("gpt.search", "search", "Search", "Rechercher", "Ctrl+K"),
+            _b("gpt.sidebar", "sidebar", "Sidebar", "Barre latérale", "Ctrl+Shift+S"),
+            _b("gpt.copy_reply", "copy_reply", "Copy reply", "Copier la réponse", "Ctrl+Shift+C"),
+            # Ctrl+Shift+; : sent by the POSITION of the key (VK_OEM_1, the ; key of a US keyboard), like VS Code's OEM
+            # keys: ChatGPT binds the key, whereas the character would be Ctrl+Shift+Shift+... on an AZERTY keyboard.
+            _b("gpt.copy_code", "copy_code", "Copy code", "Copier le code", "Ctrl+Shift+OEM_1"),
+            _b("gpt.input", "input_focus", "Input", "Zone de saisie", "Shift+Esc"),
+            _b("gpt.stop", "stop", "Stop", "Arrêter", "Esc"),
+        ),
+    )),
+    Profile("gemini", (), (
+        _chat(
+            _b("gem.new", "chat_new", "New chat", "Nouvelle discussion", "Ctrl+Shift+O"),
+            _h("gem.search", "search", "Search", "Rechercher"),
+            _h("gem.sidebar", "sidebar", "Sidebar", "Barre latérale"),
+            _h("gem.copy_reply", "copy_reply", "Copy reply", "Copier la réponse"),
+            _h("gem.input", "input_focus", "Input", "Zone de saisie"),
+            _b("gem.stop", "stop", "Stop", "Arrêter", "Esc"),
+        ),
+    )),
     _single("generic", (), (
         _b("gen.copy", "copy", "Copy", "Copier", "Ctrl+C"),
         _b("gen.paste", "paste", "Paste", "Coller", "Ctrl+V"),
@@ -435,11 +507,16 @@ PROFILES = (
 _GENERIC = PROFILES[-1]
 _BY_ID = {p.id: p for p in PROFILES}
 _WEB_TITLES = ("canva", "figma")  # profile ids that a browser window title can pick (the id is the word looked for)
+# (domain, profile id, subdomains allowed): the tabs of a browser that these hosts pick, before any title rule. Gemini is
+# exactly gemini.google.com: the rest of google.com stays the browser.
+_WEB_HOSTS = (("claude.ai", "claude_web", True), ("chatgpt.com", "chatgpt", True),
+              ("chat.openai.com", "chatgpt", False), ("gemini.google.com", "gemini", False))
 
 _FIXED_NAMES = {
     "spotify": "Spotify", "powerpoint": "PowerPoint", "word": "Word", "excel": "Excel", "vscode": "VS Code",
     "illustrator": "Illustrator", "photoshop": "Photoshop", "canva": "Canva", "figma": "Figma",
     "premiere": "Premiere Pro", "aftereffects": "After Effects", "indesign": "InDesign", "lightroom": "Lightroom",
+    "claude_app": "Claude", "claude_web": "Claude", "chatgpt": "ChatGPT", "gemini": "Gemini",
 }
 _NAMES_BY_LANG = {  # the names that vary with the language
     "explorer": {"en": "Explorer", "fr": "Explorateur"},
@@ -476,6 +553,9 @@ def match(app: Optional[ForegroundApp], url: Optional[str] = None) -> Profile:
                 title = app.title.lower()
                 for web_id in _WEB_TITLES:
                     if host_matches(host, web_id + ".com"):
+                        return _BY_ID[web_id]
+                for domain, web_id, subdomains in _WEB_HOSTS:
+                    if host == domain or (subdomains and host_matches(host, domain)):
                         return _BY_ID[web_id]
                 for web_id in _WEB_TITLES:
                     if web_id in title:

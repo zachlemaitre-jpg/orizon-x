@@ -37,6 +37,18 @@ Règles :
 - **Boutons UIA** (app Claude) : un bouton de profil peut avoir une action UIA (`invoke_named` avec des noms FR/EN) au lieu d'un raccourci. Le PC met l'app au premier plan si besoin, puis invoque l'élément. Les noms se cherchent dans l'arbre réel, en lecture seule, sans rien invoquer.
 - **Ids des boutons** : préfixés `cl.`, `gpt.` et `gem.`. Les variantes app/web de Claude sont deux profils distincts : `claude_app` et `claude_web`.
 
+### Notes d'implémentation (PC, 2026-10-20)
+
+- **Boutons livrés masqués** (donnée `hidden` du profil : absents de l'instantané, refusés par `context.press`), à valider ou retirer à l'essai réel :
+  - Claude (app) : `cl.app.input` (Zone de saisie) ;
+  - Claude (claude.ai) : `cl.web.new`, `cl.web.search`, `cl.web.sidebar`, `cl.web.input` (seul `cl.web.stop`, Échap, est livré) ;
+  - Gemini : `gem.search`, `gem.sidebar`, `gem.copy_reply`, `gem.input` (livrés : `gem.new`, `gem.stop`).
+- **Boutons livrés** : Claude (app) : Nouvelle discussion, Rechercher, Barre latérale (UIA) et Arrêter (Échap) ; ChatGPT : les sept boutons ; Gemini : Nouvelle discussion et Arrêter ; claude.ai : Arrêter.
+- **Noms UIA relevés en lecture seule dans l'app Claude (interface française)** : « Nouveau » (Button, Invoke), « Rechercher » (Button, Invoke), « Masquer la barre latérale » (Button, Invoke ; l'état replié porte sans doute « Afficher la barre latérale », non vérifié). Les noms anglais « New », « Search », « Hide sidebar » / « Show sidebar » sont des suppositions à confirmer. La bascule « Panneau des sessions » existe aussi, mais c'est celle du panneau de droite, pas de la barre latérale.
+- Un bouton UIA invoque l'élément de la fenêtre au premier plan (l'app Claude l'est déjà) ; s'il est introuvable, la notice `claude_ui_not_found` est envoyée.
+- `Ctrl+Maj+;` de ChatGPT est envoyé par la position de la touche (`Ctrl+Shift+OEM_1`, la touche `;` d'un clavier US).
+- Les favicons des profils de site (`claude.ai`, `chatgpt.com`, `gemini.google.com`) servent d'icône de la barre, comme pour Canva et Figma.
+
 ## 4. Appareil
 
 - Nouvelles icônes `ctx_<nom>` (tracés Material Icons, licence Apache-2.0) :
