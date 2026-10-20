@@ -33,6 +33,11 @@ panel labels and values are kept, never conversation text. Each session also car
 (``InvokePattern``, never the mouse) the sidebar button of that name; ``claude.open {"title"}`` invokes the sidebar item
 with that title. Notice ``claude_ui_not_found`` when the app or the button cannot be found.
 
+``claude.show_usage`` / ``claude.show_context`` (the tablet's usage and Context blocks): bring the app to the front, then
+expand (``ExpandCollapsePattern``; neither element has an InvokePattern) the status-bar button "Utilisation : NN % de la
+limite de session…" that opens the plan usage-limits popover, or show the right rail (its toggle) and expand the "Contexte"
+card. ``usage.weekly``, readable only while that popover is open, is kept with its own ``weekly_seen_at`` after it closes.
+
 ``claude.focus``: brings the main window of the Claude app to the front (``Win32Focus``, injectable): the visible,
 unowned, titled top-level window of a ``claude.exe`` process; ``SW_RESTORE`` if minimised, ``SetForegroundWindow``, and on
 refusal an Alt key press and release (``keybd_event``, the usual workaround) and one more try. Returns the notice code
@@ -51,7 +56,8 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from actions.claude_app_ui import SIDEBAR_BUTTONS, ClaudeAppReader, ClaudeAppUi
+from actions.claude_app_ui import (CONTEXT_HEADER, RAIL_TOGGLES, SIDEBAR_BUTTONS, USAGE_BUTTON, ClaudeAppReader,
+                                   ClaudeAppUi)
 
 _log = logging.getLogger("orizonx.actions.claude_code")
 
@@ -71,6 +77,8 @@ UI_NOT_FOUND = "claude_ui_not_found"
 ACTION_FAILED = "action_failed"
 FOCUS_ID = "claude.focus"
 WATCH_ID = "claude.watch"
+SHOW_USAGE_ID = "claude.show_usage"
+SHOW_CONTEXT_ID = "claude.show_context"
 OPEN_ID = "claude.open"
 APP_READ_S = 3.0
 APP_WARMUP_RETRY_S = 1.0
@@ -384,6 +392,7 @@ class ClaudeCodeProvider:
         self._watch = False
         self._app: Optional[dict] = None
         self._app_next = 0.0
+        self._weekly: "Optional[tuple[dict, int]]" = None  # the last weekly limit seen, with when
 
     # --- provider API ---
 
@@ -422,6 +431,16 @@ class ClaudeCodeProvider:
             return None
         if action_id in SIDEBAR_BUTTONS:
             return self._invoke(SIDEBAR_BUTTONS[action_id])
+        if action_id == SHOW_USAGE_ID:
+            return self._show(lambda hwnd: self._ui.expand(hwnd, USAGE_BUTTON), "usage limits button")
+        if action_id == SHOW_CONTEXT_ID:
+            def show_context(hwnd: int) -> bool:
+                try:  # the right rail holds the card; not an error if its toggle is not there
+                    self._ui.ensure_on(hwnd, RAIL_TOGGLES)
+                except Exception as e:  # noqa: BLE001
+                    self._note("rail toggle", e)
+                return self._ui.expand(hwnd, CONTEXT_HEADER, 1.0)
+            return self._show(show_context, "context card")
         if action_id == OPEN_ID:
             title = action.get("title")
             if not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE:
@@ -598,6 +617,18 @@ class ClaudeCodeProvider:
         self._log(f"claude: no sidebar button {names[0]!r} found in the Claude app")
         return UI_NOT_FOUND
 
+    def _show(self, action: Callable[[int], bool], what: str) -> Optional[str]:
+        hwnd, code = self._focus_window()
+        if code is not None:
+            return code
+        try:
+            if action(hwnd):
+                return None
+        except Exception as e:  # noqa: BLE001
+            self._note("show", e)
+        self._log(f"claude: {what} not found in the Claude app")
+        return UI_NOT_FOUND
+
     # --- app panel ---
 
     def _read_app(self) -> Optional[dict]:
@@ -615,13 +646,24 @@ class ClaudeCodeProvider:
             if not hwnd:
                 self._app = None
                 return None
-            self._app = self._app_reader.read(hwnd, self._win32.window_title(hwnd), now)
+            self._app = self._keep_weekly(self._app_reader.read(hwnd, self._win32.window_title(hwnd), now))
             if self._app is None and self._app_reader.warming_up:
                 self._app_next = now + APP_WARMUP_RETRY_S
         except Exception as e:  # noqa: BLE001
             self._note("app panel", e)
             self._app = None
         return self._app
+
+    def _keep_weekly(self, app: Optional[dict]) -> Optional[dict]:
+        """The weekly limit is only readable while the usage popover is open: keep the last one seen, with its own time."""
+        if app is None:
+            return None
+        usage = app["usage"]
+        if usage.get("weekly"):
+            self._weekly = (usage["weekly"], usage["weekly_seen_at"])
+        elif self._weekly is not None:
+            usage["weekly"], usage["weekly_seen_at"] = self._weekly
+        return app
 
     def _note(self, what: str, error: Exception) -> None:
         kind = (what, type(error).__name__)

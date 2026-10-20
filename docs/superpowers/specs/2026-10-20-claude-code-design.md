@@ -142,7 +142,7 @@ Règles :
   {"session_title":"…","seen_at":<epoch s>,
    "context":{"percent":61,"used":"598.5k","window":"1M","items":[{"name":"Messages","tokens":"540.3k","percent":"54,0 %"},…],"deferred":[{"name","tokens"}]},
    "connected":1,"results":["…"],"changes":{"added":2140,"removed":9},
-   "usage":{"session":{"percent":42,"reset":"1 h 12 min"},"weekly":{"percent":34,"reset":"sam. 11:00"}|null},
+   "usage":{"session":{"percent":42,"reset":"1 h 12 min"},"weekly":{"percent":34,"reset":"sam. 11:00"}|null,"weekly_seen_at":<epoch s>|null},
    "tasks":[{"name":"…","status":"running"|"completed","elapsed":"3min 46s"}],"tasks_done":3}
   ```
   - `tasks` : la carte « Tâches en arrière-plan » (EN « Background tasks »), au plus 10 lignes de 120 caractères ; `running` si la ligne a son bouton « Arrêter cette tâche », sinon `completed`. `tasks_done` : son résumé « N terminé(s) ». Les deux n'existent que si la carte est présente ; `tasks` vaut `[]` quand elle ne liste rien.
@@ -154,6 +154,8 @@ Règles :
   - `{"id":"claude.new"}`, `{"id":"claude.artifacts"}`, `{"id":"claude.customize"}`, `{"id":"claude.more"}` : elles mettent l'app au premier plan puis invoquent le bouton de la barre latérale qui porte ce nom (FR : « Nouveau », « Artéfacts », « Personnalisation », « Plus » ; EN : « New », « Artifacts », « Customize », « More ») par `InvokePattern` ;
   - `{"id":"claude.open","title":"…"}` : elle met l'app au premier plan puis invoque l'élément de la barre latérale portant ce titre.
   - En cas d'échec, la notice `claude_ui_not_found` est envoyée.
+  - `{"id":"claude.show_usage"}` et `{"id":"claude.show_context"}` (un tap sur les blocs Limites et Contexte de la tablette) : l'app est mise au premier plan, puis, par `ExpandCollapsePattern` (ni l'un ni l'autre n'a d'`InvokePattern`, constaté en lecture seule), le bouton de la barre d'état « Utilisation : NN % de la limite de session… » est déplié (il ouvre la fenêtre des limites d'utilisation du forfait), ou le panneau de droite est affiché (bouton à bascule « Panneau des sessions ») et la carte « Contexte » dépliée (son en-tête est un bouton `ExpandCollapse`). Les noms se reconnaissent par motif (le pourcentage change), en français et en anglais.
+  - La limite hebdomadaire n'est lisible que pendant que la fenêtre des limites est ouverte : le PC garde la dernière valeur avec `usage.weekly_seen_at` (secondes depuis l'époque, `null` si jamais vue) et la renvoie après la fermeture de la fenêtre.
 
 ### 7.3 Disposition de l'appareil (maquette de l'utilisateur, sans couleurs, style verre de l'app)
 

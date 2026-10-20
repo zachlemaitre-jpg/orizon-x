@@ -12,7 +12,7 @@ once (``walk``: the elements in document order as ``Node(depth, role, name)``), 
 
 The ``app`` object: ``{"session_title", "seen_at", "context": {"percent", "used", "window", "items": [{"name",
 "tokens", "percent"}], "deferred": [{"name", "tokens"}]} | None, "connected": int | None, "results": [file names],
-"changes": {"added", "removed"} | None, "usage": {"session": {"percent", "reset"} | None, "weekly": {...} | None},
+"changes": {"added", "removed"} | None, "usage": {"session": {"percent", "reset"} | None, "weekly": {...} | None, "weekly_seen_at": epoch s | None},
 "tasks": [{"name", "status": "running" | "completed", "elapsed"}], "tasks_done": int}``; the parts that are not found
 are ``None`` (``[]`` for the results). ``tasks`` (the "Background tasks" card, at most 10 rows) and ``tasks_done`` (its
 "N completed" summary) are present only when the card is. None when nothing of the panel is found.
@@ -49,6 +49,15 @@ CHANGES_GROUPS = ("modifications", "changes")
 CONNECTORS_PREFIXES = ("connecteurs", "connectors")
 TASKS_GROUPS = ("tâches en arrière-plan", "background tasks")
 MAX_TASKS = 10
+
+# Elements opened by the tablet's Context and usage blocks (read-only findings on the real tree, 2026-10-20):
+# * usage: the status-bar Button "Utilisation : 76 % de la limite de session et Réinitialisation dans 48 min" supports
+#   ExpandCollapsePattern only (no Invoke): expanding it opens the plan usage-limits popover;
+# * context: the card header Button "Contexte" supports ExpandCollapsePattern only (no Invoke); the card lives in the
+#   right rail, which the toggle button "Panneau des sessions" (TogglePattern) shows or hides.
+USAGE_BUTTON = r"^(?:Utilisation|Usage)\s*:"
+CONTEXT_HEADER = r"^(?:Contexte|Context)$"
+RAIL_TOGGLES = ("Panneau des sessions", "Session panel", "Sessions panel")
 
 _SPACES = re.compile(r"[\s  ]+")
 _TOKENS = re.compile(r"^\d[\d.,]*\s?[kKmM]?$")
@@ -176,15 +185,29 @@ def _parse_changes(sub: "list[Node]") -> "Optional[dict]":
     return {"added": added or 0, "removed": removed or 0}
 
 
-def _parse_usage(nodes: "list[Node]") -> dict:
+def _parse_usage(nodes: "list[Node]", seen_at: int = 0) -> dict:
+    """The session and weekly limits. Either one line carries it all ("Utilisation : 44 % de la limite de session et
+    Réinitialisation dans 1 h 10 min", the status-bar button) or, in the usage popover, a label ("Hebdomadaire · tous les
+    modèles") is followed by its own texts ("34 % utilisé", "Réinitialisation sam. 11:00")."""
     session = weekly = None
-    for n in nodes:
+    for i, n in enumerate(nodes):
         if n.role not in ("Button", "Text", "Group", "Other") or len(n.name) > 200:
             continue
         name = norm(n.name)
         if not _USAGE_START.match(name):
             continue
-        pct, reset = _PCT.search(name), _RESET.search(name)
+        parts = [name]
+        if not (_PCT.search(name) and _RESET.search(name)):
+            for m in nodes[i + 1:i + 7]:
+                text = norm(m.name)
+                if m.role not in ("Text", "Button", "Group", "Other") or not text or len(text) > 200:
+                    continue
+                if _USAGE_START.match(text):
+                    break  # the next label
+                parts.append(text)
+        joined = " ".join(parts)
+        pct = _PCT.search(joined)
+        reset = next((r for r in (_RESET.search(p) for p in parts) if r), None)
         if not (pct and reset):
             continue
         entry = {"percent": int(pct.group(1)), "reset": reset.group(1).strip()[:40]}
@@ -193,7 +216,7 @@ def _parse_usage(nodes: "list[Node]") -> dict:
             weekly = weekly or entry
         elif "session" in low:
             session = session or entry
-    return {"session": session, "weekly": weekly}
+    return {"session": session, "weekly": weekly, "weekly_seen_at": int(seen_at) if weekly else None}
 
 
 def _parse_tasks(sub: "list[Node]") -> dict:
@@ -254,7 +277,7 @@ def parse_panel(title: str, nodes: "list[Node]", seen_at: int) -> "Optional[dict
     results = _subtree(nodes, RESULTS_GROUPS)
     changes = _subtree(nodes, CHANGES_GROUPS)
     tasks = _subtree(nodes, TASKS_GROUPS)
-    usage = _parse_usage(nodes)
+    usage = _parse_usage(nodes, seen_at)
     parsed_context = _parse_context(context) if context is not None else {}
     connected = None
     if connectors:
@@ -294,6 +317,14 @@ class ClaudeAppUi:
 
     def invoke(self, hwnd: int, names: "tuple[str, ...]") -> bool:
         return bool(self._get().invoke_named(hwnd, names))
+
+    def expand(self, hwnd: int, pattern: str, wait_s: float = 0.0) -> bool:
+        """Expand (or invoke) the first Button whose name matches ``pattern``, waiting up to ``wait_s`` for it to exist."""
+        return bool(self._get().expand_matching(hwnd, pattern, wait_s))
+
+    def ensure_on(self, hwnd: int, names: "tuple[str, ...]") -> bool:
+        """Turn on the toggle button of that name if it is off; True if the button exists."""
+        return bool(self._get().toggle_on_named(hwnd, names))
 
 
 class ClaudeAppReader:

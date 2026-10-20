@@ -118,7 +118,8 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(app["connected"], 1)
         self.assertEqual(app["results"], ["plan.md", "src/app.py"])
         self.assertEqual(app["changes"], {"added": 2198, "removed": 9})
-        self.assertEqual(app["usage"], {"session": {"percent": 44, "reset": "1 h 10 min"}, "weekly": None})
+        self.assertEqual(app["usage"], {"session": {"percent": 44, "reset": "1 h 10 min"}, "weekly": None,
+                                        "weekly_seen_at": None})
         self.assertNotIn("tasks", app)
         json.dumps(app)
 
@@ -133,6 +134,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(app["changes"], {"added": 1204, "removed": 31})
         self.assertEqual(app["usage"]["session"], {"percent": 12, "reset": "3 h"})
         self.assertEqual(app["usage"]["weekly"], {"percent": 34, "reset": "Sat 11:00"})
+        self.assertEqual(app["usage"]["weekly_seen_at"], 5)
 
     def test_no_conversation_text_leaks(self):
         app = parse_panel("A title", fr_tree(), 1)
@@ -165,7 +167,7 @@ class ParseTest(unittest.TestCase):
         app = parse_panel("t", nodes, 1)
         self.assertEqual(app["results"], ["only.txt"])
         self.assertIsNone(app["context"])
-        self.assertEqual(app["usage"], {"session": None, "weekly": None})
+        self.assertEqual(app["usage"], {"session": None, "weekly": None, "weekly_seen_at": None})
 
     def test_changes_from_plus_and_minus_texts(self):
         nodes = filler(100) + [G(33, "Modifications"), T(36, "+2140"), T(36, "−9")]
@@ -218,6 +220,45 @@ class ParseTest(unittest.TestCase):
 
     def test_session_title_is_clipped(self):
         self.assertEqual(len(parse_panel("t" * 500, fr_tree(), 1)["session_title"]), 120)
+
+
+class PopoverTest(unittest.TestCase):
+    """The usage popover makes the weekly line readable: one line, or a label followed by its own texts."""
+
+    def parse(self, nodes):
+        anchor = [G(33, "Résultats"), T(38, "keep.txt"), Node(30, "Other", "")]  # so that an app object exists
+        return parse_panel("t", filler(100) + anchor + nodes, 77)["usage"]
+
+    def test_label_then_value_texts(self):
+        usage = self.parse([T(40, "Limite de session"), T(40, f"44{NB}% utilisé"), T(40, "Réinitialisation dans 1 h 10 min"),
+                            T(40, "Hebdomadaire · tous les modèles"), T(40, f"34{NB}% utilisé"),
+                            T(40, "Réinitialisation sam. 11:00")])
+        self.assertEqual(usage["session"], {"percent": 44, "reset": "1 h 10 min"})
+        self.assertEqual(usage["weekly"], {"percent": 34, "reset": "sam. 11:00"})
+        self.assertEqual(usage["weekly_seen_at"], 77)
+
+    def test_one_composite_line(self):
+        usage = self.parse([B(40, f"Hebdomadaire · tous les modèles 34{NB}% utilisé Réinitialisation sam. 11:00")])
+        self.assertEqual(usage["weekly"], {"percent": 34, "reset": "sam. 11:00"})
+
+    def test_english_popover(self):
+        usage = self.parse([T(40, "Weekly · all models"), T(40, "21% used"), T(40, "Resets Sat 11:00 AM")])
+        self.assertEqual(usage["weekly"], {"percent": 21, "reset": "Sat 11:00 AM"})
+
+    def test_a_label_without_its_values_is_not_a_limit(self):
+        usage = self.parse([T(40, "Hebdomadaire · tous les modèles"), T(40, "Limite de session"),
+                            T(40, f"44{NB}% utilisé"), T(40, "Réinitialisation dans 3 min")])
+        self.assertIsNone(usage["weekly"])  # the next label ends the weekly lines: the 44 % is the session's
+        self.assertEqual(usage["session"], {"percent": 44, "reset": "3 min"})
+
+    def test_values_far_below_a_label_are_not_picked_up(self):
+        usage = self.parse([T(40, "Hebdomadaire")] + [T(40, "x")] * 10 + [T(40, f"50{NB}%"), T(40, "Réinitialisation demain")])
+        self.assertIsNone(usage["weekly"])
+
+    def test_the_status_button_line_is_still_the_session_limit(self):
+        usage = self.parse([B(32, f"Utilisation : 76{NB}% de la limite de session et Réinitialisation dans 48 min")])
+        self.assertEqual(usage["session"], {"percent": 76, "reset": "48 min"})
+        self.assertIsNone(usage["weekly"])
 
 
 class TasksTest(unittest.TestCase):
@@ -291,6 +332,20 @@ class FakeUi:
         if self.error:
             raise self.error
         return self.invoke_result
+
+    def expand(self, hwnd, pattern, wait_s=0.0):
+        self.expanded = getattr(self, "expanded", [])
+        self.expanded.append((hwnd, pattern, wait_s))
+        if self.error:
+            raise self.error
+        return self.invoke_result
+
+    def ensure_on(self, hwnd, names):
+        self.toggled = getattr(self, "toggled", [])
+        self.toggled.append((hwnd, names))
+        if getattr(self, "toggle_error", None):
+            raise self.toggle_error
+        return True
 
 
 class ReaderTest(unittest.TestCase):
@@ -625,6 +680,85 @@ class GitStatsTest(unittest.TestCase):
     def test_the_default_runner_survives_a_missing_git_and_a_bad_folder(self):
         self.assertIsNone(claude_code.default_git_runner(["git-does-not-exist-xyz", "--version"], os.getcwd(), 2))
 
+
+
+class ShowViewsTest(ProviderBase):
+    def test_the_patterns_match_the_real_names_and_nothing_else(self):
+        import re
+        usage = re.compile(ui_mod.USAGE_BUTTON, re.I)
+        for name in ("Utilisation : 76 % de la limite de session et Réinitialisation dans 48 min",
+                     "Utilisation: 4 % de la limite de session", "Usage: 12% of session limit and Resets in 3 h"):
+            self.assertTrue(usage.search(name), name)
+        for name in ("Utilisation du CPU", "Limite d'utilisation de session bientôt atteinte", "Compacter la session"):
+            self.assertFalse(usage.search(name), name)
+        context = re.compile(ui_mod.CONTEXT_HEADER, re.I)
+        for name in ("Contexte", "Context"):
+            self.assertTrue(context.search(name))
+        for name in ("Contexte détaillé", "Réorganiser la carte Contexte", "Environnement"):
+            self.assertFalse(context.search(name))
+
+    def test_show_usage_brings_the_app_up_then_expands_the_usage_button(self):
+        order = []
+        self.win32.set_foreground = lambda h: order.append("front") or True
+        self.ui.expand = lambda h, p, w=0.0: order.append(("expand", h, p)) or True
+        self.assertIsNone(self.act("claude.show_usage"))
+        self.assertEqual(order, ["front", ("expand", 77, ui_mod.USAGE_BUTTON)])
+
+    def test_show_context_shows_the_rail_then_expands_the_context_card(self):
+        self.assertIsNone(self.act("claude.show_context"))
+        self.assertEqual(self.ui.toggled, [(77, ui_mod.RAIL_TOGGLES)])
+        self.assertEqual(self.ui.expanded, [(77, ui_mod.CONTEXT_HEADER, 1.0)])  # waits a moment for the rail to appear
+        self.assertIn("Panneau des sessions", ui_mod.RAIL_TOGGLES)
+
+    def test_a_missing_rail_toggle_is_not_fatal_for_the_context(self):
+        self.ui.toggle_error = OSError("no toggle")
+        self.assertIsNone(self.act("claude.show_context"))
+        self.assertEqual(len(self.ui.expanded), 1)
+
+    def test_not_found_is_the_ui_notice_and_not_running_the_other(self):
+        self.ui.invoke_result = False
+        self.assertEqual(self.act("claude.show_usage"), "claude_ui_not_found")
+        self.assertEqual(self.act("claude.show_context"), "claude_ui_not_found")
+        self.ui.error = OSError("COM")
+        self.assertEqual(self.act("claude.show_usage"), "claude_ui_not_found")
+        self.win32.hwnd = 0
+        self.ui.error = None
+        self.assertEqual(self.act("claude.show_usage"), "claude_not_running")
+        self.assertEqual(self.act("claude.show_context"), "claude_not_running")
+
+    def test_nothing_is_clicked_with_the_mouse(self):
+        self.act("claude.show_usage")
+        self.assertEqual(self.ui.invoked, [])  # only the pattern-based calls above
+
+
+class WeeklyKeptTest(ProviderBase):
+    POPOVER = [T(40, "Hebdomadaire · tous les modèles"), T(40, f"34{NB}% utilisé"), T(40, "Réinitialisation sam. 11:00")]
+
+    def read(self, nodes):
+        self.ui.nodes = filler(120) + nodes + [B(32, f"Utilisation : 44{NB}% de la limite de session et Réinitialisation dans 1 h")]
+        self.clock.t += 4
+        return self.provider.snapshot()["app"]["usage"]
+
+    def test_the_last_weekly_limit_survives_the_popover_closing(self):
+        self.act("claude.watch", open=True)
+        first = self.read(self.POPOVER)
+        seen = int(self.clock.t)
+        self.assertEqual(first["weekly"], {"percent": 34, "reset": "sam. 11:00"})
+        self.assertEqual(first["weekly_seen_at"], seen)
+        later = self.read([])
+        self.assertEqual(later["weekly"], {"percent": 34, "reset": "sam. 11:00"})
+        self.assertEqual(later["weekly_seen_at"], seen)  # its own time, not the time of this read
+        self.assertEqual(later["session"]["percent"], 44)
+        newer = self.read([T(40, "Hebdomadaire · tous les modèles"), T(40, f"36{NB}% utilisé"),
+                           T(40, "Réinitialisation sam. 11:00")])
+        self.assertEqual(newer["weekly"]["percent"], 36)
+        self.assertEqual(newer["weekly_seen_at"], int(self.clock.t))
+
+    def test_nothing_is_invented_before_a_weekly_limit_was_ever_seen(self):
+        self.act("claude.watch", open=True)
+        usage = self.read([])
+        self.assertIsNone(usage["weekly"])
+        self.assertIsNone(usage["weekly_seen_at"])
 
 
 class ChangesTest(ProviderBase):

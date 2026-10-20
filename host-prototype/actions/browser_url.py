@@ -163,6 +163,87 @@ class UiaLayer:
                 pass
         return False
 
+    def _find(self, hwnd: int, accept: Any, cap: int = 20000, budget_s: float = 2.5) -> Any:
+        """The first element (document order) for which ``accept(element, role, name)`` is true, or None."""
+        import time
+        walker = self._uia.RawViewWalker
+        deadline = time.monotonic() + budget_s
+        stack = [self._uia.ElementFromHandle(hwnd)]
+        seen = 0
+        while stack and seen < cap and time.monotonic() < deadline:
+            element = stack.pop()
+            seen += 1
+            try:
+                name = " ".join((element.CurrentName or "").split())
+            except Exception:  # noqa: BLE001
+                name = ""
+            if name and accept(element, self._role(element), name):
+                return element
+            try:
+                child, kids = walker.GetFirstChildElement(element), []
+                while child:
+                    kids.append(child)
+                    child = walker.GetNextSiblingElement(child)
+                stack.extend(reversed(kids))
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
+    def _has(self, element: Any, prop: int) -> bool:
+        try:
+            return bool(element.GetCurrentPropertyValue(prop))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def expand_matching(self, hwnd: int, pattern: str, wait_s: float = 0.0) -> bool:
+        """ExpandCollapsePattern.Expand() on the first Button whose name matches ``pattern`` (Invoke if it has no
+        ExpandCollapse), unless it is already expanded. True when such a button exists, waiting up to ``wait_s``."""
+        import re
+        import time
+        self._ensure()
+        client = self._client
+        rx = re.compile(pattern, re.IGNORECASE)
+
+        def accept(element, role, name):
+            return (role == "Button" and rx.search(name) is not None
+                    and (self._has(element, client.UIA_IsExpandCollapsePatternAvailablePropertyId)
+                         or self._has(element, client.UIA_IsInvokePatternAvailablePropertyId)))
+
+        deadline = time.monotonic() + wait_s
+        while True:
+            element = self._find(hwnd, accept)
+            if element is not None:
+                break
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.15)
+        if self._has(element, client.UIA_IsExpandCollapsePatternAvailablePropertyId):
+            pat = element.GetCurrentPattern(client.UIA_ExpandCollapsePatternId).QueryInterface(
+                client.IUIAutomationExpandCollapsePattern)
+            if pat.CurrentExpandCollapseState == 0:  # ExpandCollapseState_Collapsed
+                pat.Expand()
+        else:
+            element.GetCurrentPattern(client.UIA_InvokePatternId).QueryInterface(client.IUIAutomationInvokePattern).Invoke()
+        return True
+
+    def toggle_on_named(self, hwnd: int, names: tuple) -> bool:
+        """TogglePattern.Toggle() on the toggle button of one of these names when it is off (state 0). True if found."""
+        self._ensure()
+        client = self._client
+        wanted = {n.strip().lower() for n in names}
+
+        def accept(element, role, name):
+            return (role == "Button" and name.lower() in wanted
+                    and self._has(element, client.UIA_IsTogglePatternAvailablePropertyId))
+
+        element = self._find(hwnd, accept)
+        if element is None:
+            return False
+        pat = element.GetCurrentPattern(client.UIA_TogglePatternId).QueryInterface(client.IUIAutomationTogglePattern)
+        if pat.CurrentToggleState == 0:  # ToggleState_Off
+            pat.Toggle()
+        return True
+
     def select_tab(self, item: Any) -> None:
         """SelectionItemPattern.Select() on a TabItem element given by list_tabs: switches to that tab."""
         self._ensure()
