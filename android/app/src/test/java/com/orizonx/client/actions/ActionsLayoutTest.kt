@@ -18,64 +18,7 @@ import org.junit.Test
 class ActionsLayoutTest {
     private fun layout(vararg order: BlockId, hidden: Set<BlockId> = emptySet()) = ActionsLayout(order.toList(), hidden)
 
-    // --- Reordering ---------------------------------------------------------------------------------------------------
-
     private val abcd = layout(CLOCK, SOUND, WIFI, USB)
-
-    @Test
-    fun movingForwardPutsTheBlockWhereTheTargetWas() {
-        assertEquals(listOf(SOUND, WIFI, CLOCK, USB), abcd.move(CLOCK, WIFI).order)
-        assertEquals(listOf(SOUND, WIFI, USB, CLOCK), abcd.move(CLOCK, USB).order)
-        assertEquals(listOf(CLOCK, WIFI, SOUND, USB), abcd.move(SOUND, WIFI).order)
-    }
-
-    @Test
-    fun movingBackwardPutsTheBlockBeforeTheTarget() {
-        assertEquals(listOf(CLOCK, USB, SOUND, WIFI), abcd.move(USB, SOUND).order)
-        assertEquals(listOf(USB, CLOCK, SOUND, WIFI), abcd.move(USB, CLOCK).order)
-        assertEquals(listOf(SOUND, CLOCK, WIFI, USB), abcd.move(SOUND, CLOCK).order)
-    }
-
-    @Test
-    fun droppingOnItselfChangesNothing() {
-        assertEquals(abcd, abcd.move(WIFI, WIFI))
-    }
-
-    @Test
-    fun unknownTargetsChangeNothing() {
-        assertEquals(abcd, abcd.move(CLOCK, BRIGHTNESS))
-        assertEquals(abcd, abcd.move(BRIGHTNESS, CLOCK))
-    }
-
-    @Test
-    fun movingKeepsEveryBlockExactlyOnce() {
-        var l = ActionsLayout.DEFAULT
-        l = l.move(USB, CLOCK).move(CLOCK, AIRPLANE).move(WIFI, NOW_PLAYING).move(BRIGHTNESS, USB)
-        assertEquals(BlockId.entries.toSet(), l.order.toSet())
-        assertEquals(BlockId.entries.size, l.order.size)
-    }
-
-    @Test
-    fun droppingBelowTheLastRowMovesToTheEnd() {
-        assertEquals(listOf(SOUND, WIFI, USB, CLOCK), abcd.moveToEnd(CLOCK).order)
-        assertEquals(abcd, abcd.moveToEnd(USB))
-        assertEquals(abcd, abcd.moveToEnd(BRIGHTNESS))
-    }
-
-    @Test
-    fun hiddenOrAbsentBlocksBetweenAreStepped() {
-        // WIFI is hidden and SOUND is absent: they still count in the order, so the drop lands where the target sits.
-        val l = layout(CLOCK, WIFI, SOUND, BRIGHTNESS, USB, hidden = setOf(WIFI))
-        val present = setOf(CLOCK, WIFI, BRIGHTNESS, USB) // no SOUND
-        assertEquals(listOf(CLOCK, BRIGHTNESS, USB), l.visible(present))
-        val moved = l.move(CLOCK, BRIGHTNESS)
-        assertEquals(listOf(WIFI, SOUND, BRIGHTNESS, CLOCK, USB), moved.order)
-        assertEquals(listOf(BRIGHTNESS, CLOCK, USB), moved.visible(present))
-        assertEquals(setOf(WIFI), moved.hidden)
-        // And backward over the same two.
-        val back = moved.move(USB, WIFI)
-        assertEquals(listOf(USB, WIFI, SOUND, BRIGHTNESS, CLOCK), back.order)
-    }
 
     // --- Hiding and restoring ------------------------------------------------------------------------------------------
 
@@ -93,13 +36,6 @@ class ActionsLayoutTest {
         assertEquals(listOf(CLOCK, SOUND, USB), back.visible(abcd.order.toSet()))
         assertEquals(listOf(WIFI), back.hiddenInOrder())
         assertEquals(abcd, abcd.hide(SOUND).restore(SOUND))
-    }
-
-    @Test
-    fun otherBlocksCanBeMovedWhileOneIsHidden() {
-        val l = abcd.hide(USB).move(CLOCK, SOUND).restore(USB)
-        assertEquals(listOf(SOUND, CLOCK, WIFI, USB), l.order)
-        assertTrue(USB !in l.hidden)
     }
 
     @Test
@@ -193,7 +129,7 @@ class ActionsLayoutTest {
         val prefs = FakePrefs()
         val store = ActionsLayoutStore(prefs)
         assertEquals(ActionsLayout.DEFAULT, store.load())
-        val l = ActionsLayout.DEFAULT.move(USB, CLOCK).hide(WIFI)
+        val l = ActionsLayout.DEFAULT.resize(CLOCK, Span(6, 2)).withPlacements(GridOrientation.PORTRAIT, listOf(BlockGrid.Placement(USB, 0, 1, 3, 1))).hide(WIFI)
         store.save(l)
         assertEquals(l.toJson(), prefs.values["actions_layout"])
         assertEquals(l, ActionsLayoutStore(prefs).load())
@@ -217,11 +153,11 @@ class ActionsLayoutTest {
     }
 
     @Test
-    fun aChosenSizeIsUsedWithinTheLimits() {
-        val l = ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(5, 2))
-        assertEquals(Span(5, 2), l.sizeOf(BRIGHTNESS, 11))
-        assertEquals(Span(6, 2), ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(40, 9)).sizeOf(BRIGHTNESS, 11)) // max
-        assertEquals(Span(2, 1), ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(0, -3)).sizeOf(BRIGHTNESS, 11)) // min
+    fun aChosenSizeHasNoMaximumButTheMinimumAndTheColumns() {
+        val l = ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(9, 5))
+        assertEquals(Span(9, 5), l.sizeOf(BRIGHTNESS, 11))
+        assertEquals(Span(2, 1), ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(0, -3)).sizeOf(BRIGHTNESS, 11)) // minimum
+        assertEquals(Span(11, 30), ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(40, 30)).sizeOf(BRIGHTNESS, 11)) // columns only
     }
 
     @Test
@@ -230,30 +166,27 @@ class ActionsLayoutTest {
         assertEquals(Span(8, 3), l.sizeOf(CLOCK, 11))
         assertEquals(Span(2, 3), l.sizeOf(CLOCK, 2))
         assertEquals(Span(7, 3), l.sizeOf(CLOCK, 7))
-        // The stored size is untouched by the narrower grid.
-        assertEquals(Span(8, 3), l.sizes[CLOCK])
+        assertEquals(Span(8, 3), l.sizes[CLOCK]) // the stored size is untouched by a narrower grid
     }
 
     @Test
-    fun theMediaKeysRaiseTheSoundMinimum() {
+    fun theSoundMinimumDoesNotChangeWithTheMediaKeys() {
         val small = ActionsLayout.DEFAULT.resize(SOUND, Span(2, 1))
         assertEquals(Span(2, 1), small.sizeOf(SOUND, 11))
-        assertEquals(Span(3, 2), small.sizeOf(SOUND, 11, soundKeys = true))
-        assertEquals(Span(3, 2), ActionsLayout.DEFAULT.resize(SOUND, Span(1, 1), soundKeys = true).sizes[SOUND])
+        assertEquals(Span(2, 1), small.sizeOf(SOUND, 11, soundKeys = true))
+        assertEquals(Span(2, 1), ActionsLayout.DEFAULT.resize(SOUND, Span(1, 1)).sizes[SOUND])
     }
 
     @Test
-    fun resizingStepsCellByCellWithinMinAndMax() {
+    fun resizingStepsCellByCellFromTheMinimumUp() {
         val start = Span(3, 1)
         assertEquals(Span(4, 2), BRIGHTNESS.resized(start, +1, +1))
         assertEquals(Span(2, 1), BRIGHTNESS.resized(start, -1, 0))
         assertEquals(Span(2, 1), BRIGHTNESS.resized(start, -5, -5)) // minimum
-        assertEquals(Span(6, 2), BRIGHTNESS.resized(start, +9, +9)) // maximum
+        assertEquals(Span(12, 10), BRIGHTNESS.resized(start, +9, +9)) // no maximum
         assertEquals(start, BRIGHTNESS.resized(start, 0, 0))
         assertEquals(Span(1, 1), WIFI.resized(Span(1, 1), -1, -1))
         assertEquals(Span(2, 2), WIFI.resized(Span(1, 1), +1, +1))
-        assertEquals(Span(2, 2), WIFI.resized(Span(2, 2), +1, +1))
-        assertEquals(Span(3, 2), SOUND.resized(Span(3, 2), -1, -1, soundKeys = true))
     }
 
     @Test
@@ -277,12 +210,12 @@ class ActionsLayoutTest {
     }
 
     @Test
-    fun badSizesAreDroppedAndOutOfRangeOnesClamped() {
+    fun badSizesAreDroppedAndSmallOnesRaisedToTheMinimum() {
         val l = ActionsLayout.fromJson(
-            """{"sizes":{"clock":[99,99],"wifi":[0,1],"sound":[3],"usb":[3,2,1],"brightness":["a",1],"nope":[1,1],
+            """{"sizes":{"clock":[20,30],"wifi":[0,1],"sound":[3],"usb":[3,2,1],"brightness":["a",1],"nope":[1,1],
                 "bluetooth":[1.0,1],"airplane":[-4,2],"now_playing":[1,1]}}""",
         )
-        assertEquals(Span(8, 3), l.sizes[CLOCK]) // clamped to the maximum
+        assertEquals(Span(20, 30), l.sizes[CLOCK]) // no maximum
         assertNull(l.sizes[WIFI]) // zero
         assertNull(l.sizes[SOUND]) // one number
         assertNull(l.sizes[USB]) // three numbers
@@ -290,5 +223,78 @@ class ActionsLayoutTest {
         assertEquals(Span(1, 1), l.sizes[BLUETOOTH])
         assertNull(l.sizes[AIRPLANE]) // negative
         assertEquals(Span(3, 2), l.sizes[NOW_PLAYING]) // raised to the minimum
+    }
+
+    // --- Positions (free placement, one set per orientation) -----------------------------------------------------------------------
+
+    private val tile = BlockGrid.Placement(WIFI, 5, 3, 1, 1)
+    private val wide = BlockGrid.Placement(USB, 0, 5, 3, 1)
+
+    @Test
+    fun placementsAreRememberedPerOrientation() {
+        val l = ActionsLayout.DEFAULT.withPlacements(GridOrientation.LANDSCAPE, listOf(tile, wide))
+        assertEquals(mapOf(WIFI to CellPos(5, 3), USB to CellPos(0, 5)), l.positionsFor(GridOrientation.LANDSCAPE))
+        assertTrue(l.positionsFor(GridOrientation.PORTRAIT).isEmpty())
+    }
+
+    @Test
+    fun savingAgainKeepsTheCellsOfBlocksNotCurrentlyShown() {
+        val first = ActionsLayout.DEFAULT.withPlacements(GridOrientation.LANDSCAPE, listOf(tile, wide))
+        val second = first.withPlacements(GridOrientation.LANDSCAPE, listOf(BlockGrid.Placement(WIFI, 7, 0, 1, 1)))
+        assertEquals(CellPos(7, 0), second.positionsFor(GridOrientation.LANDSCAPE)[WIFI])
+        assertEquals(CellPos(0, 5), second.positionsFor(GridOrientation.LANDSCAPE)[USB]) // hidden or absent now: kept
+    }
+
+    @Test
+    fun hidingKeepsTheSavedCellForWhenItComesBack() {
+        val l = ActionsLayout.DEFAULT.withPlacements(GridOrientation.LANDSCAPE, listOf(tile)).hide(WIFI).restore(WIFI)
+        assertEquals(CellPos(5, 3), l.positionsFor(GridOrientation.LANDSCAPE)[WIFI])
+        assertTrue(WIFI !in l.hidden)
+    }
+
+    @Test
+    fun positionsRoundTripThroughTheJson() {
+        val l = ActionsLayout.DEFAULT
+            .withPlacements(GridOrientation.LANDSCAPE, listOf(tile, wide))
+            .withPlacements(GridOrientation.PORTRAIT, listOf(BlockGrid.Placement(CLOCK, 0, 4, 2, 2)))
+            .resize(CLOCK, Span(2, 2))
+        assertEquals(l, ActionsLayout.fromJson(l.toJson()))
+        val pos = JSONObject(l.toJson()).getJSONObject("pos")
+        assertEquals(5, pos.getJSONObject("landscape").getJSONArray("wifi").getInt(0))
+        assertEquals(4, pos.getJSONObject("portrait").getJSONArray("clock").getInt(1))
+    }
+
+    @Test
+    fun oldJsonWithoutPositionsIsSeededFromTheOrder() {
+        val l = ActionsLayout.fromJson("""{"order":["usb","wifi","clock"],"hidden":[]}""")
+        assertTrue(l.positions.isEmpty())
+        // No saved cell: the planner packs the blocks in the saved order, as before.
+        val placed = GridPlanner.place(listOf(USB, WIFI, CLOCK), 11, BlockGrid.ROWS, { l.sizeOf(it, 11) }, l.positionsFor(GridOrientation.LANDSCAPE))
+        assertEquals(BlockGrid.Placement(USB, 0, 0, 3, 1), placed[0])
+        assertEquals(BlockGrid.Placement(WIFI, 3, 0, 1, 1), placed[1])
+        assertEquals(BlockGrid.Placement(CLOCK, 4, 0, 4, 2), placed[2])
+    }
+
+    @Test
+    fun badPositionsAreDroppedAndTheRestKept() {
+        val l = ActionsLayout.fromJson(
+            """{"pos":{"landscape":{"wifi":[3,2],"clock":[-1,0],"usb":[1],"sound":["a",1],"nope":[0,0],"bluetooth":[1.0,4],"airplane":[1,2,3]},
+                "tablet":{"wifi":[0,0]},"portrait":5}}""",
+        )
+        assertEquals(mapOf(WIFI to CellPos(3, 2), BLUETOOTH to CellPos(1, 4)), l.positionsFor(GridOrientation.LANDSCAPE))
+        assertTrue(l.positionsFor(GridOrientation.PORTRAIT).isEmpty())
+        assertTrue(ActionsLayout.fromJson("""{"pos":null}""").positions.isEmpty())
+        assertTrue(ActionsLayout.fromJson("""{"pos":[1]}""").positions.isEmpty())
+    }
+
+    @Test
+    fun aRelocatedPositionDoesNotLoseTheOthers() {
+        // The saved cell of the tile is now on the clock; the sound block's cell still holds.
+        val l = ActionsLayout.DEFAULT
+            .withPlacements(GridOrientation.LANDSCAPE, listOf(BlockGrid.Placement(CLOCK, 0, 0, 4, 2), BlockGrid.Placement(WIFI, 1, 1, 1, 1), BlockGrid.Placement(SOUND, 6, 4, 3, 1)))
+            .resize(CLOCK, Span(4, 2))
+        val placed = GridPlanner.place(listOf(CLOCK, WIFI, SOUND), 11, BlockGrid.ROWS, { l.sizeOf(it, 11) }, l.positionsFor(GridOrientation.LANDSCAPE))
+        assertEquals(BlockGrid.Placement(SOUND, 6, 4, 3, 1), placed[2])
+        assertEquals(BlockGrid.Placement(WIFI, 4, 0, 1, 1), placed[1])
     }
 }

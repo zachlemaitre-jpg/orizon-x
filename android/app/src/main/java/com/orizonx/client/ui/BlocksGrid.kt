@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -62,6 +65,9 @@ import com.orizonx.client.actions.ActionsBlocks
 import com.orizonx.client.actions.ActionsLayout
 import com.orizonx.client.actions.ActionsState
 import com.orizonx.client.actions.BlockGrid
+import com.orizonx.client.actions.CellPos
+import com.orizonx.client.actions.GridOrientation
+import com.orizonx.client.actions.GridPlanner
 import com.orizonx.client.actions.BlockId
 import com.orizonx.client.actions.ControlRules
 import com.orizonx.client.actions.Span
@@ -75,10 +81,9 @@ private val BlockShape = RoundedCornerShape(20.dp)
 private val CellShape = RoundedCornerShape(14.dp)
 private const val LONG_PRESS_MS = 500L
 private const val MOVE_ANIMATION_MS = 200
-private const val MOVE_COOLDOWN_MS = 250L
 
 /** Name of a block, for the "+ Add" list and the hide badge. */
-private fun blockName(id: BlockId): S = when (id) {
+internal fun blockName(id: BlockId): S = when (id) {
     BlockId.CLOCK -> S.BLOCK_CLOCK
     BlockId.SOUND -> S.BLOCK_SOUND
     BlockId.NOW_PLAYING -> S.BLOCK_NOW_PLAYING
@@ -90,11 +95,16 @@ private fun blockName(id: BlockId): S = when (id) {
 }
 
 /**
- * The main Actions screen: the blocks the PC offers, in the user's [layout], on a grid of square cells (about 120 dp) that
- * scrolls vertically. A long press outside a block's controls starts the edit mode ([editing]). There the cells of the
- * grid are drawn behind the blocks (plus one empty row to drop into), blocks can be dragged onto one another to swap
- * places, resized from their bottom-right corner, hidden with their badge, and brought back from the "+ Add" list. The
- * layout is changed only through [onLayout]; [haptic] gives the feedback of entering, moving, resizing and hiding.
+ * The main Actions screen: the blocks the PC offers, on a grid of square cells that is always [BlockGrid.ROWS] rows tall:
+ * the cells are sized to fill the height between the header and the context bar, and as many columns as fit in the width
+ * are used (the grid is centred). Blocks that do not fit in 6 rows make it scroll.
+ *
+ * Blocks stay on the exact cells the user put them on (no gravity, gaps are fine; see [GridPlanner]). A long press outside
+ * a block's controls starts the edit mode ([editing]). There the cells are drawn behind the blocks; a block can be dragged
+ * (the cells under its top-left corner light up, red when the spot is not free) and dropped on a free spot, or it springs
+ * back; resized from its bottom-right corner (it only grows into free cells, down to its minimum); and hidden with its badge.
+ * The buttons of the edit mode live in the screen's header, so nothing here moves when it starts or ends. The layout is
+ * changed only through [onLayout]; [haptic] gives the feedback.
  */
 @Composable
 internal fun BlocksBody(
@@ -102,6 +112,7 @@ internal fun BlocksBody(
     c: Controls,
     layout: ActionsLayout,
     onLayout: (ActionsLayout) -> Unit,
+    landscape: Boolean,
     editing: Boolean,
     onEditing: (Boolean) -> Unit,
     haptic: (HapticFeedbackType) -> Unit,
@@ -110,24 +121,25 @@ internal fun BlocksBody(
     val present = ActionsBlocks.present(state)
     val visible = layout.visible(present)
     var dragging by remember { mutableStateOf<BlockId?>(null) }
-    Column(
-        modifier.verticalScroll(rememberScrollState(), enabled = dragging == null),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        if (editing) {
-            EditBar(layout.hiddenInOrder(), onRestore = { onLayout(layout.restore(it)) }, onDone = { onEditing(false) })
-        }
-        if (visible.isEmpty() && !editing) {
-            // Everything is hidden or missing: keep a way back into the edit mode.
-            if (layout.hidden.isNotEmpty()) {
-                Pill(tr(S.BLOCKS_ADD), selected = false, onClick = { c.tap(); onEditing(true) })
+    BoxWithConstraints(modifier.clipToBounds()) {
+        val density = LocalDensity.current
+        val metrics = BlockGrid.metrics(
+            width = with(density) { maxWidth.toPx() },
+            height = with(density) { maxHeight.toPx() },
+            gap = with(density) { GridGap.toPx() },
+        )
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), enabled = dragging == null)) {
+            if (visible.isEmpty() && !editing) {
+                // Everything is hidden or missing: keep a way back into the edit mode.
+                if (layout.hidden.isNotEmpty()) {
+                    Pill(tr(S.BLOCKS_ADD), selected = false, onClick = { c.tap(); onEditing(true) })
+                }
+            } else {
+                CompositionLocalProvider(LocalGlassPadding provides 14.dp) {
+                    Grid(state, c, layout, onLayout, visible, metrics, GridOrientation.of(landscape), editing, onEditing, haptic, dragging) { dragging = it }
+                }
             }
-        } else {
-            CompositionLocalProvider(LocalGlassPadding provides 14.dp) {
-                Grid(state, c, layout, onLayout, visible, editing, onEditing, haptic, dragging) { dragging = it }
-            }
         }
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -138,62 +150,71 @@ private fun Grid(
     layout: ActionsLayout,
     onLayout: (ActionsLayout) -> Unit,
     visible: List<BlockId>,
+    metrics: BlockGrid.Metrics,
+    orientation: GridOrientation,
     editing: Boolean,
     onEditing: (Boolean) -> Unit,
     haptic: (HapticFeedbackType) -> Unit,
     dragging: BlockId?,
     setDragging: (BlockId?) -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val density = LocalDensity.current
-        val columns = BlockGrid.columnsFor(maxWidth.value)
-        val keys = ControlRules.soundKeys(state)
-        // Square cells: the width shared by the columns, the same side for the rows.
-        val side = (maxWidth - GridGap * (columns - 1)) / columns
-        val placements = BlockGrid.place(visible, columns) { layout.sizeOf(it, columns, keys) }
-        val rows = BlockGrid.rowCount(placements)
-        // The edit mode shows one more, empty, row at the bottom.
-        val shownRows = if (editing) rows + 1 else rows
-        val gridHeight = if (shownRows == 0) 0.dp else side * shownRows + GridGap * (shownRows - 1)
+    val density = LocalDensity.current
+    val columns = metrics.columns
+    val keys = ControlRules.soundKeys(state)
+    val cell = metrics.side
+    val gap = with(density) { GridGap.toPx() }
+    val pitch = cell + gap
+    val placements = GridPlanner.place(visible, columns, BlockGrid.ROWS, { layout.sizeOf(it, columns, keys) }, layout.positionsFor(orientation))
+    // Always at least the 6 rows; more only when some block had to go below them.
+    val rows = maxOf(BlockGrid.ROWS, BlockGrid.rowCount(placements))
+    val gridWidth = with(density) { (cell * columns + gap * (columns - 1)).toDp() }
+    val gridHeight = with(density) { (cell * rows + gap * (rows - 1)).toDp() }
+    fun position(p: BlockGrid.Placement) = IntOffset((pitch * p.col).roundToInt(), (pitch * p.row).roundToInt())
+    fun size(p: BlockGrid.Placement) = IntSize((cell * p.cols + gap * (p.cols - 1)).roundToInt(), (cell * p.rows + gap * (p.rows - 1)).roundToInt())
 
-        val cell = with(density) { side.toPx() }
-        val gap = with(density) { GridGap.toPx() }
-        val pitch = cell + gap
-        fun position(p: BlockGrid.Placement) = IntOffset((pitch * p.col).roundToInt(), (pitch * p.row).roundToInt())
-        fun size(p: BlockGrid.Placement) = IntSize((cell * p.cols + gap * (p.cols - 1)).roundToInt(), (cell * p.rows + gap * (p.rows - 1)).roundToInt())
+    val latestPlacements by rememberUpdatedState(placements)
+    val latestLayout by rememberUpdatedState(layout)
+    var dragPos by remember { mutableStateOf(IntOffset.Zero) }
+    var resizeStart by remember { mutableStateOf(Span(1, 1)) }
+    var resizeAcc by remember { mutableStateOf(Offset.Zero) }
 
-        val latestPlacements by rememberUpdatedState(placements)
-        val latestLayout by rememberUpdatedState(layout)
-        var dragPos by remember { mutableStateOf(IntOffset.Zero) }
-        var lastMove by remember { mutableStateOf(0L) }
-        var resizeStart by remember { mutableStateOf(Span(1, 1)) }
-        var resizeAcc by remember { mutableStateOf(Offset.Zero) }
+    // Where the held block would land: the cell nearest to its top-left corner.
+    fun targetCell(): CellPos = CellPos((dragPos.x / pitch).roundToInt(), (dragPos.y / pitch).roundToInt())
 
-        // The cells the dragged block would take if it were dropped now.
-        val highlighted: Set<Pair<Int, Int>> = remember(placements, dragging) {
-            val p = placements.firstOrNull { it.id == dragging }
-            if (p == null) {
-                emptySet()
-            } else {
-                buildSet { for (r in p.row until p.row + p.rows) for (cc in p.col until p.col + p.cols) add(cc to r) }
+    // The cells under the held block, and whether it may be dropped there.
+    val held = placements.firstOrNull { it.id == dragging }
+    val heldCell = if (held != null) targetCell() else null
+    val heldFree = held != null && heldCell != null &&
+        GridPlanner.isFree(placements, held.id, heldCell.x, heldCell.y, held.cols, held.rows, columns, BlockGrid.ROWS)
+    val highlighted: Set<Pair<Int, Int>> = if (held != null && heldCell != null) {
+        buildSet {
+            for (r in heldCell.y until heldCell.y + held.rows) for (cc in heldCell.x until heldCell.x + held.cols) {
+                if (cc in 0 until columns && r in 0 until rows) add(cc to r)
             }
         }
+    } else {
+        emptySet()
+    }
 
+    Box(Modifier.fillMaxWidth().height(gridHeight), contentAlignment = Alignment.TopCenter) {
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(gridHeight)
+                .width(gridWidth)
+                .fillMaxHeight()
                 .then(
                     if (editing) {
                         Modifier.drawBehind {
                             val radius = CornerRadius(14.dp.toPx())
                             val stroke = Stroke(1.dp.toPx())
-                            for (r in 0 until shownRows) {
+                            val bad = Color(0xFFE5484D)
+                            for (r in 0 until rows) {
                                 for (col in 0 until columns) {
                                     val topLeft = Offset(pitch * col, pitch * r)
                                     val on = (col to r) in highlighted
-                                    drawRoundRect(Color.White.copy(alpha = if (on) 0.14f else 0.07f), topLeft, Size(cell, cell), radius)
-                                    drawRoundRect(Color.White.copy(alpha = if (on) 0.6f else 0.2f), topLeft, Size(cell, cell), radius, style = stroke)
+                                    val fill = if (!on) Color.White.copy(alpha = 0.07f) else if (heldFree) Color.White.copy(alpha = 0.16f) else bad.copy(alpha = 0.28f)
+                                    val line = if (!on) Color.White.copy(alpha = 0.2f) else if (heldFree) Color.White.copy(alpha = 0.65f) else bad.copy(alpha = 0.85f)
+                                    drawRoundRect(fill, topLeft, Size(cell, cell), radius)
+                                    drawRoundRect(line, topLeft, Size(cell, cell), radius, style = stroke)
                                 }
                             }
                         }
@@ -223,38 +244,21 @@ private fun Grid(
                             setDragging(id)
                             dragPos = position(latestPlacements.first { it.id == id })
                         },
-                        onDrag = { delta ->
-                            dragPos += delta
-                            val me = latestPlacements.firstOrNull { it.id == id } ?: return@GridBlock
-                            val mySize = size(me)
-                            val centerX = dragPos.x + mySize.width / 2
-                            val centerY = dragPos.y + mySize.height / 2
-                            val now = System.currentTimeMillis()
-                            val over = latestPlacements.firstOrNull { other ->
-                                if (other.id == id) return@firstOrNull false
-                                val pos = position(other)
-                                val sz = size(other)
-                                centerX >= pos.x && centerX < pos.x + sz.width && centerY >= pos.y && centerY < pos.y + sz.height
-                            }
-                            // Below the last row of blocks: the block goes to the end of the order.
-                            val below = over == null && centerY >= pitch * BlockGrid.rowCount(latestPlacements)
-                            if (now - lastMove >= MOVE_COOLDOWN_MS) {
-                                val next = when {
-                                    over != null -> latestLayout.move(id, over.id)
-                                    below -> latestLayout.moveToEnd(id)
-                                    else -> latestLayout
-                                }
-                                if (next != latestLayout) {
-                                    lastMove = now
-                                    haptic(HapticFeedbackType.ContextClick)
-                                    onLayout(next)
-                                }
+                        onDrag = { delta -> dragPos += delta },
+                        onDragEnd = {
+                            val cellPos = targetCell()
+                            val spot = GridPlanner.drop(latestPlacements, id, cellPos.x, cellPos.y, columns, BlockGrid.ROWS)
+                            setDragging(null)
+                            if (spot != null) {
+                                // Free: it stays exactly there (and so does everything else). Otherwise it springs back.
+                                haptic(HapticFeedbackType.ContextClick)
+                                val moved = latestPlacements.map { if (it.id == id) it.copy(col = spot.x, row = spot.y) else it }
+                                onLayout(latestLayout.withPlacements(orientation, moved))
                             }
                         },
-                        onDragEnd = { setDragging(null) },
                         onHide = {
                             haptic(HapticFeedbackType.ContextClick)
-                            onLayout(latestLayout.hide(id))
+                            onLayout(latestLayout.withPlacements(orientation, latestPlacements).hide(id))
                         },
                         onResizeStart = {
                             val p = latestPlacements.first { it.id == id }
@@ -263,22 +267,19 @@ private fun Grid(
                         },
                         onResize = { amount ->
                             resizeAcc += amount
-                            val wanted = id.resized(
-                                resizeStart,
-                                (resizeAcc.x / pitch).roundToInt(),
-                                (resizeAcc.y / pitch).roundToInt(),
-                                keys,
-                            )
-                            val next = Span(wanted.cols.coerceAtMost(columns), wanted.rows)
-                            if (next != latestLayout.sizeOf(id, columns, keys)) {
+                            val wanted = id.resized(resizeStart, (resizeAcc.x / pitch).roundToInt(), (resizeAcc.y / pitch).roundToInt())
+                            // Grows only into free cells (it stops at other blocks and at the grid's edges), shrinks to its minimum.
+                            val next = GridPlanner.resize(latestPlacements, id, wanted, columns, BlockGrid.ROWS)
+                            val now = latestPlacements.first { it.id == id }
+                            if (next != Span(now.cols, now.rows)) {
                                 haptic(HapticFeedbackType.ContextClick)
-                                onLayout(latestLayout.resize(id, next, keys))
+                                onLayout(latestLayout.resize(id, next).withPlacements(orientation, latestPlacements))
                             }
                         },
                     ) { m ->
                         // The clock scales with its cell: big digits in a tall block, smaller in a one-row block.
                         val clockSp = min(((heightDp - 64f) / 1.2f).coerceIn(20f, 112f), widthDp / 4.1f)
-                        BlockContent(id, state, c, clockSp, m)
+                        BlockContent(id, state, c, clockSp, placement.cols, placement.rows, m)
                     }
                 }
             }
@@ -419,33 +420,6 @@ private fun GridBlock(
                 contentAlignment = Alignment.Center,
             ) {
                 BasicText("↘", style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold))
-            }
-        }
-    }
-}
-
-/** "+ Add" (only when something is hidden), opening the list of hidden blocks, and "Done". */
-@Composable
-private fun EditBar(hidden: List<BlockId>, onRestore: (BlockId) -> Unit, onDone: () -> Unit) {
-    var listOpen by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            if (hidden.isNotEmpty()) {
-                Pill(tr(S.BLOCKS_ADD), selected = listOpen, onClick = { listOpen = !listOpen })
-                Spacer(Modifier.size(10.dp))
-            }
-            Pill(tr(S.BLOCKS_DONE), selected = true, onClick = onDone)
-        }
-        if (listOpen && hidden.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.End) {
-                    for (id in hidden) {
-                        Pill(tr(blockName(id)), selected = false, onClick = {
-                            onRestore(id)
-                            if (hidden.size <= 1) listOpen = false
-                        })
-                    }
-                }
             }
         }
     }

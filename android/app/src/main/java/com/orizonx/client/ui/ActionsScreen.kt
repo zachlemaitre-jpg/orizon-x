@@ -93,6 +93,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.orizonx.client.R
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import com.orizonx.client.actions.ActionMessages
 import com.orizonx.client.actions.ActionsLayoutStore
 import com.orizonx.client.actions.ActionThrottle
@@ -111,6 +117,10 @@ import com.orizonx.client.actions.ContextBar
 import com.orizonx.client.actions.ContextButton
 import com.orizonx.client.actions.BlockId
 import com.orizonx.client.actions.ControlRules
+import com.orizonx.client.actions.SoundContent
+import com.orizonx.client.actions.SoundMode
+import com.orizonx.client.actions.UsbContent
+import com.orizonx.client.actions.UsbMode
 import com.orizonx.client.actions.KeyboardTopCards
 import com.orizonx.client.actions.ContextIcons
 import com.orizonx.client.actions.ContextPage
@@ -215,6 +225,8 @@ fun ActionsScreen(
     val layoutStore = remember { ActionsLayoutStore(appContext.getSharedPreferences("orizonx", Context.MODE_PRIVATE)) }
     var blocksLayout by remember { mutableStateOf(layoutStore.load()) }
     var editingBlocks by remember { mutableStateOf(false) }
+    var addListOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(editingBlocks) { if (!editingBlocks) addListOpen = false }
 
     val volumeThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.volumeSet(it)) } }
     val brightnessThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.brightnessSet(it)) } }
@@ -312,25 +324,52 @@ fun ActionsScreen(
                 Column(Modifier.fillMaxSize()) {
                     Column(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-                            LangPill(langPref, onLangPref)
-                            if (keyboardInfo != null) {
+                            if (editingBlocks) {
+                                // The edit mode's buttons take the place of the pills, in the same row: nothing below moves.
+                                Pill(tr(S.BLOCKS_DONE), selected = true, onClick = { tap(); editingBlocks = false })
+                                if (blocksLayout.hidden.isNotEmpty()) {
+                                    Spacer(Modifier.width(10.dp))
+                                    Box {
+                                        Pill(tr(S.BLOCKS_ADD), selected = addListOpen, onClick = { tap(); addListOpen = !addListOpen })
+                                        if (addListOpen) {
+                                            Popup(popupPositionProvider = BelowAnchor, onDismissRequest = { addListOpen = false }) {
+                                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    val hiddenNow = blocksLayout.hiddenInOrder()
+                                                    for (id in hiddenNow) {
+                                                        Pill(tr(blockName(id)), selected = false, onClick = {
+                                                            tap()
+                                                            blocksLayout = blocksLayout.restore(id)
+                                                            layoutStore.save(blocksLayout)
+                                                            if (hiddenNow.size <= 1) addListOpen = false
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.weight(1f))
+                            } else {
+                                LangPill(langPref, onLangPref)
+                                if (keyboardInfo != null) {
+                                    Spacer(Modifier.width(10.dp))
+                                    Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; gamepadOpen = false; claudeOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                                }
+                                if (state?.trackpad == true) {
+                                    Spacer(Modifier.width(10.dp))
+                                    Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; gamepadOpen = false; claudeOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
+                                }
+                                if (gamepadInfo != null) {
+                                    Spacer(Modifier.width(10.dp))
+                                    Pill(tr(S.GAMEPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; claudeOpen = false; gamepadOpen = true }, icon = R.drawable.ox_gamepad)
+                                }
+                                if (claudeInfo != null) {
+                                    Spacer(Modifier.width(10.dp))
+                                    Pill(tr(S.CLAUDE_CODE), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; gamepadOpen = false; claudeOpen = true }, icon = R.drawable.ox_claude_code)
+                                }
                                 Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.KEYBOARD), selected = false, onClick = { tap(); trackpadOpen = false; gamepadOpen = false; claudeOpen = false; keyboardOpen = true }, icon = R.drawable.ox_keyboard)
+                                Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
                             }
-                            if (state?.trackpad == true) {
-                                Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.TRACKPAD), selected = false, onClick = { tap(); keyboardOpen = false; gamepadOpen = false; claudeOpen = false; trackpadOpen = true }, icon = R.drawable.ox_trackpad)
-                            }
-                            if (gamepadInfo != null) {
-                                Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.GAMEPAD), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; claudeOpen = false; gamepadOpen = true }, icon = R.drawable.ox_gamepad)
-                            }
-                            if (claudeInfo != null) {
-                                Spacer(Modifier.width(10.dp))
-                                Pill(tr(S.CLAUDE_CODE), selected = false, onClick = { tap(); keyboardOpen = false; trackpadOpen = false; gamepadOpen = false; claudeOpen = true }, icon = R.drawable.ox_claude_code)
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Pill(tr(S.SWITCH_MODE), selected = false, onClick = { tap(); onSwitchMode() })
                         }
                         if (state == null) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -343,6 +382,7 @@ fun ActionsScreen(
                                     blocksLayout = it
                                     layoutStore.save(it)
                                 },
+                                landscape = landscape,
                                 editing = editingBlocks,
                                 onEditing = { editingBlocks = it },
                                 haptic = { haptics.performHapticFeedback(it) },
@@ -377,6 +417,12 @@ fun ActionsScreen(
 }
 
 private const val NOTICE_MS = 3000L
+
+/** Puts a popup just under the control it belongs to, left edges aligned. */
+private object BelowAnchor : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize) =
+        IntOffset(anchorBounds.left, anchorBounds.bottom + 8)
+}
 private const val SLIDER_HOLD_MS = 700L
 
 /** Everything a card needs to act: send, haptics, optimistic update and the slider throttles. */
@@ -927,10 +973,28 @@ private const val BATTERY_BODY_R = 9.22f
  * With [stretch] the card may be taller than its content: the keys / the slider row take the free space.
  */
 @Composable
-private fun SoundCard(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
+private fun SoundCard(
+    state: ActionsState,
+    c: Controls,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    stretch: Boolean = false,
+    mode: SoundMode = SoundMode.WITH_KEYS,
+) {
     val audio = state.audio
-    val keys = soundKeys(state)
+    // The media keys only show when the block is big enough for them (and when they belong to this block at all).
+    val keys = soundKeys(state) && (mode == SoundMode.WITH_KEYS || audio == null)
     val muted = audio?.muted == true
+    if (mode == SoundMode.SLIDER_ONLY && audio != null) {
+        // The smallest form: the volume slider alone (the speaker is only a picture, the mute button comes with more room).
+        GlassCard(modifier) {
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                Picto(volumeRes(audio), 28.dp, tint = if (muted) MuteRed else Color.White)
+                Spacer(Modifier.width(10.dp))
+                VolumeSlider(audio, c, Modifier.weight(1f))
+            }
+        }
+        return
+    }
     GlassCard(modifier) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Picto(
@@ -1113,30 +1177,30 @@ private fun AirplaneTile(plane: AirplaneState, c: Controls, modifier: Modifier) 
 
 /** The drives of the USB block, one chip each; it scrolls on its own when there are more than fit. */
 @Composable
-private fun UsbBlock(usb: List<UsbDrive>, c: Controls, modifier: Modifier) {
+private fun UsbBlock(usb: List<UsbDrive>, c: Controls, modifier: Modifier, mode: UsbMode) {
     Column(
         modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
     ) {
-        for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth())
+        for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth(), compact = mode == UsbMode.COMPACT)
     }
 }
 
 /** The content of one grid block, filling the cell it is given; [clockSp] sizes the clock for its cell. */
 @Composable
-internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp: Float, modifier: Modifier) {
+internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp: Float, cols: Int, rows: Int, modifier: Modifier) {
     when (id) {
         BlockId.CLOCK -> Box(modifier, contentAlignment = Alignment.Center) {
             // The clock takes its natural height inside its cell.
             Box(Modifier.wrapContentHeight(unbounded = true)) { ClockBlock(state.clock, state.battery, clockSp, (clockSp * 0.42f).coerceIn(12f, 22f)) }
         }
-        BlockId.SOUND -> SoundCard(state, c, modifier, stretch = true)
+        BlockId.SOUND -> SoundCard(state, c, modifier, stretch = true, mode = SoundContent.mode(cols, rows, soundKeys(state)))
         BlockId.NOW_PLAYING -> state.nowPlaying?.let { NowPlayingCard(it, c, modifier, stretch = true) }
         BlockId.BRIGHTNESS -> state.brightness?.let { BrightnessCard(it, c, modifier) }
         BlockId.WIFI -> state.wifi?.let { WifiTile(it, c, modifier) }
         BlockId.BLUETOOTH -> state.bluetooth?.let { BluetoothTile(it, c, modifier) }
         BlockId.AIRPLANE -> state.airplane?.let { AirplaneTile(it, c, modifier) }
-        BlockId.USB -> UsbBlock(state.usb, c, modifier)
+        BlockId.USB -> UsbBlock(state.usb, c, modifier, UsbContent.mode(cols))
     }
 }
 
@@ -1148,7 +1212,7 @@ private fun onOff(on: Boolean) = tr(if (on) S.STATE_ON else S.STATE_OFF)
  * The chips are stacked inside the USB block of the grid.
  */
 @Composable
-private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier) {
+private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier, compact: Boolean = false) {
     Row(
         modifier
             .height(68.dp)
@@ -1167,7 +1231,7 @@ private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier)
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            drive.freeBytes?.let {
+            drive.freeBytes?.takeIf { !compact }?.let {
                 BasicText(
                     ActionsFormat.freeSpace(it, LocalLang.current),
                     style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp),
@@ -1177,11 +1241,13 @@ private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier)
             }
         }
         Spacer(Modifier.width(6.dp))
-        ChipIconButton(R.drawable.ox_dossier, tr(S.USB_OPEN_DESC, "drive" to drive.drive)) {
-            c.tap()
-            c.send(ActionMessages.usbOpen(drive.drive))
+        if (!compact) {
+            ChipIconButton(R.drawable.ox_dossier, tr(S.USB_OPEN_DESC, "drive" to drive.drive)) {
+                c.tap()
+                c.send(ActionMessages.usbOpen(drive.drive))
+            }
+            Spacer(Modifier.width(6.dp))
         }
-        Spacer(Modifier.width(6.dp))
         ChipIconButton(R.drawable.ox_eject, tr(S.USB_EJECT_DESC, "drive" to drive.drive)) {
             c.tap()
             c.send(ActionMessages.usbEject(drive.drive))
