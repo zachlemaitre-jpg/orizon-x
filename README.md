@@ -71,7 +71,7 @@ L'appareil devient un écran en plus.
 
 Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le PC. L'écran reste allumé, et le portrait est autorisé. Les tuiles dont le PC ne dispose pas (pas de batterie, pas de Wi-Fi…) disparaissent.
 
-**Réorganiser les blocs** : un appui long sur une zone libre d'un bloc (l'heure, un titre de carte) passe en mode édition. On glisse un bloc sur un autre pour lui prendre sa place, ✕ masque un bloc, « + Ajouter » le rétablit, « Terminé » quitte. La disposition est gardée sur l'appareil ; la barre contextuelle et les boutons du haut ne bougent pas.
+**Réorganiser les blocs** : un appui long sur une zone libre d'un bloc (l'heure, un titre de carte) passe en mode édition ; la grille de 6 lignes apparaît. On glisse un bloc où l'on veut (les cases deviennent rouges si la place est prise), la poignée ↘ l'agrandit ou le réduit case par case (le Son et la clé USB adaptent leur contenu, la pochette de Spotify grandit avec son bloc), ✕ masque un bloc, « + Ajouter » le rétablit et « Terminé » (en haut à gauche) quitte. La disposition est gardée sur l'appareil, en paysage et en portrait.
 
 - **Horloge** (heure et date du PC) et **batterie du PC**.
 - **Volume** (curseur) et **muet**.
@@ -98,7 +98,7 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
   - Vérifier dans Windows : Win+R, `joy.cpl`.
 - **Claude Code** : les sessions Claude Code du PC, en lecture seule, groupées par projet.
   - À gauche : l'heure, les boutons « + Nouveau », « Artéfacts », « Personnalisation », « Plus » (ils agissent dans l'app Claude) et les conversations ; un tap ouvre la conversation dans l'app.
-  - À droite : contexte détaillé (avec les tâches en arrière-plan), limite de session et limite hebdomadaire, modifications (+/−) et résultats. Un tap sur le contexte ou sur une limite ouvre la vue correspondante dans l'app.
+  - À droite : contexte détaillé, limite de session et limite hebdomadaire, modifications (+/−), résultats et tâches en arrière-plan. Un tap sur le contexte ou sur une limite ouvre la vue correspondante dans l'app.
   - Le détail du contexte et les limites sont lus dans le panneau de droite de l'app Claude, pour la conversation qui y est ouverte. Aucun texte de conversation ne quitte le PC.
 
 ### Mode Tableau (Frame)
