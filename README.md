@@ -71,6 +71,8 @@ L'appareil devient un écran en plus.
 
 Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le PC. L'écran reste allumé, et le portrait est autorisé. Les tuiles dont le PC ne dispose pas (pas de batterie, pas de Wi-Fi…) disparaissent.
 
+**Réorganiser les blocs** : un appui long sur une zone libre d'un bloc (l'heure, un titre de carte) passe en mode édition. On glisse un bloc sur un autre pour lui prendre sa place, ✕ masque un bloc, « + Ajouter » le rétablit, « Terminé » quitte. La disposition est gardée sur l'appareil ; la barre contextuelle et les boutons du haut ne bougent pas.
+
 - **Horloge** (heure et date du PC) et **batterie du PC**.
 - **Volume** (curseur) et **muet**.
 - **Médias** : précédent, lecture/pause, suivant.
