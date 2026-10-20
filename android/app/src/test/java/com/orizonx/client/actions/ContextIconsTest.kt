@@ -15,9 +15,9 @@ class ContextIconsTest {
     }
 
     @Test
-    fun specListHasOneHundredSeventeenNames() {
-        // 38 from the first bar + 36 creative-tool names + 42 for Premiere Pro, After Effects, InDesign and Lightroom + `tab` for the browser tabs page.
-        assertEquals(117, ContextIcons.NAMES.size)
+    fun specListHasOneHundredTwentyThreeNames() {
+        // 38 from the first bar + 36 creative-tool names + 42 for Premiere Pro, After Effects, InDesign and Lightroom + `tab` for the browser tabs page + 6 for the AI chat profiles.
+        assertEquals(123, ContextIcons.NAMES.size)
         assertEquals(ContextIcons.NAMES.size, ContextIcons.NAMES.toSet().size)
     }
 
@@ -58,6 +58,18 @@ class ContextIconsTest {
         assertNotEquals(R.drawable.ctx_unknown, tab)
         assertNotEquals(ContextIcons.drawable("tab_new"), tab)
         assertNotEquals(ContextIcons.drawable("tab_close"), tab)
+    }
+
+    @Test
+    fun everyAiChatProfileNameIsMapped() {
+        val names = listOf("chat_new", "sidebar", "copy_reply", "copy_code", "input_focus", "stop")
+        for (name in names) {
+            assertTrue("$name missing from NAMES", name in ContextIcons.NAMES)
+            assertNotEquals("$name maps to the dot", R.drawable.ctx_unknown, ContextIcons.drawable(name))
+        }
+        // Their own files, not shared with the older copy or comment icons.
+        assertNotEquals(ContextIcons.drawable("copy"), ContextIcons.drawable("copy_reply"))
+        assertNotEquals(ContextIcons.drawable("comment"), ContextIcons.drawable("chat_new"))
     }
 
     @Test

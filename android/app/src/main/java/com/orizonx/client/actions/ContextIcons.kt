@@ -30,6 +30,8 @@ object ContextIcons {
         "star", "auto", "copy_settings", "paste_settings", "before_after", "fullscreen",
         // Browser tabs page.
         "tab",
+        // AI chat profiles (Claude, ChatGPT, Gemini...).
+        "chat_new", "sidebar", "copy_reply", "copy_code", "input_focus", "stop",
     )
 
     /** Drawable resource id for [name] (case-insensitive); [R.drawable.ctx_unknown] when it is not in [NAMES]. */
@@ -151,6 +153,12 @@ object ContextIcons {
         "before_after" -> R.drawable.ctx_before_after
         "fullscreen" -> R.drawable.ctx_fullscreen
         "tab" -> R.drawable.ctx_tab
+        "chat_new" -> R.drawable.ctx_chat_new
+        "sidebar" -> R.drawable.ctx_sidebar
+        "copy_reply" -> R.drawable.ctx_copy_reply
+        "copy_code" -> R.drawable.ctx_copy_code
+        "input_focus" -> R.drawable.ctx_input_focus
+        "stop" -> R.drawable.ctx_stop
         else -> R.drawable.ctx_unknown
     }
 }
