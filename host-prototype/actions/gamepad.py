@@ -288,9 +288,22 @@ class GamepadProvider:
             return
         try:
             self._layer.add_target()
-        except Exception as e:  # noqa: BLE001
-            self._fail("driver_missing" if isinstance(e, DriverMissingError) else "error", e)
+        except DriverMissingError as e:
+            self._fail("driver_missing", e)
             return
+        except Exception as e:  # noqa: BLE001
+            # Vu sur le PC de l'utilisateur : un ajout refusé une fois (0xE0000007, cible non branchée). On repart
+            # d'une connexion neuve au bus et on réessaie une fois avant de déclarer la manette indisponible.
+            self._log(f"gamepad: add failed, reconnecting and retrying once: {e!r}")
+            self._connected = False
+            self._step("disconnect", self._layer.disconnect)
+            if not self._connect():
+                return
+            try:
+                self._layer.add_target()
+            except Exception as e2:  # noqa: BLE001
+                self._fail("driver_missing" if isinstance(e2, DriverMissingError) else "error", e2)
+                return
         self._open = True
         self._update_failing = False
 

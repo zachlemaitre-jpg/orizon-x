@@ -199,11 +199,27 @@ class OpenTest(unittest.TestCase):
     def test_open_after_a_failed_add_adds_again(self):
         p, layer, _, _ = make()
         layer.add_error = GamepadError("x")
-        p.handle(OPEN)
+        p.handle(OPEN)  # add, then one retry after reconnecting
         layer.add_error = None
         p.handle(OPEN)
         self.assertTrue(p.is_open)
-        self.assertEqual(layer.names().count("add"), 2)
+        self.assertEqual(layer.names().count("add"), 3)
+
+    def test_a_transient_add_failure_reconnects_and_retries_once(self):
+        # Seen on the user's PC: vigem_target_add returned VIGEM_ERROR_TARGET_NOT_PLUGGED_IN (0xE0000007) once.
+        p, layer, _, _ = make()
+        failures = [GamepadError("ViGEm error 0xE0000007")]
+
+        def add_target():
+            layer.calls.append(("add",))
+            if failures:
+                raise failures.pop()
+
+        layer.add_target = add_target
+        p.handle(OPEN)
+        self.assertTrue(p.is_open)
+        self.assertEqual(layer.names(), ["connect", "add", "disconnect", "connect", "add"])
+        self.assertEqual(p.snapshot(), {"available": True})
 
 
 class StateTest(unittest.TestCase):
