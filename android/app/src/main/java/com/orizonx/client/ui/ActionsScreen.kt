@@ -225,7 +225,7 @@ fun ActionsScreen(
     )
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        BlobBackground()
+        DarkBackdrop()
         val landscape = maxWidth > maxHeight
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             val state = shown

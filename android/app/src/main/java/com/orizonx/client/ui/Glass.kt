@@ -61,7 +61,7 @@ fun GlassPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
     Column(
         modifier = modifier
             .clip(PanelShape)
-            .background(Color(0x8C141428))
+            .background(Color(0x99202024))
             .border(1.dp, edgeBrush(0.45f, 0.15f), PanelShape)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         content = content,

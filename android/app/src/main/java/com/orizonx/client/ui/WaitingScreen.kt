@@ -1,6 +1,5 @@
 package com.orizonx.client.ui
 
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -40,7 +39,6 @@ import android.os.Build
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -58,10 +56,6 @@ import com.orizonx.client.i18n.tr
 import com.orizonx.client.protocol.Protocol
 import com.orizonx.client.setup.guideFor
 
-private val Night = Color(0xFF0B0B1A)
-private val Violet = Color(0xFF7F77DD)
-private val Teal = Color(0xFF1D9E75)
-private val Pink = Color(0xFFD4537E)
 private val Amber = Color(0xFFFAC775)
 
 @Composable
@@ -75,7 +69,7 @@ fun WaitingScreen(
     onLangPref: (LangPref) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        BlobBackground()
+        DarkBackdrop()
         val actionsConnected = connectedRole == DeviceRole.ACTIONS
         val connected = connectedRole != null
         val steps = rememberSetupSteps(active = !connected)
@@ -232,36 +226,6 @@ private fun RoleButtons(role: DeviceRole, onRoleChosen: (DeviceRole) -> Unit) {
 }
 
 private val THREE_ROLES_MIN_WIDTH = 560.dp
-
-/** Dark background with three slowly drifting colour blobs, blurred (real blur, API 31+). */
-@Composable
-fun BlobBackground() {
-    val transition = rememberInfiniteTransition(label = "blobs")
-    val drift by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(12_000, easing = LinearEasing), RepeatMode.Reverse),
-        label = "drift",
-    )
-    Box(Modifier.fillMaxSize().background(Night)) {
-        Box(Modifier.fillMaxSize().blur(80.dp)) {
-            Blob(Violet, 520.dp, Alignment.TopStart, x = (-80 + 140 * drift).dp, y = (-60).dp)
-            Blob(Teal, 460.dp, Alignment.BottomEnd, x = (60 - 120 * drift).dp, y = 80.dp)
-            Blob(Pink, 320.dp, Alignment.Center, x = (120 - 200 * drift).dp, y = (-80 + 60 * drift).dp)
-        }
-    }
-}
-
-@Composable
-private fun BoxScope.Blob(color: Color, size: Dp, alignment: Alignment, x: Dp, y: Dp) {
-    Box(
-        Modifier
-            .align(alignment)
-            .offset(x, y)
-            .size(size)
-            .background(color.copy(alpha = 0.85f), CircleShape),
-    )
-}
 
 @Composable
 private fun PulsingDot() {
