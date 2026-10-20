@@ -25,4 +25,10 @@ object ActionMessages {
     fun contextPress(buttonId: String): JSONObject = id("context.press").put("button", buttonId)
     fun contextLang(lang: Lang): JSONObject = id("context.lang").put("lang", lang.wire)
     fun claudeFocus(): JSONObject = id("claude.focus")
+    fun claudeWatch(open: Boolean): JSONObject = id("claude.watch").put("open", open)
+    fun claudeNew(): JSONObject = id("claude.new")
+    fun claudeArtifacts(): JSONObject = id("claude.artifacts")
+    fun claudeCustomize(): JSONObject = id("claude.customize")
+    fun claudeMore(): JSONObject = id("claude.more")
+    fun claudeOpen(title: String): JSONObject = id("claude.open").put("title", title)
 }

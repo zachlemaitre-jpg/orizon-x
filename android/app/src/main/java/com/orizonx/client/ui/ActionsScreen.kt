@@ -269,18 +269,20 @@ fun ActionsScreen(
                 GamepadScreen(gamepadInfo, onAction = { send(it) }, onClose = { gamepadOpen = false }, tap = tap)
             } else if (showClaude && claudeInfo != null) {
                 Column(Modifier.fillMaxSize()) {
-                    // Same header as the keyboard: context bar, then clock, battery, sound and brightness.
+                    // The context bar stays on top over the full width; the Claude screen has its own clock block.
                     Box(Modifier.padding(top = 8.dp)) { contextStrip() }
-                    if (state != null) OverlayTopRow(state, controls)
-                    ClaudeCodeScreen(
-                        info = claudeInfo,
-                        // The sessions' times are on the PC's clock: compare them with the PC's, not the device's.
-                        nowSeconds = state?.clock?.epochMs?.div(1000) ?: (System.currentTimeMillis() / 1000),
-                        onAction = { send(it) },
-                        onClose = { claudeOpen = false },
-                        tap = tap,
-                        modifier = Modifier.weight(1f),
-                    )
+                    if (state != null) {
+                        ClaudeCodeScreen(
+                            state = state,
+                            info = claudeInfo,
+                            // The sessions' times are on the PC's clock: compare them with the PC's, not the device's.
+                            nowSeconds = state.clock?.epochMs?.div(1000) ?: (System.currentTimeMillis() / 1000),
+                            onAction = { send(it) },
+                            onClose = { claudeOpen = false },
+                            tap = tap,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             } else if (showTrackpad) {
                 Column(Modifier.fillMaxSize()) {
@@ -873,7 +875,7 @@ private fun ContextKey(button: ContextButton, c: Controls, modifier: Modifier) {
 
 /** Ticks locally from the PC's epoch_ms plus the time elapsed since the state arrived, in the PC's UTC offset. */
 @Composable
-private fun ClockBlock(clock: ClockState?, battery: BatteryState?, clockSp: Float, dateSp: Float) {
+internal fun ClockBlock(clock: ClockState?, battery: BatteryState?, clockSp: Float, dateSp: Float) {
     val received = remember(clock) { SystemClock.elapsedRealtime() }
     var now by remember(clock) { mutableLongStateOf(clock?.epochMs ?: 0L) }
     LaunchedEffect(clock) {

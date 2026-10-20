@@ -32,9 +32,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,30 +48,43 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.orizonx.client.actions.ActionMessages
+import com.orizonx.client.actions.ActionsState
+import com.orizonx.client.claude.ClaudeApp
+import com.orizonx.client.claude.ClaudeChanges
 import com.orizonx.client.claude.ClaudeFormat
+import com.orizonx.client.claude.ClaudeGroups
 import com.orizonx.client.claude.ClaudeInfo
+import com.orizonx.client.claude.ClaudeLimit
 import com.orizonx.client.claude.ClaudeSelection
 import com.orizonx.client.claude.ClaudeSession
+import com.orizonx.client.claude.ClaudeTask
 import com.orizonx.client.i18n.LocalLang
 import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
 import org.json.JSONObject
+import kotlin.math.min
 
 private val ClaudeGreen = Color(0xFF34C77B)
+private val ClaudeRed = Color(0xFFE5484D)
 private val ClaudeGrey = Color(0xFF9AA0A6)
-private val RowShape = RoundedCornerShape(16.dp)
+private val PanelShape = RoundedCornerShape(16.dp)
 private val ChipShape = RoundedCornerShape(12.dp)
+private val RowShape = RoundedCornerShape(12.dp)
 
 /**
- * The PC's Claude Code sessions, read only. Landscape: the list on the left (about 38 %) and the details of the chosen
- * session on the right. Portrait: the list, and a tap opens the details with a "← Sessions" button. The choice is kept
- * by session id while new states arrive; by default it is the most recent session.
+ * The PC's Claude Code sessions, read only, in the layout of the user's mock-up (glass style, no other colours than the
+ * green and red of the line counts). Left: the clock block, four buttons that press the matching buttons of the Claude app,
+ * and the conversations grouped by project. Right: the chosen session, with the data the PC read from the app's right
+ * panel when that conversation is the one open in the app. Portrait shows the left column, then the panel after a tap.
+ * The app panel is only read while this screen is open (`claude.watch`).
  */
 @Composable
 fun ClaudeCodeScreen(
+    state: ActionsState,
     info: ClaudeInfo,
     nowSeconds: Long,
     onAction: (JSONObject) -> Unit,
@@ -77,116 +92,350 @@ fun ClaudeCodeScreen(
     tap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val send by rememberUpdatedState(onAction)
+    DisposableEffect(Unit) {
+        send(ActionMessages.claudeWatch(true))
+        onDispose { send(ActionMessages.claudeWatch(false)) }
+    }
+
     var selectedId by remember { mutableStateOf<String?>(null) }
     var detailsOpen by remember { mutableStateOf(false) }
-    val sessions = remember(info.sessions) { info.sessions.sortedByDescending { it.updated } }
-    val currentId = ClaudeSelection.resolve(sessions, selectedId)
-    val current = sessions.firstOrNull { it.id == currentId }
+    val currentId = ClaudeSelection.resolve(info.sessions, selectedId)
+    val current = info.sessions.firstOrNull { it.id == currentId }
+    val groups = remember(info.sessions) { ClaudeGroups.of(info.sessions) }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
-        val landscape = maxWidth >= 700.dp
-        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-            Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (!landscape && detailsOpen && current != null) {
-                    Box(
-                        Modifier.clip(ChipShape).clickable { tap(); detailsOpen = false }.padding(horizontal = 12.dp, vertical = 8.dp),
-                    ) {
-                        BasicText(tr(S.CLAUDE_BACK), style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                val closeDescription = tr(S.CLAUDE_CLOSE_DESC)
-                Box(
-                    Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable { tap(); onClose() }
-                        .semantics { contentDescription = closeDescription },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    BasicText("✕", style = TextStyle(color = Color.White, fontSize = 20.sp))
-                }
+        val width = maxWidth
+        val landscape = width >= 700.dp
+        val pick: (ClaudeSession) -> Unit = { session ->
+            tap()
+            selectedId = session.id
+            detailsOpen = true
+            send(ActionMessages.claudeOpen(session.title))
+        }
+        val left: @Composable (Modifier, Dp) -> Unit = { m, width ->
+            LeftColumn(state, groups, currentId, width, m, tap, send, pick)
+        }
+        val right: @Composable (Modifier) -> Unit = { m ->
+            RightPanel(current, info, state, nowSeconds, m, tap, send, onClose, back = if (landscape) null else ({ tap(); detailsOpen = false }))
+        }
+        if (landscape) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                left(Modifier.weight(0.32f).fillMaxHeight(), width * 0.32f)
+                right(Modifier.weight(0.68f).fillMaxHeight())
             }
-            when {
-                sessions.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    BasicText(tr(S.CLAUDE_NO_SESSIONS), style = TextStyle(color = Color.White.copy(alpha = 0.8f), fontSize = 17.sp))
+        } else if (detailsOpen && current != null) {
+            right(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp))
+        } else {
+            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth().height(40.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    CloseButton(tap, onClose)
                 }
-                landscape -> Row(Modifier.fillMaxSize().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    SessionList(sessions, currentId, nowSeconds, Modifier.weight(0.38f).fillMaxHeight()) {
-                        tap()
-                        selectedId = it
-                    }
-                    if (current != null) {
-                        SessionDetails(current, info, nowSeconds, Modifier.weight(0.62f).fillMaxHeight()) {
-                            tap()
-                            onAction(ActionMessages.claudeFocus())
-                        }
-                    }
-                }
-                detailsOpen && current != null -> SessionDetails(current, info, nowSeconds, Modifier.fillMaxSize().padding(bottom = 12.dp)) {
-                    tap()
-                    onAction(ActionMessages.claudeFocus())
-                }
-                else -> SessionList(sessions, currentId, nowSeconds, Modifier.fillMaxSize().padding(bottom = 12.dp)) {
-                    tap()
-                    selectedId = it
-                    detailsOpen = true
-                }
+                left(Modifier.fillMaxSize(), width)
             }
         }
     }
 }
 
 @Composable
-private fun SessionList(
-    sessions: List<ClaudeSession>,
+private fun CloseButton(tap: () -> Unit, onClose: () -> Unit) {
+    val description = tr(S.CLAUDE_CLOSE_DESC)
+    Box(
+        Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .clickable { tap(); onClose() }
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText("✕", style = TextStyle(color = Color.White, fontSize = 20.sp))
+    }
+}
+
+// --- Left column -------------------------------------------------------------------------------------------
+
+@Composable
+private fun LeftColumn(
+    state: ActionsState,
+    groups: List<ClaudeGroups.Group>,
     selectedId: String?,
-    nowSeconds: Long,
+    width: Dp,
     modifier: Modifier,
-    onPick: (String) -> Unit,
+    tap: () -> Unit,
+    send: (JSONObject) -> Unit,
+    onPick: (ClaudeSession) -> Unit,
 ) {
-    val lang = LocalLang.current
-    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(sessions, key = { it.id }) { session ->
-            val selected = session.id == selectedId
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RowShape)
-                    .background(Color.White.copy(alpha = if (selected) 0.20f else 0.08f))
-                    .border(1.dp, Color.White.copy(alpha = if (selected) 0.7f else 0.18f), RowShape)
-                    .clickable { onPick(session.id) }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                StatusDot(session.working)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        ClockBlock(state.clock, state.battery, min(44f, width.value / 4.1f), 15f)
+        Pill(tr(S.CLAUDE_NEW), selected = false, onClick = { tap(); send(ActionMessages.claudeNew()) }, modifier = Modifier.fillMaxWidth())
+        Pill(tr(S.CLAUDE_ARTIFACTS), selected = false, onClick = { tap(); send(ActionMessages.claudeArtifacts()) }, modifier = Modifier.fillMaxWidth())
+        Pill(tr(S.CLAUDE_CUSTOMIZE), selected = false, onClick = { tap(); send(ActionMessages.claudeCustomize()) }, modifier = Modifier.fillMaxWidth())
+        Pill(tr(S.CLAUDE_MORE), selected = false, onClick = { tap(); send(ActionMessages.claudeMore()) }, modifier = Modifier.fillMaxWidth())
+        Panel(Modifier.weight(1f).fillMaxWidth(), padding = 10.dp) {
+            Label(tr(S.CLAUDE_CONVERSATIONS))
+            if (groups.isEmpty()) {
+                BasicText(tr(S.CLAUDE_NO_SESSIONS), style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp))
+            } else {
+                Conversations(groups, selectedId, Modifier.weight(1f), onPick)
+            }
+        }
+    }
+}
+
+/** The conversations, grouped by project like the app's sidebar; this block scrolls on its own. */
+@Composable
+private fun Conversations(groups: List<ClaudeGroups.Group>, selectedId: String?, modifier: Modifier, onPick: (ClaudeSession) -> Unit) {
+    LazyColumn(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        for (group in groups) {
+            item(key = "group:${group.project}") {
+                BasicText(
+                    group.project.ifEmpty { tr(S.CLAUDE_NO_PROJECT) },
+                    style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 6.dp, top = 8.dp, bottom = 2.dp),
+                )
+            }
+            items(group.sessions, key = { it.id }) { session ->
+                val selected = session.id == selectedId
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RowShape)
+                        .background(Color.White.copy(alpha = if (selected) 0.20f else 0f))
+                        .then(if (selected) Modifier.border(1.dp, Color.White.copy(alpha = 0.55f), RowShape) else Modifier)
+                        .clickable { onPick(session) }
+                        .padding(horizontal = 8.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StatusDot(session.working)
+                    Spacer(Modifier.width(10.dp))
                     BasicText(
                         session.title,
-                        style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold),
+                        style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    val where = listOf(session.project, session.branch).filter { it.isNotEmpty() }.joinToString(" · ")
-                    if (where.isNotEmpty()) {
-                        BasicText(
-                            where,
-                            style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (session.updated > 0) {
-                        BasicText(
-                            ClaudeFormat.age(session.updated, nowSeconds, lang),
-                            style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp),
-                            maxLines = 1,
-                        )
-                    }
                 }
             }
         }
+    }
+}
+
+// --- Right panel -------------------------------------------------------------------------------------------
+
+@Composable
+private fun RightPanel(
+    session: ClaudeSession?,
+    info: ClaudeInfo,
+    state: ActionsState,
+    nowSeconds: Long,
+    modifier: Modifier,
+    tap: () -> Unit,
+    send: (JSONObject) -> Unit,
+    onClose: () -> Unit,
+    back: (() -> Unit)?,
+) {
+    val app = info.app
+    // The app's panel belongs to the conversation open in the app; limits are global.
+    val appForSession = if (session != null && app != null && app.isOpen(session)) app else null
+    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (session != null) {
+            Header(session, tap, send, onClose, back)
+            ContextBlock(session, appForSession)
+            ChangesLine(appForSession?.changes ?: session.changes)
+            ResultsBlock(appForSession?.results?.takeIf { it.isNotEmpty() } ?: session.files)
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { CloseButton(tap, onClose) }
+        }
+        LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state)
+        LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state)
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+@Composable
+private fun Header(session: ClaudeSession, tap: () -> Unit, send: (JSONObject) -> Unit, onClose: () -> Unit, back: (() -> Unit)?) {
+    Panel(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (back != null) {
+                Box(Modifier.clip(ChipShape).clickable(onClick = back).padding(end = 12.dp, top = 4.dp, bottom = 4.dp)) {
+                    BasicText(tr(S.CLAUDE_BACK), style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
+                }
+            }
+            BasicText(
+                session.title,
+                style = TextStyle(color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            CloseButton(tap, onClose)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatusDot(session.working)
+            val where = listOf(session.project, session.branch).filter { it.isNotEmpty() }.joinToString(" · ")
+            BasicText(
+                where,
+                style = TextStyle(color = Color.White.copy(alpha = 0.65f), fontSize = 14.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Pill(tr(S.CLAUDE_FRONT), selected = false, onClick = { tap(); send(ActionMessages.claudeFocus()) })
+        }
+        val chips = listOf(session.model, session.mode).filter { it.isNotEmpty() }
+        if (chips.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (chip in chips) Chip(chip)
+            }
+        }
+    }
+}
+
+/** The big block: the app's breakdown when it is this conversation, else the local token count and a note. */
+@Composable
+private fun ContextBlock(session: ClaudeSession, app: ClaudeApp?) {
+    val lang = LocalLang.current
+    val context = app?.context
+    Panel(Modifier.fillMaxWidth()) {
+        Label(tr(S.CLAUDE_CONTEXT))
+        if (context != null) {
+            val headline = when {
+                context.percent != null && context.used.isNotEmpty() && context.window.isNotEmpty() ->
+                    tr(S.CLAUDE_CONTEXT_USED, "percent" to context.percent, "used" to context.used, "window" to context.window)
+                context.percent != null -> tr(S.CLAUDE_CONTEXT_PERCENT, "percent" to context.percent)
+                else -> ""
+            }
+            if (headline.isNotEmpty()) {
+                BasicText(headline, style = TextStyle(color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold))
+            }
+            if (context.percent != null) ProgressBar(ClaudeFormat.fraction(context.percent))
+            for (item in context.items) ContextRow(item.name, item.tokens, item.percent, 0.9f)
+            for (item in context.deferred) ContextRow(item.name, item.tokens, item.percent, 0.45f)
+        } else {
+            val tokens = session.tokens
+            BasicText(
+                if (tokens != null) tr(S.CLAUDE_TOKENS, "count" to ClaudeFormat.tokens(tokens, lang)) else tr(S.CLAUDE_NONE),
+                style = TextStyle(color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold),
+            )
+            BasicText(tr(S.CLAUDE_CONTEXT_NOTE), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
+        }
+        // Only for the conversation open in the app (its panel is what the PC read).
+        if (app != null) TasksSection(app.tasks)
+    }
+}
+
+@Composable
+private fun ContextRow(name: String, tokens: String, percent: String, alpha: Float) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        BasicText(
+            name,
+            style = TextStyle(color = Color.White.copy(alpha = alpha), fontSize = 14.sp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        BasicText(tokens, style = TextStyle(color = Color.White.copy(alpha = alpha), fontSize = 14.sp))
+        Box(Modifier.width(70.dp), contentAlignment = Alignment.CenterEnd) {
+            BasicText(percent, style = TextStyle(color = Color.White.copy(alpha = alpha * 0.8f), fontSize = 13.sp))
+        }
+    }
+}
+
+/** "Modifications  +2140 −9": the only coloured line of the screen. */
+@Composable
+private fun ChangesLine(changes: ClaudeChanges?) {
+    Panel(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label(tr(S.CLAUDE_CHANGES), Modifier.weight(1f))
+            if (changes == null) {
+                BasicText("—", style = TextStyle(color = Color.White.copy(alpha = 0.5f), fontSize = 16.sp))
+            } else {
+                BasicText("+${changes.added}", style = TextStyle(color = ClaudeGreen, fontSize = 17.sp, fontWeight = FontWeight.SemiBold))
+                Spacer(Modifier.width(12.dp))
+                BasicText("−${changes.removed}", style = TextStyle(color = ClaudeRed, fontSize = 17.sp, fontWeight = FontWeight.SemiBold))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResultsBlock(files: List<String>) {
+    Panel(Modifier.fillMaxWidth()) {
+        Label(tr(S.CLAUDE_RESULTS))
+        if (files.isEmpty()) {
+            BasicText(tr(S.CLAUDE_NONE), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 14.sp))
+        } else {
+            Column(Modifier.fillMaxWidth().heightIn(max = 170.dp).verticalScroll(rememberScrollState())) {
+                for (file in files) {
+                    BasicText(
+                        file,
+                        style = TextStyle(color = Color.White.copy(alpha = 0.88f), fontSize = 14.sp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A usage limit (global, whatever the chosen session): percentage, bar, reset, and when the app was last read. */
+@Composable
+private fun LimitBlock(title: S, limit: ClaudeLimit?, app: ClaudeApp?, state: ActionsState) {
+    Panel(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label(tr(title), Modifier.weight(1f))
+            if (limit != null) {
+                BasicText("${limit.percent} %", style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold))
+            }
+        }
+        if (limit == null) {
+            BasicText(tr(S.CLAUDE_LIMITS_HINT), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
+        } else {
+            ProgressBar(ClaudeFormat.fraction(limit.percent))
+            val seen = if (app != null && app.seenAt > 0) {
+                tr(S.CLAUDE_SEEN_AT, "time" to ClaudeFormat.clockTime(app.seenAt, state.clock?.utcOffsetMin ?: 0))
+            } else {
+                ""
+            }
+            val line = listOf(
+                if (limit.reset.isNotEmpty()) tr(S.CLAUDE_RESET_IN, "time" to limit.reset) else "",
+                seen,
+            ).filter { it.isNotEmpty() }.joinToString(" · ")
+            if (line.isNotEmpty()) {
+                BasicText(line, style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp))
+            }
+        }
+    }
+}
+
+// --- Pieces ------------------------------------------------------------------------------------------------
+
+@Composable
+private fun Panel(modifier: Modifier = Modifier, padding: Dp = 14.dp, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(
+        modifier
+            .clip(PanelShape)
+            .background(Color.White.copy(alpha = 0.08f))
+            .border(1.dp, Color.White.copy(alpha = 0.22f), PanelShape)
+            .padding(padding),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun Label(text: String, modifier: Modifier = Modifier) {
+    BasicText(text, style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold), modifier = modifier)
+}
+
+@Composable
+private fun ProgressBar(fraction: Float) {
+    Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.15f))) {
+        Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White.copy(alpha = 0.8f)))
     }
 }
 
@@ -207,98 +456,6 @@ private fun StatusDot(working: Boolean) {
 }
 
 @Composable
-private fun SessionDetails(session: ClaudeSession, info: ClaudeInfo, nowSeconds: Long, modifier: Modifier, onFocus: () -> Unit) {
-    val lang = LocalLang.current
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            BasicText(
-                session.title,
-                style = TextStyle(color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(12.dp))
-            StatusDot(session.working)
-            Spacer(Modifier.width(6.dp))
-            BasicText(
-                tr(if (session.working) S.CLAUDE_WORKING else S.CLAUDE_IDLE),
-                style = TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp),
-            )
-        }
-        val chips = listOf(session.model, session.effort, session.mode).filter { it.isNotEmpty() }
-        if (chips.isNotEmpty()) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (chip in chips) Chip(chip)
-            }
-        }
-        val meta = buildList {
-            session.tokens?.let { add(tr(S.CLAUDE_TOKENS, "count" to ClaudeFormat.tokens(it, lang))) }
-            if (session.updated > 0) add(ClaudeFormat.age(session.updated, nowSeconds, lang))
-        }
-        if (meta.isNotEmpty()) {
-            BasicText(meta.joinToString(" · "), style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp))
-        }
-
-        Section(tr(S.CLAUDE_LAST_REQUEST)) {
-            BasicText(
-                session.lastPrompt.ifEmpty { tr(S.CLAUDE_NONE) },
-                style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp),
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Section(tr(S.CLAUDE_LAST_REPLY)) {
-            // Its own scroll, inside the page's: the reply can be long.
-            Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(rememberScrollState())) {
-                BasicText(
-                    session.lastResult.ifEmpty { tr(S.CLAUDE_NONE) },
-                    style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp),
-                )
-            }
-        }
-        Section(tr(S.CLAUDE_FILES)) {
-            if (session.files.isEmpty()) {
-                BasicText(tr(S.CLAUDE_NONE), style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp))
-            } else {
-                Column(Modifier.fillMaxWidth().heightIn(max = 130.dp).verticalScroll(rememberScrollState())) {
-                    for (file in session.files) {
-                        BasicText(
-                            file,
-                            style = TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-        Section(tr(S.CLAUDE_CONNECTORS)) {
-            val connectors = info.connectorsFor(session)
-            if (connectors.isEmpty()) {
-                BasicText(tr(S.CLAUDE_NONE), style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp))
-            } else {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (connector in connectors) {
-                        Chip(listOf(connector.name, connector.type).filter { it.isNotEmpty() }.joinToString(" · "))
-                    }
-                }
-            }
-        }
-        Pill(tr(S.CLAUDE_FOCUS), selected = false, onClick = onFocus, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(4.dp))
-    }
-}
-
-@Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        BasicText(title, style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold))
-        content()
-    }
-}
-
-@Composable
 private fun Chip(text: String) {
     Box(
         Modifier
@@ -308,5 +465,31 @@ private fun Chip(text: String) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         BasicText(text, style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp), maxLines = 1)
+    }
+}
+
+/** "Background tasks" inside the context block: one line per task with its status, or a note when there are none. */
+@Composable
+private fun TasksSection(tasks: List<ClaudeTask>) {
+    Spacer(Modifier.height(4.dp))
+    Label(tr(S.CLAUDE_TASKS))
+    if (tasks.isEmpty()) {
+        BasicText(tr(S.CLAUDE_NO_TASKS), style = TextStyle(color = Color.White.copy(alpha = 0.55f), fontSize = 13.sp))
+    } else {
+        for (task in tasks) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    task.name,
+                    style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (task.status.isNotEmpty()) {
+                    Spacer(Modifier.width(10.dp))
+                    BasicText(task.status, style = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp), maxLines = 1)
+                }
+            }
+        }
     }
 }

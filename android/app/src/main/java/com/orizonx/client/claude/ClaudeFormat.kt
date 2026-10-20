@@ -35,4 +35,13 @@ object ClaudeFormat {
         val separator = if (lang == Lang.FR) "," else "."
         return "${tenths / 10}$separator${tenths % 10} M"
     }
+
+    /** "14:32": the PC wall-clock time of [epochSeconds] in the PC's zone (fixed [utcOffsetMin]), for "seen at". */
+    fun clockTime(epochSeconds: Long, utcOffsetMin: Int): String {
+        val local = Math.floorMod(epochSeconds + utcOffsetMin * 60L, 86_400L)
+        return String.format(java.util.Locale.ROOT, "%02d:%02d", local / 3_600, local % 3_600 / 60)
+    }
+
+    /** 0..1 for a progress bar from a percentage; out-of-range values are clamped. */
+    fun fraction(percent: Int?): Float = ((percent ?: 0).coerceIn(0, 100)) / 100f
 }

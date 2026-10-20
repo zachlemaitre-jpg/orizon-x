@@ -33,6 +33,17 @@ class ActionMessagesTest {
     }
 
     @Test
+    fun claudeWatchAndSidebarActions() {
+        assertEquals("""{"id":"claude.watch","open":true}""", wire(ActionMessages.claudeWatch(true)))
+        assertEquals("""{"id":"claude.watch","open":false}""", wire(ActionMessages.claudeWatch(false)))
+        assertEquals("""{"id":"claude.new"}""", wire(ActionMessages.claudeNew()))
+        assertEquals("""{"id":"claude.artifacts"}""", wire(ActionMessages.claudeArtifacts()))
+        assertEquals("""{"id":"claude.customize"}""", wire(ActionMessages.claudeCustomize()))
+        assertEquals("""{"id":"claude.more"}""", wire(ActionMessages.claudeMore()))
+        assertEquals("""{"id":"claude.open","title":"Fix \"login\" é"}""", wire(ActionMessages.claudeOpen("Fix \"login\" é")))
+    }
+
+    @Test
     fun claudeFocus() {
         assertEquals("""{"id":"claude.focus"}""", wire(ActionMessages.claudeFocus()))
     }

@@ -96,6 +96,8 @@ class ActionsFormatTest {
         assertEquals("Impossible d'éjecter la clé", ActionsFormat.notice("usb_failed", Lang.FR))
         assertEquals("Windows refuse de changer cette radio", ActionsFormat.notice("radio_denied", Lang.FR))
         assertEquals("Claude n'est pas lancé sur le PC", ActionsFormat.notice("claude_not_running", Lang.FR))
+        assertEquals("Introuvable dans l'app Claude", ActionsFormat.notice("claude_ui_not_found", Lang.FR))
+        assertEquals("Couldn't find that in the Claude app", ActionsFormat.notice("claude_ui_not_found", Lang.EN))
         assertEquals("Action impossible", ActionsFormat.notice("action_failed", Lang.FR))
         assertEquals("Action impossible", ActionsFormat.notice("something_new", Lang.FR))
     }

@@ -21,13 +21,20 @@ data class ClaudeSession(
     val files: List<String>,
     /** "desktop" or "cli". */
     val entry: String,
+    /** Git changes in the session's working directory, null when unknown. */
+    val changes: ClaudeChanges? = null,
 )
 
 /** An MCP connector: [scope] is "global" or the name of a project. */
 data class ClaudeConnector(val name: String, val type: String, val scope: String)
 
 /** The `claude` section when the PC has Claude Code data ([available] true). */
-data class ClaudeInfo(val sessions: List<ClaudeSession>, val connectors: List<ClaudeConnector>) {
+data class ClaudeInfo(
+    val sessions: List<ClaudeSession>,
+    val connectors: List<ClaudeConnector>,
+    /** What the PC read from the Claude app's right panel; null until it has been read. */
+    val app: ClaudeApp? = null,
+) {
     /** The connectors that apply to [session]: the global ones, then those of its project. */
     fun connectorsFor(session: ClaudeSession): List<ClaudeConnector> =
         connectors.filter { it.scope == GLOBAL } + connectors.filter { it.scope != GLOBAL && it.scope.equals(session.project, ignoreCase = true) }
@@ -43,7 +50,7 @@ data class ClaudeInfo(val sessions: List<ClaudeSession>, val connectors: List<Cl
             if (section == null || section.opt("available") != true) return null
             val sessions = objects(section.optJSONArray("sessions")).mapNotNull(::session).take(MAX_SESSIONS)
             val connectors = objects(section.optJSONArray("connectors")).mapNotNull(::connector).take(MAX_CONNECTORS)
-            return ClaudeInfo(sessions, connectors)
+            return ClaudeInfo(sessions, connectors, ClaudeApp.parse(section.optJSONObject("app")))
         }
 
         private fun objects(array: JSONArray?): List<JSONObject> =
@@ -70,6 +77,7 @@ data class ClaudeInfo(val sessions: List<ClaudeSession>, val connectors: List<Cl
                 lastResult = text(obj, "last_result"),
                 files = if (files == null) emptyList() else (0 until files.length()).mapNotNull { (files.opt(it) as? String)?.takeIf(String::isNotBlank) }.take(MAX_FILES),
                 entry = if (text(obj, "entry") == "desktop") "desktop" else "cli",
+                changes = ClaudeChanges.parse(obj.optJSONObject("changes")),
             )
         }
 

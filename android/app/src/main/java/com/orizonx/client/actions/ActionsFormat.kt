@@ -83,6 +83,7 @@ object ActionsFormat {
             "usb_failed" -> S.NOTICE_USB_FAILED
             "radio_denied" -> S.NOTICE_RADIO_DENIED
             "claude_not_running" -> S.NOTICE_CLAUDE_NOT_RUNNING
+            "claude_ui_not_found" -> S.NOTICE_CLAUDE_UI_NOT_FOUND
             else -> S.NOTICE_DEFAULT
         },
         lang,
