@@ -121,14 +121,14 @@ fun ClaudeCodeScreen(
             RightPanel(current, info, state, nowSeconds, m, tap, send, onClose, back = if (landscape) null else ({ tap(); detailsOpen = false }), portrait = !landscape)
         }
         if (landscape) {
-            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 left(Modifier.weight(0.32f).fillMaxHeight(), width * 0.32f)
                 right(Modifier.weight(0.68f).fillMaxHeight())
             }
         } else if (detailsOpen && current != null) {
-            right(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp))
+            right(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp))
         } else {
-            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp)) {
                 Row(Modifier.fillMaxWidth().height(40.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     CloseButton(tap, onClose)
                 }

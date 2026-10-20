@@ -386,7 +386,9 @@ fun ActionsScreen(
                                 editing = editingBlocks,
                                 onEditing = { editingBlocks = it },
                                 haptic = { haptics.performHapticFeedback(it) },
-                                modifier = Modifier.fillMaxWidth().weight(1f),
+                                // A separate child of the column: it starts where the measured header row ends, plus a gap, and ends the same
+                                // gap above the context bar. The grid (and its clip) is sized inside this area.
+                                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = BlocksAreaGap, bottom = BlocksAreaGap),
                             )
                         }
                     }
@@ -417,6 +419,9 @@ fun ActionsScreen(
 }
 
 private const val NOTICE_MS = 3000L
+
+/** Space between the header pills and the block grid, and between the grid and the context bar. */
+private val BlocksAreaGap = 12.dp
 
 /** Puts a popup just under the control it belongs to, left edges aligned. */
 private object BelowAnchor : PopupPositionProvider {
