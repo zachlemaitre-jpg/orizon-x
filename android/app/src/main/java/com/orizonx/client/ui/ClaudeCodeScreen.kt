@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -117,7 +119,7 @@ fun ClaudeCodeScreen(
             LeftColumn(state, groups, currentId, width, m, tap, send, pick)
         }
         val right: @Composable (Modifier) -> Unit = { m ->
-            RightPanel(current, info, state, nowSeconds, m, tap, send, onClose, back = if (landscape) null else ({ tap(); detailsOpen = false }))
+            RightPanel(current, info, state, nowSeconds, m, tap, send, onClose, back = if (landscape) null else ({ tap(); detailsOpen = false }), portrait = !landscape)
         }
         if (landscape) {
             Row(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -235,24 +237,49 @@ private fun RightPanel(
     send: (JSONObject) -> Unit,
     onClose: () -> Unit,
     back: (() -> Unit)?,
+    portrait: Boolean,
 ) {
     val app = info.app
     // The app's panel belongs to the conversation open in the app; limits are global.
     val appForSession = if (session != null && app != null && app.isOpen(session)) app else null
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (session != null) {
-            Header(session, tap, send, onClose, back)
-            ContextBlock(session, appForSession)
-            ChangesLine(appForSession?.changes ?: session.changes)
-            ResultsBlock(appForSession?.results?.takeIf { it.isNotEmpty() } ?: session.files)
-        } else {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { CloseButton(tap, onClose) }
+    val open: (JSONObject) -> () -> Unit = { action -> { tap(); send(action) } }
+    val showContext = open(ActionMessages.claudeShowContext())
+    val showUsage = open(ActionMessages.claudeShowUsage())
+    BoxWithConstraints(modifier) {
+        val wide = !portrait
+        // Roughly square, half the panel, but short enough that the changes and the results stay above the fold.
+        val topHeight = (maxWidth / 2).coerceAtMost(340.dp)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (session != null) {
+                Header(session, tap, send, onClose, back)
+                if (wide) {
+                    Row(Modifier.fillMaxWidth().height(topHeight), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ContextBlock(session, appForSession, Modifier.weight(1f).fillMaxHeight(), true, showContext)
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.weight(1f).fillMaxWidth(), showUsage)
+                            LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state, Modifier.weight(1f).fillMaxWidth(), showUsage)
+                        }
+                    }
+                } else {
+                    ContextBlock(session, appForSession, Modifier.fillMaxWidth(), false, showContext)
+                    Row(Modifier.fillMaxWidth().height(LimitBlockHeight), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.weight(1f).fillMaxHeight(), showUsage)
+                        LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state, Modifier.weight(1f).fillMaxHeight(), showUsage)
+                    }
+                }
+                ChangesLine(appForSession?.changes ?: session.changes)
+                ResultsBlock(appForSession?.results?.takeIf { it.isNotEmpty() } ?: session.files)
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { CloseButton(tap, onClose) }
+                LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state, Modifier.fillMaxWidth(), showUsage)
+                LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state, Modifier.fillMaxWidth(), showUsage)
+            }
+            Spacer(Modifier.height(4.dp))
         }
-        LimitBlock(S.CLAUDE_SESSION_LIMIT, app?.usage?.session, app, state)
-        LimitBlock(S.CLAUDE_WEEKLY_LIMIT, app?.usage?.weekly, app, state)
-        Spacer(Modifier.height(4.dp))
     }
 }
+
+private val LimitBlockHeight = 140.dp
 
 @Composable
 private fun Header(session: ClaudeSession, tap: () -> Unit, send: (JSONObject) -> Unit, onClose: () -> Unit, back: (() -> Unit)?) {
@@ -295,11 +322,14 @@ private fun Header(session: ClaudeSession, tap: () -> Unit, send: (JSONObject) -
 
 /** The big block: the app's breakdown when it is this conversation, else the local token count and a note. */
 @Composable
-private fun ContextBlock(session: ClaudeSession, app: ClaudeApp?) {
+private fun ContextBlock(session: ClaudeSession, app: ClaudeApp?, modifier: Modifier, fillHeight: Boolean, onClick: () -> Unit) {
     val lang = LocalLang.current
     val context = app?.context
-    Panel(Modifier.fillMaxWidth()) {
+    Panel(modifier, onClick = onClick) {
         Label(tr(S.CLAUDE_CONTEXT))
+        // The content scrolls inside the block when it is taller than the block.
+        val inner = if (fillHeight) Modifier.weight(1f) else Modifier.heightIn(max = 360.dp)
+        Column(inner.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (context != null) {
             val headline = when {
                 context.percent != null && context.used.isNotEmpty() && context.window.isNotEmpty() ->
@@ -323,6 +353,7 @@ private fun ContextBlock(session: ClaudeSession, app: ClaudeApp?) {
         }
         // Only for the conversation open in the app (its panel is what the PC read).
         if (app != null) TasksSection(app.tasks)
+        }
     }
 }
 
@@ -384,8 +415,8 @@ private fun ResultsBlock(files: List<String>) {
 
 /** A usage limit (global, whatever the chosen session): percentage, bar, reset, and when the app was last read. */
 @Composable
-private fun LimitBlock(title: S, limit: ClaudeLimit?, app: ClaudeApp?, state: ActionsState) {
-    Panel(Modifier.fillMaxWidth()) {
+private fun LimitBlock(title: S, limit: ClaudeLimit?, app: ClaudeApp?, state: ActionsState, modifier: Modifier, onClick: () -> Unit) {
+    Panel(modifier, onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Label(tr(title), Modifier.weight(1f))
             if (limit != null) {
@@ -415,12 +446,20 @@ private fun LimitBlock(title: S, limit: ClaudeLimit?, app: ClaudeApp?, state: Ac
 // --- Pieces ------------------------------------------------------------------------------------------------
 
 @Composable
-private fun Panel(modifier: Modifier = Modifier, padding: Dp = 14.dp, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+private fun Panel(
+    modifier: Modifier = Modifier,
+    padding: Dp = 14.dp,
+    onClick: (() -> Unit)? = null,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
     Column(
         modifier
             .clip(PanelShape)
-            .background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, Color.White.copy(alpha = 0.22f), PanelShape)
+            .background(Color.White.copy(alpha = if (pressed) 0.17f else 0.08f))
+            .border(1.dp, Color.White.copy(alpha = if (pressed) 0.45f else 0.22f), PanelShape)
+            .then(if (onClick != null) Modifier.clickable(interactionSource = source, indication = null, onClick = onClick) else Modifier)
             .padding(padding),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content,

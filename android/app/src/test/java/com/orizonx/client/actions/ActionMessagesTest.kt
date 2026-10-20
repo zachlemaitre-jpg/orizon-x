@@ -40,6 +40,8 @@ class ActionMessagesTest {
         assertEquals("""{"id":"claude.artifacts"}""", wire(ActionMessages.claudeArtifacts()))
         assertEquals("""{"id":"claude.customize"}""", wire(ActionMessages.claudeCustomize()))
         assertEquals("""{"id":"claude.more"}""", wire(ActionMessages.claudeMore()))
+        assertEquals("""{"id":"claude.show_context"}""", wire(ActionMessages.claudeShowContext()))
+        assertEquals("""{"id":"claude.show_usage"}""", wire(ActionMessages.claudeShowUsage()))
         assertEquals("""{"id":"claude.open","title":"Fix \"login\" é"}""", wire(ActionMessages.claudeOpen("Fix \"login\" é")))
     }
 
