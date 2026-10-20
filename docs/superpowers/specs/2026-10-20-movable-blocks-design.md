@@ -98,3 +98,58 @@ Chaque bloc a un identifiant stable et une taille fixe, exprimée en colonnes ×
   - masquer puis rétablir un bloc ;
   - quitter puis relancer l'app : la disposition est conservée ;
   - brancher puis retirer une clé USB : le bloc apparaît puis disparaît à sa place.
+
+## 7. Révision (2026-10-20, après essai réel) : cellules carrées et blocs redimensionnables
+
+L'utilisateur a demandé des cellules carrées à la taille de l'ancienne tuile Wi-Fi, et des blocs de taille réglable. Cette section remplace le §2 (tailles), le §3 (grille et dimensions) et complète le §4 et le §5.
+
+### 7.1 Grille
+
+- **Cellules carrées** d'environ **120 dp** :
+  - colonnes = `max(2, ⌊largeur disponible ÷ 120 dp⌋)` ;
+  - côté d'une cellule = (largeur − écarts) ÷ colonnes, la hauteur d'une ligne est le même côté ;
+  - écart entre cellules : 8 dp.
+- Environ **11 colonnes** sur la tablette en paysage (1440 dp), **7** en portrait (900 dp), **2 à 3** sur un téléphone.
+- Le placement reste le premier emplacement libre, en parcourant les lignes puis les colonnes (`BlockGrid.place`). Une taille plus large que la grille est ramenée à sa largeur au moment du placement ; la taille enregistrée n'est pas modifiée.
+
+### 7.2 Tailles des blocs (en cellules, largeur × hauteur)
+
+Un bloc a une taille par défaut, un minimum et un maximum. Le minimum est ce dont son contenu a besoin, avec le remplissage serré de 14 dp, pour ne jamais être coupé.
+
+| Bloc | Défaut | Minimum | Maximum |
+|---|---|---|---|
+| `clock` | 4 × 2 | 2 × 1 | 8 × 3 |
+| `now_playing` | 3 × 2 | 3 × 2 | 6 × 4 |
+| `sound` (sans touches média) | 3 × 1 | 2 × 1 | 6 × 2 |
+| `sound` (avec touches média) | 3 × 2 | 3 × 2 | 6 × 3 |
+| `brightness` | 3 × 1 | 2 × 1 | 6 × 2 |
+| `wifi`, `bluetooth`, `airplane` | 1 × 1 | 1 × 1 | 2 × 2 |
+| `usb` | 3 × 1 | 3 × 1 | 6 × 3 |
+
+Pourquoi ces minimums (estimations de hauteur et de largeur utiles pour une cellule de 120 dp) :
+- Son sans touches : en-tête de 28 dp et ligne muet + curseur de 56 dp, soit 84 dp pour 92 dp utiles sur une ligne.
+- Son avec touches : en-tête, curseur, puis muet et trois touches, soit environ 146 dp pour 220 dp utiles sur deux lignes ; la ligne des touches demande environ 330 dp de large, d'où trois colonnes.
+- Lecture en cours : pochette de 112 dp, plus un texte et trois touches (environ 190 dp), soit 3 colonnes et 2 lignes.
+- Luminosité : en-tête de 28 dp, curseur de 44 dp, soit 80 dp sur une ligne, et deux colonnes pour l'en-tête et la valeur.
+- Tuiles Wi-Fi, Bluetooth, Avion : 104 dp de haut au minimum, dans une cellule.
+- Clé USB : une puce de 68 dp, qui demande environ 300 dp de large.
+- Horloge : la taille des chiffres suit la cellule (hauteur − 64 dp, divisé par 1,2).
+
+### 7.3 Édition
+
+- **Plus d'ondulation** : en édition, les blocs ne bougent pas.
+- **Cellules visibles** : en édition, toutes les cellules de la grille sont dessinées derrière les blocs (carrés arrondis, fond blanc 7 %, bordure blanche 20 %), sur toutes les colonnes et sur les lignes utilisées plus **une ligne vide** en bas. Pendant un glissement, les cellules que le bloc occuperait sont plus claires.
+- **Poignée de redimensionnement** : en bas à droite de chaque bloc. Faire glisser la poignée agrandit ou réduit le bloc cellule par cellule, dans son minimum et son maximum et dans le nombre de colonnes. La grille se replace en direct, avec un retour haptique à chaque pas.
+- **Dépôt sous la dernière ligne** : lâcher un bloc dans la ligne vide du bas le met en fin d'ordre.
+
+### 7.4 Enregistrement
+
+La clé `actions_layout` gagne `"sizes":{"<id>":[largeur,hauteur]}`. Seules les tailles choisies y figurent.
+- Un id inconnu, ou une valeur qui n'est pas deux entiers positifs, est ignoré.
+- Une taille hors limites est ramenée entre le minimum et le maximum du bloc ; elle est ensuite ramenée au nombre de colonnes au moment du placement.
+- Un JSON sans `sizes` donne les tailles par défaut.
+- Les mêmes tailles servent en paysage et en portrait.
+
+### 7.5 Tests
+
+Placement avec tailles (11, 7 et 2 colonnes, avec et sans touches média), trous comblés, tailles ramenées aux colonnes, pas de redimensionnement dans le minimum et le maximum, aller-retour du JSON, JSON ancien et tolérance, déplacement en fin d'ordre.

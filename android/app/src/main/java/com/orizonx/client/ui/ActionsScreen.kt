@@ -343,7 +343,6 @@ fun ActionsScreen(
                                     blocksLayout = it
                                     layoutStore.save(it)
                                 },
-                                landscape = landscape,
                                 editing = editingBlocks,
                                 onEditing = { editingBlocks = it },
                                 haptic = { haptics.performHapticFeedback(it) },
@@ -1129,7 +1128,7 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
     when (id) {
         BlockId.CLOCK -> Box(modifier, contentAlignment = Alignment.Center) {
             // The clock takes its natural height inside its cell.
-            Box(Modifier.wrapContentHeight(unbounded = true)) { ClockBlock(state.clock, state.battery, clockSp, 20f) }
+            Box(Modifier.wrapContentHeight(unbounded = true)) { ClockBlock(state.clock, state.battery, clockSp, (clockSp * 0.42f).coerceIn(12f, 22f)) }
         }
         BlockId.SOUND -> SoundCard(state, c, modifier, stretch = true)
         BlockId.NOW_PLAYING -> state.nowPlaying?.let { NowPlayingCard(it, c, modifier, stretch = true) }

@@ -56,6 +56,13 @@ class ActionsLayoutTest {
     }
 
     @Test
+    fun droppingBelowTheLastRowMovesToTheEnd() {
+        assertEquals(listOf(SOUND, WIFI, USB, CLOCK), abcd.moveToEnd(CLOCK).order)
+        assertEquals(abcd, abcd.moveToEnd(USB))
+        assertEquals(abcd, abcd.moveToEnd(BRIGHTNESS))
+    }
+
+    @Test
     fun hiddenOrAbsentBlocksBetweenAreStepped() {
         // WIFI is hidden and SOUND is absent: they still count in the order, so the drop lands where the target sits.
         val l = layout(CLOCK, WIFI, SOUND, BRIGHTNESS, USB, hidden = setOf(WIFI))
@@ -198,5 +205,90 @@ class ActionsLayoutTest {
         prefs.values["actions_layout"] = "{oops"
         assertEquals(ActionsLayout.DEFAULT, ActionsLayoutStore(prefs).load())
         assertNull(prefs.values["other"])
+    }
+
+    // --- Sizes ------------------------------------------------------------------------------------------------------------------
+
+    @Test
+    fun withoutAChoiceABlockHasItsDefaultSize() {
+        assertEquals(Span(4, 2), ActionsLayout.DEFAULT.sizeOf(CLOCK, 11))
+        assertEquals(Span(3, 1), ActionsLayout.DEFAULT.sizeOf(SOUND, 11))
+        assertEquals(Span(3, 2), ActionsLayout.DEFAULT.sizeOf(SOUND, 11, soundKeys = true))
+    }
+
+    @Test
+    fun aChosenSizeIsUsedWithinTheLimits() {
+        val l = ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(5, 2))
+        assertEquals(Span(5, 2), l.sizeOf(BRIGHTNESS, 11))
+        assertEquals(Span(6, 2), ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(40, 9)).sizeOf(BRIGHTNESS, 11)) // max
+        assertEquals(Span(2, 1), ActionsLayout.DEFAULT.resize(BRIGHTNESS, Span(0, -3)).sizeOf(BRIGHTNESS, 11)) // min
+    }
+
+    @Test
+    fun theSizeIsNarrowedToTheColumnCountAtLayoutTimeButKept() {
+        val l = ActionsLayout.DEFAULT.resize(CLOCK, Span(8, 3))
+        assertEquals(Span(8, 3), l.sizeOf(CLOCK, 11))
+        assertEquals(Span(2, 3), l.sizeOf(CLOCK, 2))
+        assertEquals(Span(7, 3), l.sizeOf(CLOCK, 7))
+        // The stored size is untouched by the narrower grid.
+        assertEquals(Span(8, 3), l.sizes[CLOCK])
+    }
+
+    @Test
+    fun theMediaKeysRaiseTheSoundMinimum() {
+        val small = ActionsLayout.DEFAULT.resize(SOUND, Span(2, 1))
+        assertEquals(Span(2, 1), small.sizeOf(SOUND, 11))
+        assertEquals(Span(3, 2), small.sizeOf(SOUND, 11, soundKeys = true))
+        assertEquals(Span(3, 2), ActionsLayout.DEFAULT.resize(SOUND, Span(1, 1), soundKeys = true).sizes[SOUND])
+    }
+
+    @Test
+    fun resizingStepsCellByCellWithinMinAndMax() {
+        val start = Span(3, 1)
+        assertEquals(Span(4, 2), BRIGHTNESS.resized(start, +1, +1))
+        assertEquals(Span(2, 1), BRIGHTNESS.resized(start, -1, 0))
+        assertEquals(Span(2, 1), BRIGHTNESS.resized(start, -5, -5)) // minimum
+        assertEquals(Span(6, 2), BRIGHTNESS.resized(start, +9, +9)) // maximum
+        assertEquals(start, BRIGHTNESS.resized(start, 0, 0))
+        assertEquals(Span(1, 1), WIFI.resized(Span(1, 1), -1, -1))
+        assertEquals(Span(2, 2), WIFI.resized(Span(1, 1), +1, +1))
+        assertEquals(Span(2, 2), WIFI.resized(Span(2, 2), +1, +1))
+        assertEquals(Span(3, 2), SOUND.resized(Span(3, 2), -1, -1, soundKeys = true))
+    }
+
+    @Test
+    fun sizesRoundTripThroughTheJson() {
+        val l = ActionsLayout.DEFAULT.resize(CLOCK, Span(6, 2)).resize(WIFI, Span(2, 2)).hide(USB)
+        val back = ActionsLayout.fromJson(l.toJson())
+        assertEquals(l, back)
+        val json = JSONObject(l.toJson()).getJSONObject("sizes")
+        assertEquals(6, json.getJSONArray("clock").getInt(0))
+        assertEquals(2, json.getJSONArray("wifi").getInt(1))
+        assertEquals(2, json.length())
+    }
+
+    @Test
+    fun oldJsonWithoutSizesGivesDefaults() {
+        val l = ActionsLayout.fromJson("""{"order":["usb","clock"],"hidden":["wifi"]}""")
+        assertTrue(l.sizes.isEmpty())
+        assertEquals(CLOCK.defaultSize(), l.sizeOf(CLOCK, 11))
+        assertTrue(ActionsLayout.fromJson("""{"order":[],"hidden":[],"sizes":null}""").sizes.isEmpty())
+        assertTrue(ActionsLayout.fromJson("""{"sizes":[1,2]}""").sizes.isEmpty())
+    }
+
+    @Test
+    fun badSizesAreDroppedAndOutOfRangeOnesClamped() {
+        val l = ActionsLayout.fromJson(
+            """{"sizes":{"clock":[99,99],"wifi":[0,1],"sound":[3],"usb":[3,2,1],"brightness":["a",1],"nope":[1,1],
+                "bluetooth":[1.0,1],"airplane":[-4,2],"now_playing":[1,1]}}""",
+        )
+        assertEquals(Span(8, 3), l.sizes[CLOCK]) // clamped to the maximum
+        assertNull(l.sizes[WIFI]) // zero
+        assertNull(l.sizes[SOUND]) // one number
+        assertNull(l.sizes[USB]) // three numbers
+        assertNull(l.sizes[BRIGHTNESS]) // not numbers
+        assertEquals(Span(1, 1), l.sizes[BLUETOOTH])
+        assertNull(l.sizes[AIRPLANE]) // negative
+        assertEquals(Span(3, 2), l.sizes[NOW_PLAYING]) // raised to the minimum
     }
 }

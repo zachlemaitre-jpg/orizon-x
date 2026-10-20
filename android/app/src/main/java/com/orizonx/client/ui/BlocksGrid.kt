@@ -1,13 +1,7 @@
 package com.orizonx.client.ui
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,7 +29,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,7 +37,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -55,7 +53,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -66,13 +63,16 @@ import com.orizonx.client.actions.ActionsLayout
 import com.orizonx.client.actions.ActionsState
 import com.orizonx.client.actions.BlockGrid
 import com.orizonx.client.actions.BlockId
+import com.orizonx.client.actions.ControlRules
+import com.orizonx.client.actions.Span
 import com.orizonx.client.i18n.S
 import com.orizonx.client.i18n.tr
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-private val GridGap = 14.dp
+private val GridGap = 8.dp
 private val BlockShape = RoundedCornerShape(20.dp)
+private val CellShape = RoundedCornerShape(14.dp)
 private const val LONG_PRESS_MS = 500L
 private const val MOVE_ANIMATION_MS = 200
 private const val MOVE_COOLDOWN_MS = 250L
@@ -90,10 +90,11 @@ private fun blockName(id: BlockId): S = when (id) {
 }
 
 /**
- * The main Actions screen: the blocks the PC offers, in the user's [layout], on a grid that scrolls vertically.
- * A long press outside a block's controls starts the edit mode ([editing]); there blocks wiggle, can be dragged onto
- * one another to swap places, hidden with their badge, and brought back from the "+ Add" list. The layout is changed
- * only through [onLayout]; [haptic] gives the feedback of entering, moving and hiding.
+ * The main Actions screen: the blocks the PC offers, in the user's [layout], on a grid of square cells (about 120 dp) that
+ * scrolls vertically. A long press outside a block's controls starts the edit mode ([editing]). There the cells of the
+ * grid are drawn behind the blocks (plus one empty row to drop into), blocks can be dragged onto one another to swap
+ * places, resized from their bottom-right corner, hidden with their badge, and brought back from the "+ Add" list. The
+ * layout is changed only through [onLayout]; [haptic] gives the feedback of entering, moving, resizing and hiding.
  */
 @Composable
 internal fun BlocksBody(
@@ -101,7 +102,6 @@ internal fun BlocksBody(
     c: Controls,
     layout: ActionsLayout,
     onLayout: (ActionsLayout) -> Unit,
-    landscape: Boolean,
     editing: Boolean,
     onEditing: (Boolean) -> Unit,
     haptic: (HapticFeedbackType) -> Unit,
@@ -124,7 +124,7 @@ internal fun BlocksBody(
             }
         } else {
             CompositionLocalProvider(LocalGlassPadding provides 14.dp) {
-                Grid(state, c, layout, onLayout, visible, landscape, editing, onEditing, haptic, dragging) { dragging = it }
+                Grid(state, c, layout, onLayout, visible, editing, onEditing, haptic, dragging) { dragging = it }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -138,7 +138,6 @@ private fun Grid(
     layout: ActionsLayout,
     onLayout: (ActionsLayout) -> Unit,
     visible: List<BlockId>,
-    landscape: Boolean,
     editing: Boolean,
     onEditing: (Boolean) -> Unit,
     haptic: (HapticFeedbackType) -> Unit,
@@ -147,37 +146,74 @@ private fun Grid(
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val density = LocalDensity.current
-        val columns = if (landscape && maxWidth >= 600.dp) 4 else 2
-        val rowHeight: Dp = if (columns >= 4) 170.dp else 150.dp
-        val cellWidth = (maxWidth - GridGap * (columns - 1)) / columns
-        val placements = BlockGrid.place(visible, columns)
+        val columns = BlockGrid.columnsFor(maxWidth.value)
+        val keys = ControlRules.soundKeys(state)
+        // Square cells: the width shared by the columns, the same side for the rows.
+        val side = (maxWidth - GridGap * (columns - 1)) / columns
+        val placements = BlockGrid.place(visible, columns) { layout.sizeOf(it, columns, keys) }
         val rows = BlockGrid.rowCount(placements)
-        val gridHeight = if (rows == 0) 0.dp else rowHeight * rows + GridGap * (rows - 1)
+        // The edit mode shows one more, empty, row at the bottom.
+        val shownRows = if (editing) rows + 1 else rows
+        val gridHeight = if (shownRows == 0) 0.dp else side * shownRows + GridGap * (shownRows - 1)
 
-        val cellW = with(density) { cellWidth.toPx() }
-        val rowH = with(density) { rowHeight.toPx() }
+        val cell = with(density) { side.toPx() }
         val gap = with(density) { GridGap.toPx() }
-        fun position(p: BlockGrid.Placement) = IntOffset(((cellW + gap) * p.col).roundToInt(), ((rowH + gap) * p.row).roundToInt())
-        fun size(p: BlockGrid.Placement) = IntSize((cellW * p.cols + gap * (p.cols - 1)).roundToInt(), (rowH * p.rows + gap * (p.rows - 1)).roundToInt())
+        val pitch = cell + gap
+        fun position(p: BlockGrid.Placement) = IntOffset((pitch * p.col).roundToInt(), (pitch * p.row).roundToInt())
+        fun size(p: BlockGrid.Placement) = IntSize((cell * p.cols + gap * (p.cols - 1)).roundToInt(), (cell * p.rows + gap * (p.rows - 1)).roundToInt())
 
         val latestPlacements by rememberUpdatedState(placements)
         val latestLayout by rememberUpdatedState(layout)
-        val latestEditing by rememberUpdatedState(editing)
         var dragPos by remember { mutableStateOf(IntOffset.Zero) }
         var lastMove by remember { mutableStateOf(0L) }
+        var resizeStart by remember { mutableStateOf(Span(1, 1)) }
+        var resizeAcc by remember { mutableStateOf(Offset.Zero) }
 
-        Box(Modifier.fillMaxWidth().height(gridHeight)) {
-            for ((index, placement) in placements.withIndex()) {
+        // The cells the dragged block would take if it were dropped now.
+        val highlighted: Set<Pair<Int, Int>> = remember(placements, dragging) {
+            val p = placements.firstOrNull { it.id == dragging }
+            if (p == null) {
+                emptySet()
+            } else {
+                buildSet { for (r in p.row until p.row + p.rows) for (cc in p.col until p.col + p.cols) add(cc to r) }
+            }
+        }
+
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(gridHeight)
+                .then(
+                    if (editing) {
+                        Modifier.drawBehind {
+                            val radius = CornerRadius(14.dp.toPx())
+                            val stroke = Stroke(1.dp.toPx())
+                            for (r in 0 until shownRows) {
+                                for (col in 0 until columns) {
+                                    val topLeft = Offset(pitch * col, pitch * r)
+                                    val on = (col to r) in highlighted
+                                    drawRoundRect(Color.White.copy(alpha = if (on) 0.14f else 0.07f), topLeft, Size(cell, cell), radius)
+                                    drawRoundRect(Color.White.copy(alpha = if (on) 0.6f else 0.2f), topLeft, Size(cell, cell), radius, style = stroke)
+                                }
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            for (placement in placements) {
                 val id = placement.id
                 androidx.compose.runtime.key(id) {
                     val isDragging = dragging == id
+                    val widthDp = with(density) { size(placement).width.toDp().value }
+                    val heightDp = with(density) { size(placement).height.toDp().value }
                     GridBlock(
                         target = position(placement),
                         size = size(placement),
                         editing = editing,
                         isDragging = isDragging,
                         dragPos = dragPos,
-                        wiggleIndex = index,
                         hideDescription = tr(S.BLOCKS_HIDE_DESC, "name" to tr(blockName(id))),
                         onLongPress = {
                             haptic(HapticFeedbackType.LongPress)
@@ -200,10 +236,19 @@ private fun Grid(
                                 val sz = size(other)
                                 centerX >= pos.x && centerX < pos.x + sz.width && centerY >= pos.y && centerY < pos.y + sz.height
                             }
-                            if (over != null && now - lastMove >= MOVE_COOLDOWN_MS) {
-                                lastMove = now
-                                haptic(HapticFeedbackType.ContextClick)
-                                onLayout(latestLayout.move(id, over.id))
+                            // Below the last row of blocks: the block goes to the end of the order.
+                            val below = over == null && centerY >= pitch * BlockGrid.rowCount(latestPlacements)
+                            if (now - lastMove >= MOVE_COOLDOWN_MS) {
+                                val next = when {
+                                    over != null -> latestLayout.move(id, over.id)
+                                    below -> latestLayout.moveToEnd(id)
+                                    else -> latestLayout
+                                }
+                                if (next != latestLayout) {
+                                    lastMove = now
+                                    haptic(HapticFeedbackType.ContextClick)
+                                    onLayout(next)
+                                }
                             }
                         },
                         onDragEnd = { setDragging(null) },
@@ -211,8 +256,29 @@ private fun Grid(
                             haptic(HapticFeedbackType.ContextClick)
                             onLayout(latestLayout.hide(id))
                         },
+                        onResizeStart = {
+                            val p = latestPlacements.first { it.id == id }
+                            resizeStart = Span(p.cols, p.rows)
+                            resizeAcc = Offset.Zero
+                        },
+                        onResize = { amount ->
+                            resizeAcc += amount
+                            val wanted = id.resized(
+                                resizeStart,
+                                (resizeAcc.x / pitch).roundToInt(),
+                                (resizeAcc.y / pitch).roundToInt(),
+                                keys,
+                            )
+                            val next = Span(wanted.cols.coerceAtMost(columns), wanted.rows)
+                            if (next != latestLayout.sizeOf(id, columns, keys)) {
+                                haptic(HapticFeedbackType.ContextClick)
+                                onLayout(latestLayout.resize(id, next, keys))
+                            }
+                        },
                     ) { m ->
-                        BlockContent(id, state, c, min(if (columns >= 4) 76f else 60f, cellWidth.value * placement.cols / 4.1f), m)
+                        // The clock scales with its cell: big digits in a tall block, smaller in a one-row block.
+                        val clockSp = min(((heightDp - 64f) / 1.2f).coerceIn(20f, 112f), widthDp / 4.1f)
+                        BlockContent(id, state, c, clockSp, m)
                     }
                 }
             }
@@ -222,8 +288,8 @@ private fun Grid(
 
 /**
  * One block at [target] (animated over ~200 ms when it changes). Outside the edit mode a long press that no control of the
- * block took starts it; inside, a transparent layer takes every touch (so the controls are off), drags move the block, and
- * the badge hides it.
+ * block took starts it; inside, a transparent layer takes every touch (so the controls are off), drags move the block, the
+ * badge hides it and the corner handle resizes it.
  */
 @Composable
 private fun GridBlock(
@@ -232,13 +298,14 @@ private fun GridBlock(
     editing: Boolean,
     isDragging: Boolean,
     dragPos: IntOffset,
-    wiggleIndex: Int,
     hideDescription: String,
     onLongPress: () -> Unit,
     onDragStart: () -> Unit,
     onDrag: (IntOffset) -> Unit,
     onDragEnd: () -> Unit,
     onHide: () -> Unit,
+    onResizeStart: () -> Unit,
+    onResize: (Offset) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
     val density = LocalDensity.current
@@ -250,11 +317,12 @@ private fun GridBlock(
     LaunchedEffect(isDragging, dragPos) {
         if (isDragging) anim.snapTo(dragPos)
     }
-    val wiggle: State<Float>? = if (editing && !isDragging) rememberWiggle(wiggleIndex) else null
     val latestLongPress by rememberUpdatedState(onLongPress)
     val latestDragStart by rememberUpdatedState(onDragStart)
     val latestDrag by rememberUpdatedState(onDrag)
     val latestDragEnd by rememberUpdatedState(onDragEnd)
+    val latestResizeStart by rememberUpdatedState(onResizeStart)
+    val latestResize by rememberUpdatedState(onResize)
     val slop = LocalViewConfiguration.current.touchSlop
     val widthDp = with(density) { size.width.toDp() }
     val heightDp = with(density) { size.height.toDp() }
@@ -268,7 +336,6 @@ private fun GridBlock(
                 val scale = if (isDragging) 1.05f else 1f
                 scaleX = scale
                 scaleY = scale
-                rotationZ = wiggle?.value ?: 0f
                 shadowElevation = if (isDragging) 24.dp.toPx() else 0f
                 shape = BlockShape
                 clip = false
@@ -331,20 +398,30 @@ private fun GridBlock(
             ) {
                 BasicText("✕", style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold))
             }
+            // Resize handle: drag it to grow or shrink the block cell by cell.
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF3A3A3F))
+                    .border(1.dp, Color.White.copy(alpha = 0.6f), CircleShape)
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { latestResizeStart() },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                latestResize(amount)
+                            },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText("↘", style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold))
+            }
         }
     }
-}
-
-/** A tiny rotation back and forth (about one degree), each block starting a little after the previous one. */
-@Composable
-private fun rememberWiggle(index: Int): State<Float> {
-    val transition = rememberInfiniteTransition(label = "wiggle")
-    return transition.animateFloat(
-        initialValue = -1f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(130, easing = LinearEasing), RepeatMode.Reverse, initialStartOffset = StartOffset((index % 6) * 43)),
-        label = "wiggleAngle",
-    )
 }
 
 /** "+ Add" (only when something is hidden), opening the list of hidden blocks, and "Done". */
