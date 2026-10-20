@@ -92,6 +92,8 @@ class WireTest(unittest.TestCase):
     def start_engine(self):
         self.controller.start()
         pump_until(lambda: self.controller.state is State.WAITING_DEVICE)
+        # The window learns the state through a queued Qt signal: under load it can lag behind the controller.
+        pump_until(lambda: self.window.primary_text() in ("Arrêter", "Stop"))
         return FakeEngine.instances[-1]
 
     def test_primary_button_starts_then_stops(self):
