@@ -94,6 +94,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.orizonx.client.R
 import com.orizonx.client.actions.ActionMessages
+import com.orizonx.client.actions.ActionsLayoutStore
 import com.orizonx.client.actions.ActionThrottle
 import com.orizonx.client.actions.ActionsFormat
 import com.orizonx.client.actions.ActionsIcons
@@ -108,6 +109,7 @@ import com.orizonx.client.actions.BrightnessState
 import com.orizonx.client.actions.ClockState
 import com.orizonx.client.actions.ContextBar
 import com.orizonx.client.actions.ContextButton
+import com.orizonx.client.actions.BlockId
 import com.orizonx.client.actions.ControlRules
 import com.orizonx.client.actions.KeyboardTopCards
 import com.orizonx.client.actions.ContextIcons
@@ -145,7 +147,6 @@ private val PillShape = RoundedCornerShape(24.dp)
 private val TileShape = RoundedCornerShape(18.dp)
 private val CoverShape = RoundedCornerShape(16.dp)
 private val ChipShape = RoundedCornerShape(20.dp)
-private val UsbChipMaxWidth = 280.dp
 
 /**
  * The Actions remote: clock, PC battery and the controls reported by the PC's latest ACTIONS_STATE ([rawState]).
@@ -211,6 +212,9 @@ fun ActionsScreen(
     val appContext = LocalContext.current
     val trackpadStore = remember { TrackpadStore(appContext.getSharedPreferences("orizonx", Context.MODE_PRIVATE)) }
     var trackpadSensitivity by remember { mutableFloatStateOf(trackpadStore.load()) }
+    val layoutStore = remember { ActionsLayoutStore(appContext.getSharedPreferences("orizonx", Context.MODE_PRIVATE)) }
+    var blocksLayout by remember { mutableStateOf(layoutStore.load()) }
+    var editingBlocks by remember { mutableStateOf(false) }
 
     val volumeThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.volumeSet(it)) } }
     val brightnessThrottle = remember { ActionThrottle(clock = SystemClock::elapsedRealtime) { send(ActionMessages.brightnessSet(it)) } }
@@ -237,6 +241,9 @@ fun ActionsScreen(
             val gamepadInfo = state?.gamepad
             val showGamepad = gamepadOpen && !showKeyboard && !showTrackpad && gamepadInfo != null
             val claudeInfo = state?.claude
+            // Opening the keyboard, trackpad, gamepad or Claude Code ends the block edit mode.
+            val otherScreenOpen = keyboardOpen || trackpadOpen || gamepadOpen || claudeOpen
+            LaunchedEffect(otherScreenOpen) { if (otherScreenOpen) editingBlocks = false }
             val showClaude = claudeOpen && !showKeyboard && !showTrackpad && !showGamepad && claudeInfo != null
             val contextStrip: @Composable () -> Unit = {
                 if (contextBar != null) {
@@ -330,7 +337,18 @@ fun ActionsScreen(
                                 GlassText(tr(S.CONNECTING_TO_PC), size = 16.sp, alpha = 0.8f)
                             }
                         } else {
-                            ActionsBody(state, controls, landscape, Modifier.fillMaxWidth().weight(1f))
+                            BlocksBody(
+                                state, controls, blocksLayout,
+                                onLayout = {
+                                    blocksLayout = it
+                                    layoutStore.save(it)
+                                },
+                                landscape = landscape,
+                                editing = editingBlocks,
+                                onEditing = { editingBlocks = it },
+                                haptic = { haptics.performHapticFeedback(it) },
+                                modifier = Modifier.fillMaxWidth().weight(1f),
+                            )
                         }
                     }
                     // The Touch-Bar-like strip sits at the very bottom; without a context nothing is reserved for it.
@@ -363,7 +381,7 @@ private const val NOTICE_MS = 3000L
 private const val SLIDER_HOLD_MS = 700L
 
 /** Everything a card needs to act: send, haptics, optimistic update and the slider throttles. */
-private class Controls(
+internal class Controls(
     val send: (JSONObject) -> Unit,
     val tap: () -> Unit,
     val update: (ActionsState.() -> ActionsState) -> Unit,
@@ -372,134 +390,8 @@ private class Controls(
     val images: Map<String, ImageBitmap>,
 )
 
-/**
- * Clock, date and PC battery centred at the top; the controls form a centred block anchored to the bottom.
- * Scrolls only when the content does not fit.
- */
-@Composable
-private fun ActionsBody(state: ActionsState, c: Controls, landscape: Boolean, modifier: Modifier) {
-    BoxWithConstraints(modifier) {
-        val viewport = maxHeight
-        // MAZAGLA is wide: "HH:MM" (fixed digit cells) plus the small seconds is ~3.75 em: scale the font so it never clips.
-        val clockSp = min(if (landscape) 112f else 80f, maxWidth.value / 4.1f)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Column(Modifier.fillMaxWidth().heightIn(min = viewport), horizontalAlignment = Alignment.CenterHorizontally) {
-                ClockBlock(state.clock, state.battery, clockSp, if (landscape) 26f else 22f)
-                Spacer(Modifier.height(16.dp))
-                if (landscape) {
-                    // The free space between the clock and the bottom block holds the USB side rail, on the right edge.
-                    Box(Modifier.weight(1f).fillMaxWidth()) { UsbRail(state.usb, c) }
-                    LandscapeControls(state, c)
-                } else {
-                    Spacer(Modifier.weight(1f))
-                    PortraitControls(state.usb, c, cards(state, c))
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
-    }
-}
-
-/** USB chips in a scrollable row just above the bottom column (nothing without a drive). */
-@Composable
-private fun PortraitControls(usb: List<UsbDrive>, c: Controls, all: List<@Composable () -> Unit>) {
-    Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (usb.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                for (drive in usb) UsbChip(drive, c, Modifier.width(UsbChipMaxWidth))
-            }
-        }
-        for (card in all) card()
-    }
-}
-
-/** Side rail on the right edge: one chip per drive, stacked; nothing without a drive. */
-@Composable
-private fun BoxScope.UsbRail(usb: List<UsbDrive>, c: Controls) {
-    if (usb.isEmpty()) return
-    Column(
-        Modifier.align(Alignment.CenterEnd).wrapContentHeight(unbounded = true).width(UsbChipMaxWidth),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth())
-    }
-}
-
-/**
- * Two equal-width columns with the same top and bottom. Left: the "En cours de lecture" card (when present) then the Son
- * card; right: Luminosité then the Wi-Fi/Bluetooth/Avion tiles. The last card of each column stretches so both end at the
- * same line. A lone column is centred. USB drives are not here: they live in the side rail ([UsbRail]).
- */
-@Composable
-private fun LandscapeControls(state: ActionsState, c: Controls) {
-    val sound = hasSound(state)
-    val brightness = state.brightness
-    val radios = hasRadios(state)
-    val right = brightness != null || radios
-    val nowPlaying = state.nowPlaying
-    val left = sound || nowPlaying != null
-    if (!left && !right) return
-    if (left && right) {
-        Row(Modifier.widthIn(max = 1040.dp).fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                LeftColumn(state, c, nowPlaying, sound, stretch = true)
-            }
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                RightColumn(state, c, brightness, radios)
-            }
-        }
-    } else {
-        Box(Modifier.widthIn(max = 1040.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-            Column(Modifier.widthIn(max = 460.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                if (left) LeftColumn(state, c, nowPlaying, sound, stretch = false) else RightColumn(state, c, brightness, radios)
-            }
-        }
-    }
-}
-
-/** Now playing then Son; with [stretch] the last card takes the remaining height of the column. */
-@Composable
-private fun ColumnScope.LeftColumn(state: ActionsState, c: Controls, nowPlaying: NowPlaying?, sound: Boolean, stretch: Boolean) {
-    if (nowPlaying != null) {
-        val last = !sound
-        NowPlayingCard(
-            nowPlaying, c,
-            if (stretch && last) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth(),
-            stretch = stretch && last,
-        )
-    }
-    if (sound) {
-        SoundCard(state, c, if (stretch) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth(), stretch = stretch)
-    }
-}
-
-/** Luminosité then the radio tiles; the last element takes the remaining height of the column. */
-@Composable
-private fun ColumnScope.RightColumn(state: ActionsState, c: Controls, brightness: BrightnessState?, radios: Boolean) {
-    if (brightness != null) {
-        BrightnessCard(brightness, c, if (radios) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().weight(1f))
-    }
-    if (radios) RadioTiles(state, c, Modifier.fillMaxWidth().weight(1f))
-}
-
 /** The media keys live in the "En cours de lecture" card when it is shown, in the Son card otherwise. */
 private fun soundKeys(state: ActionsState) = ControlRules.soundKeys(state)
-
-private fun hasSound(state: ActionsState) = ControlRules.hasSound(state)
-private fun hasRadios(state: ActionsState) = state.wifi != null || state.bluetooth != null || state.airplane != null
-
-/** The controls the PC reports as available, in display order. */
-private fun cards(state: ActionsState, c: Controls): List<@Composable () -> Unit> {
-    val list = mutableListOf<@Composable () -> Unit>()
-    state.nowPlaying?.let { n -> list += { NowPlayingCard(n, c) } }
-    if (hasSound(state)) list += { SoundCard(state, c) }
-    state.brightness?.let { b -> list += { BrightnessCard(b, c) } }
-    if (hasRadios(state)) list += { RadioTiles(state, c) }
-    return list
-}
 
 /**
  * What stays above the open keyboard, compact: the clock with its date and the PC battery, then the Sound and Brightness
@@ -1194,29 +1086,58 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
 }
 
 @Composable
-private fun RadioTiles(state: ActionsState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        state.wifi?.let { wifi: WifiState ->
-            Tile(wifiRes(wifi), tr(S.WIFI), wifi.ssid ?: onOff(wifi.on), wifi.on, Modifier.weight(1f).fillMaxHeight()) {
-                c.tap()
-                c.update { copy(wifi = wifi.copy(on = !wifi.on)) }
-                c.send(ActionMessages.wifiSet(!wifi.on))
-            }
+private fun WifiTile(wifi: WifiState, c: Controls, modifier: Modifier) {
+    Tile(wifiRes(wifi), tr(S.WIFI), wifi.ssid ?: onOff(wifi.on), wifi.on, modifier) {
+        c.tap()
+        c.update { copy(wifi = wifi.copy(on = !wifi.on)) }
+        c.send(ActionMessages.wifiSet(!wifi.on))
+    }
+}
+
+@Composable
+private fun BluetoothTile(bt: BluetoothState, c: Controls, modifier: Modifier) {
+    Tile(R.drawable.ox_bluetooth, tr(S.BLUETOOTH), bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, modifier) {
+        c.tap()
+        c.update { copy(bluetooth = BluetoothState(!bt.on, bt.connected)) }
+        c.send(ActionMessages.bluetoothSet(!bt.on))
+    }
+}
+
+@Composable
+private fun AirplaneTile(plane: AirplaneState, c: Controls, modifier: Modifier) {
+    Tile(R.drawable.ic_action_airplane, tr(S.AIRPLANE), onOff(plane.on), plane.on, modifier) {
+        c.tap()
+        c.update { copy(airplane = AirplaneState(!plane.on)) }
+        c.send(ActionMessages.airplaneSet(!plane.on))
+    }
+}
+
+/** The drives of the USB block, one chip each; it scrolls on its own when there are more than fit. */
+@Composable
+private fun UsbBlock(usb: List<UsbDrive>, c: Controls, modifier: Modifier) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+    ) {
+        for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth())
+    }
+}
+
+/** The content of one grid block, filling the cell it is given; [clockSp] sizes the clock for its cell. */
+@Composable
+internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp: Float, modifier: Modifier) {
+    when (id) {
+        BlockId.CLOCK -> Box(modifier, contentAlignment = Alignment.Center) {
+            // The clock takes its natural height inside its cell.
+            Box(Modifier.wrapContentHeight(unbounded = true)) { ClockBlock(state.clock, state.battery, clockSp, 20f) }
         }
-        state.bluetooth?.let { bt: BluetoothState ->
-            Tile(R.drawable.ox_bluetooth, tr(S.BLUETOOTH), bt.connected.firstOrNull() ?: onOff(bt.on), bt.on, Modifier.weight(1f).fillMaxHeight()) {
-                c.tap()
-                c.update { copy(bluetooth = BluetoothState(!bt.on, bt.connected)) }
-                c.send(ActionMessages.bluetoothSet(!bt.on))
-            }
-        }
-        state.airplane?.let { plane: AirplaneState ->
-            Tile(R.drawable.ic_action_airplane, tr(S.AIRPLANE), onOff(plane.on), plane.on, Modifier.weight(1f).fillMaxHeight()) {
-                c.tap()
-                c.update { copy(airplane = AirplaneState(!plane.on)) }
-                c.send(ActionMessages.airplaneSet(!plane.on))
-            }
-        }
+        BlockId.SOUND -> SoundCard(state, c, modifier, stretch = true)
+        BlockId.NOW_PLAYING -> state.nowPlaying?.let { NowPlayingCard(it, c, modifier, stretch = true) }
+        BlockId.BRIGHTNESS -> state.brightness?.let { BrightnessCard(it, c, modifier) }
+        BlockId.WIFI -> state.wifi?.let { WifiTile(it, c, modifier) }
+        BlockId.BLUETOOTH -> state.bluetooth?.let { BluetoothTile(it, c, modifier) }
+        BlockId.AIRPLANE -> state.airplane?.let { AirplaneTile(it, c, modifier) }
+        BlockId.USB -> UsbBlock(state.usb, c, modifier)
     }
 }
 
@@ -1225,7 +1146,7 @@ private fun onOff(on: Boolean) = tr(if (on) S.STATE_ON else S.STATE_OFF)
 
 /**
  * Compact USB chip: pictogram, "label  E:" with "12 Go libres" under it, then the open-folder and eject buttons.
- * Landscape stacks the chips in a side rail on the right; portrait scrolls them in a row above the controls.
+ * The chips are stacked inside the USB block of the grid.
  */
 @Composable
 private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier) {

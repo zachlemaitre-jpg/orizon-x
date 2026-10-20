@@ -42,6 +42,9 @@ private val PanelShape = RoundedCornerShape(14.dp)
 private fun edgeBrush(top: Float, bottom: Float) =
     Brush.verticalGradient(listOf(Color.White.copy(alpha = top), Color.White.copy(alpha = bottom)))
 
+/** Inner padding of [GlassCard]; the blocks grid makes it tighter so the controls fit their fixed-height cells. */
+val LocalGlassPadding = androidx.compose.runtime.compositionLocalOf { 24.dp }
+
 /** Frosted glass: translucent fill and light edge. Place it over a blurred, colourful background. */
 @Composable
 fun GlassCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
@@ -50,7 +53,7 @@ fun GlassCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.()
             .clip(CardShape)
             .background(Color.White.copy(alpha = 0.10f))
             .border(1.dp, edgeBrush(0.45f, 0.12f), CardShape)
-            .padding(24.dp),
+            .padding(LocalGlassPadding.current),
         content = content,
     )
 }
