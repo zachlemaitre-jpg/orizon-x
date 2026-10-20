@@ -151,6 +151,16 @@ class UiaLayer:
                         element.GetCurrentPattern(client.UIA_InvokePatternId).QueryInterface(
                             client.IUIAutomationInvokePattern).Invoke()
                         return True
+                    # Sans Invoke, un bouton qui déplie (« Afficher la barre latérale » de l'app Claude n'a que
+                    # ExpandCollapse) : on bascule son état, comme un clic.
+                    if element.GetCurrentPropertyValue(client.UIA_IsExpandCollapsePatternAvailablePropertyId):
+                        pattern = element.GetCurrentPattern(client.UIA_ExpandCollapsePatternId).QueryInterface(
+                            client.IUIAutomationExpandCollapsePattern)
+                        if pattern.CurrentExpandCollapseState == client.ExpandCollapseState_Collapsed:
+                            pattern.Expand()
+                        else:
+                            pattern.Collapse()
+                        return True
                 except Exception:  # noqa: BLE001 - not invokable after all: keep looking
                     pass
             try:
