@@ -87,6 +87,10 @@ class WindowTest(unittest.TestCase):
         i18n.set_language("en")  # relabelling keeps the icons
         self.assertTrue(self.window.combo_item_has_icon("mode", "extend"))
 
+    def test_position_icons_are_drawn_larger(self):
+        self.assertEqual(self.window.combo_icon_px("position"), 28)
+        self.assertEqual(self.window.combo_icon_px("mode"), 18)
+
     def test_stop_icon_only_when_the_button_means_stop(self):
         self.assertFalse(self.window.primary_has_icon())  # Start
         self.window.set_state(State.ERROR, msg("error.unexpected", error="boom"))

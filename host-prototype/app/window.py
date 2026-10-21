@@ -23,6 +23,7 @@ INTERVAL_ICON = "interval"  # one icon for every interval of the Frame combo
 CHOOSE_ICON = "choose"
 STOP_ICON = "stop"
 COMBO_ICON_PX = 18
+POSITION_ICON_PX = 28  # the screen-position pictures are detailed: drawn larger than the other combo icons
 BUTTON_ICON_PX = 18
 ENCODER_NAMES = {"amf": "AMF (AMD)", "nvenc": "NVENC (NVIDIA)", "qsv": "QuickSync (Intel)"}  # noms de produits : jamais traduits
 ENCODER_VALUES = ("auto", "amf", "nvenc", "qsv", "x264")
@@ -100,14 +101,15 @@ class ChoiceCombo(QComboBox):
     """A list of setting values whose labels follow the language; activated = the user's choice."""
 
     def __init__(self, values: tuple[Any, ...], label: Callable[[Any, str], str], parent: QWidget | None = None,
-                 icons: dict[str, str] | None = None) -> None:
+                 icons: dict[str, str] | None = None, icon_px: int = COMBO_ICON_PX) -> None:
         super().__init__(parent)
         self._label = label
         self._icons = icons or {}  # value -> icon name (assets/icons)
+        self._icon_px = icon_px
         for value in values:
             self.addItem("", value)
         if self._icons:
-            self.setIconSize(QSize(COMBO_ICON_PX, COMBO_ICON_PX))
+            self.setIconSize(QSize(icon_px, icon_px))
         self.retranslate()
         self.refresh_icons()
 
@@ -117,7 +119,7 @@ class ChoiceCombo(QComboBox):
         for i in range(self.count()):
             name = self._icons.get(self.itemData(i))
             if name is not None:
-                self.setItemIcon(i, brand.icon(name, COMBO_ICON_PX, dpr))
+                self.setItemIcon(i, brand.icon(name, self._icon_px, dpr))
 
     def retranslate(self) -> None:
         """Relabels the items in place: neither the selection nor an open list moves."""
@@ -277,7 +279,7 @@ class MainWindow(QWidget):
 
         self._combos: dict[str, ChoiceCombo] = {
             "mode": ChoiceCombo(settings.MODES, _keyed(MODE_KEYS), self, MODE_ICONS),
-            "position": ChoiceCombo(settings.POSITIONS, _keyed(POSITION_KEYS), self, POSITION_ICONS),
+            "position": ChoiceCombo(settings.POSITIONS, _keyed(POSITION_KEYS), self, POSITION_ICONS, POSITION_ICON_PX),
             "scale": ChoiceCombo(settings.SCALES, _scale_label, self),
             "encoder": ChoiceCombo(ENCODER_VALUES, _encoder_label, self),
             "language": ChoiceCombo(tuple(value for _name, value in LANGUAGE_ITEMS),
@@ -571,6 +573,9 @@ class MainWindow(QWidget):
     def combo_item_has_icon(self, name: str, value: str) -> bool:
         combo = self._combos[name]
         return not combo.itemIcon(combo.findData(value)).isNull()
+
+    def combo_icon_px(self, name: str) -> int:
+        return self._combos[name].iconSize().width()
 
     def choose_has_icon(self) -> bool:
         return not self._choose_folder.icon().isNull()
