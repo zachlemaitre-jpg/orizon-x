@@ -79,8 +79,9 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
 - **En cours de lecture** : carte avec la pochette, le titre, l'artiste, l'album et l'application. Elle marche avec toute source qui publie dans les contrôles multimédias de Windows (Spotify, navigateur, VLC…). Avec Spotify, son icône s'affiche en haut à droite.
 - **Luminosité**.
 - **Wi-Fi** (avec barres de signal), **Bluetooth** et **mode avion**.
-- **Clés et disques USB** : **Ouvrir** dans l'Explorateur, **Éjecter** proprement. Si l'éjection est refusée (clé utilisée), un message le dit.
+- **Clés et disques USB** : un bloc par appareil (jusqu'à 4, par ordre de lettre ; au-delà, les suivants s'ajoutent au 4e). **Ouvrir** affiche le dossier au premier plan dans l'Explorateur, **Éjecter** le retire proprement. Si l'éjection est refusée (clé utilisée), un message le dit.
 - **Lanceurs** : Paramètres (de Windows), Discord, Spotify (classique ou Microsoft Store) et Téléchargements. Un tap ouvre l'app ; si elle est déjà au premier plan, un tap la réduit.
+- **Performances** : un bloc par mesure (Processeur, GPU, RAM, Wi-Fi, NPU) avec la valeur, une courbe des 60 dernières secondes et un détail (fréquence, mémoire, débit montant). Les blocs absents du PC (pas de NPU…) n'apparaissent pas.
 - **Barre contextuelle** (en bas) : des boutons adaptés à l'app au premier plan sur le PC, avec son icône au-dessus de son nom. Sa place est toujours réservée : la grille ne bouge pas quand elle apparaît.
   - Apps : Spotify, PowerPoint, Word, Excel, VS Code, Explorateur, Illustrator, Photoshop, InDesign, Premiere Pro, After Effects, Lightroom Classic, Canva et Figma (app ou site, reconnus par l'adresse), et les IA : Claude (app ou claude.ai), ChatGPT (app ou site) et Gemini, avec une page « Chat » (nouvelle discussion, recherche, barre latérale, copier la réponse, arrêter…).
   - Les apps créatives ont plusieurs pages (Outils, Édition, Affichage…), à choisir par onglets ou par balayage.
