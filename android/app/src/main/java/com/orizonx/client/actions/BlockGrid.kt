@@ -34,6 +34,12 @@ enum class BlockId(val wire: String, private val default: Span, private val min:
     PERF_RAM("perf_ram", Span(2, 1), Span(1, 1)),
     PERF_NET("perf_net", Span(2, 1), Span(1, 1)),
     PERF_NPU("perf_npu", Span(2, 1), Span(1, 1)),
+
+    // One block per drive (see [UsbContent.drivesFor]). Last in the enum so that adding them neither shifts the default
+    // placement of the other blocks nor moves anything in a saved layout: they take the first free cells.
+    USB_2("usb_2", Span(3, 1), Span(2, 1)),
+    USB_3("usb_3", Span(3, 1), Span(2, 1)),
+    USB_4("usb_4", Span(3, 1), Span(2, 1)),
     ;
 
     /** The Sound block starts taller when it carries the media keys, so they are visible by default. */
@@ -52,6 +58,9 @@ enum class BlockId(val wire: String, private val default: Span, private val min:
         const val MAX_CELLS = 64
 
         val DEFAULT_ORDER: List<BlockId> = entries.toList()
+
+        /** The drive blocks, slot 1 first. */
+        val USB_SLOTS: List<BlockId> = listOf(USB, USB_2, USB_3, USB_4)
 
         fun fromWire(value: String?): BlockId? = entries.firstOrNull { it.wire == value }
     }
@@ -74,10 +83,26 @@ object SoundContent {
     }
 }
 
-/** How much of the USB block is shown. */
+/** How much of a USB block is shown. */
 enum class UsbMode { COMPACT, FULL }
 
 object UsbContent {
+    /**
+     * The drives the USB block of [slot] (1-based) shows, from [drives] (sorted by drive letter by the PC): slots 1 to 3
+     * show the drive of their rank alone; slot 4 shows the fourth drive and any further ones, stacked.
+     */
+    fun drivesFor(slot: Int, drives: List<UsbDrive>): List<UsbDrive> = when {
+        slot < 1 -> emptyList()
+        slot >= SLOTS -> drives.drop(SLOTS - 1)
+        else -> drives.drop(slot - 1).take(1)
+    }
+
+    /** Number of USB blocks: the last one takes the overflow. */
+    const val SLOTS = 4
+
+    /** The 1-based slot of a USB block, or null for any other block. */
+    fun slotOf(id: BlockId): Int? = BlockId.USB_SLOTS.indexOf(id).takeIf { it >= 0 }?.plus(1)
+
     /** Two cells wide: a compact chip (icon, name, eject). From three: the full chip (free space, open and eject). */
     fun mode(cols: Int): UsbMode = if (cols >= 3) UsbMode.FULL else UsbMode.COMPACT
 
@@ -102,7 +127,7 @@ object ActionsBlocks {
         if (state.wifi != null) add(BlockId.WIFI)
         if (state.bluetooth != null) add(BlockId.BLUETOOTH)
         if (state.airplane != null) add(BlockId.AIRPLANE)
-        if (state.usb.isNotEmpty()) add(BlockId.USB)
+        BlockId.USB_SLOTS.forEachIndexed { i, id -> if (state.usb.size > i) add(id) }
         state.launchers?.let { l ->
             if (l.settings) add(BlockId.SETTINGS)
             if (l.discord) add(BlockId.DISCORD)

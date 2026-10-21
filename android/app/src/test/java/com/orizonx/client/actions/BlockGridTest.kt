@@ -17,6 +17,9 @@ import com.orizonx.client.actions.BlockId.SETTINGS
 import com.orizonx.client.actions.BlockId.SOUND
 import com.orizonx.client.actions.BlockId.SPOTIFY
 import com.orizonx.client.actions.BlockId.USB
+import com.orizonx.client.actions.BlockId.USB_2
+import com.orizonx.client.actions.BlockId.USB_3
+import com.orizonx.client.actions.BlockId.USB_4
 import com.orizonx.client.actions.BlockId.WIFI
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -61,6 +64,9 @@ class BlockGridTest {
             Triple(PERF_RAM, Span(2, 1), Span(1, 1)),
             Triple(PERF_NET, Span(2, 1), Span(1, 1)),
             Triple(PERF_NPU, Span(2, 1), Span(1, 1)),
+            Triple(USB_2, Span(3, 1), Span(2, 1)),
+            Triple(USB_3, Span(3, 1), Span(2, 1)),
+            Triple(USB_4, Span(3, 1), Span(2, 1)),
         )
         for ((id, default, min) in table) {
             assertEquals(id.name, default, id.defaultSize())
@@ -88,11 +94,11 @@ class BlockGridTest {
     @Test
     fun defaultOrder() {
         assertEquals(
-            listOf(CLOCK, NOW_PLAYING, SOUND, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE, USB, SETTINGS, DISCORD, SPOTIFY, DOWNLOADS, PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU),
+            listOf(CLOCK, NOW_PLAYING, SOUND, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE, USB, SETTINGS, DISCORD, SPOTIFY, DOWNLOADS, PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU, USB_2, USB_3, USB_4),
             BlockId.DEFAULT_ORDER,
         )
         assertEquals(
-            listOf("clock", "now_playing", "sound", "brightness", "wifi", "bluetooth", "airplane", "usb", "settings", "discord", "spotify", "downloads", "perf_cpu", "perf_gpu", "perf_ram", "perf_net", "perf_npu"),
+            listOf("clock", "now_playing", "sound", "brightness", "wifi", "bluetooth", "airplane", "usb", "settings", "discord", "spotify", "downloads", "perf_cpu", "perf_gpu", "perf_ram", "perf_net", "perf_npu", "usb_2", "usb_3", "usb_4"),
             BlockId.DEFAULT_ORDER.map { it.wire },
         )
     }
@@ -193,6 +199,9 @@ class BlockGridTest {
                 at(PERF_RAM, 2, 3, 2, 1),
                 at(PERF_NET, 4, 3, 2, 1),
                 at(PERF_NPU, 6, 3, 2, 1),
+                at(USB_2, 8, 3, 3, 1),
+                at(USB_3, 0, 4, 3, 1),
+                at(USB_4, 3, 4, 3, 1),
             ),
             place(columns = 11),
         )
@@ -228,6 +237,9 @@ class BlockGridTest {
                 at(PERF_RAM, 0, 5, 2, 1),
                 at(PERF_NET, 2, 5, 2, 1),
                 at(PERF_NPU, 4, 5, 2, 1),
+                at(USB_2, 0, 6, 3, 1),
+                at(USB_3, 3, 6, 3, 1),
+                at(USB_4, 0, 7, 3, 1),
             ),
             place(columns = 7),
         )
@@ -418,7 +430,7 @@ class BlockGridTest {
                 "now_playing":{"available":true,"app":"S","title":"T","playing":true},
                 "brightness":{"available":true,"value":0.5},"wifi":{"available":true,"on":true},
                 "bluetooth":{"available":true,"on":false},"airplane":{"available":true,"on":false},
-                "usb":[{"drive":"E:","label":"K","kind":"stick"}],
+                "usb":[{"drive":"E:","label":"K","kind":"stick"},{"drive":"F:","label":"L","kind":"disk"},{"drive":"G:","label":"M"},{"drive":"H:","label":"N"}],
                 "launchers":{"settings":true,"discord":true,"spotify":true,"downloads":true,"icons":{"discord":null,"spotify":null}},
                 "perf":{"available":true,"cpu":{"value":1},"gpu":{"value":1},"ram":{"value":1},"net":{"down":1,"up":1},"npu":{"value":0}}}""",
         )
@@ -514,7 +526,51 @@ class BlockGridTest {
     @Test
     fun anOldSavedOrderWithoutTheNewIdsAppendsThemInTheDefaultOrder() {
         val l = ActionsLayout.fromJson("""{"order":["usb","clock"],"hidden":[]}""")
-        assertEquals(listOf(SETTINGS, DISCORD, SPOTIFY, DOWNLOADS, PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU), l.order.takeLast(9))
+        assertEquals(listOf(SETTINGS, DISCORD, SPOTIFY, DOWNLOADS, PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU, USB_2, USB_3, USB_4), l.order.takeLast(12))
+    }
+
+    private fun drives(n: Int) = (0 until n).map { UsbDrive("" + ('E' + it) + ":", "D$it", null, null) }
+
+    @Test
+    fun eachUsbSlotShowsItsOwnDriveAndTheLastOneTheOverflow() {
+        assertEquals(emptyList<UsbDrive>(), UsbContent.drivesFor(1, emptyList()))
+        val d = drives(6)
+        assertEquals(listOf(d[0]), UsbContent.drivesFor(1, d))
+        assertEquals(listOf(d[1]), UsbContent.drivesFor(2, d))
+        assertEquals(listOf(d[2]), UsbContent.drivesFor(3, d))
+        assertEquals(listOf(d[3], d[4], d[5]), UsbContent.drivesFor(4, d))
+        assertEquals(listOf(d[3]), UsbContent.drivesFor(4, drives(4)))
+        assertEquals(emptyList<UsbDrive>(), UsbContent.drivesFor(3, drives(2)))
+        assertEquals(emptyList<UsbDrive>(), UsbContent.drivesFor(0, d))
+        assertEquals(listOf(1, 2, 3, 4), BlockId.USB_SLOTS.map { UsbContent.slotOf(it) })
+        assertNull(UsbContent.slotOf(WIFI))
+    }
+
+    @Test
+    fun usbBlocksAppearOneByOneWithTheDrives() {
+        fun usb(n: Int) = state(JSONObject().put("usb", org.json.JSONArray(drives(n).map { JSONObject().put("drive", it.drive).put("label", "").put("kind", "stick") })).toString())
+        assertEquals(emptySet<BlockId>(), ActionsBlocks.present(usb(0)))
+        assertEquals(setOf(USB), ActionsBlocks.present(usb(1)))
+        assertEquals(setOf(USB, USB_2), ActionsBlocks.present(usb(2)))
+        assertEquals(setOf(USB, USB_2, USB_3, USB_4), ActionsBlocks.present(usb(4)))
+        assertEquals(setOf(USB, USB_2, USB_3, USB_4), ActionsBlocks.present(usb(7)))
+    }
+
+    @Test
+    fun usbSlotsJoinAnExistingSavedLayoutAtTheFirstFreeCells() {
+        // A layout saved before the drive slots: the seventeen older blocks have cells, the three new ids do not.
+        val saved = mapOf(
+            CLOCK to CellPos(0, 0), NOW_PLAYING to CellPos(4, 0), SOUND to CellPos(7, 0), BRIGHTNESS to CellPos(7, 1),
+            WIFI to CellPos(10, 0), BLUETOOTH to CellPos(10, 1), AIRPLANE to CellPos(0, 4), USB to CellPos(1, 4),
+            SETTINGS to CellPos(0, 2), DISCORD to CellPos(1, 2), SPOTIFY to CellPos(2, 2), DOWNLOADS to CellPos(3, 2),
+            PERF_CPU to CellPos(4, 2), PERF_GPU to CellPos(6, 2), PERF_RAM to CellPos(8, 2), PERF_NET to CellPos(0, 3), PERF_NPU to CellPos(2, 3),
+        )
+        val p = place(BlockId.DEFAULT_ORDER, columns = 11, saved = saved)
+        for ((id, pos) in saved) assertEquals(pos, p.first { it.id == id }.pos)
+        assertEquals(listOf(USB_2, USB_3, USB_4), p.takeLast(3).map { it.id })
+        assertEquals(at(USB_2, 4, 3, 3, 1), p[17])
+        assertEquals(at(USB_3, 7, 3, 3, 1), p[18])
+        assertEquals(at(USB_4, 4, 4, 3, 1), p[19])
     }
 
     @Test

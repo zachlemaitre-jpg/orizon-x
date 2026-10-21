@@ -92,6 +92,9 @@ internal fun blockName(id: BlockId): S = when (id) {
     BlockId.BLUETOOTH -> S.BLOCK_BLUETOOTH
     BlockId.AIRPLANE -> S.BLOCK_AIRPLANE
     BlockId.USB -> S.BLOCK_USB
+    BlockId.USB_2 -> S.BLOCK_USB_2
+    BlockId.USB_3 -> S.BLOCK_USB_3
+    BlockId.USB_4 -> S.BLOCK_USB_4
     BlockId.SETTINGS -> S.BLOCK_SETTINGS
     BlockId.DISCORD -> S.BLOCK_DISCORD
     BlockId.SPOTIFY -> S.BLOCK_SPOTIFY

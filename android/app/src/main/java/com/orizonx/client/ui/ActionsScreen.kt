@@ -1268,7 +1268,7 @@ private fun BluetoothTile(bt: BluetoothState, c: Controls, modifier: Modifier) {
 
 @Composable
 private fun AirplaneTile(plane: AirplaneState, c: Controls, modifier: Modifier) {
-    Tile(R.drawable.ox_avion, tr(S.AIRPLANE), onOff(plane.on), plane.on, modifier) {
+    Tile(R.drawable.ox_avion, tr(S.AIRPLANE), onOff(plane.on), plane.on, modifier, iconSize = 36.dp) {
         c.tap()
         c.update { copy(airplane = AirplaneState(!plane.on)) }
         c.send(ActionMessages.airplaneSet(!plane.on))
@@ -1312,7 +1312,7 @@ private fun LauncherTile(target: String, label: String, fallback: Int, image: Im
     }
 }
 
-/** The drives of the USB block, one chip each; it scrolls on its own when there are more than fit. */
+/** The drive(s) of a USB block: one chip filling the block (the last slot stacks the extra drives and scrolls on its own when they do not fit). */
 @Composable
 private fun UsbBlock(usb: List<UsbDrive>, c: Controls, modifier: Modifier, mode: UsbMode) {
     val compact = mode == UsbMode.COMPACT
@@ -1350,7 +1350,8 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
         BlockId.WIFI -> state.wifi?.let { WifiTile(it, c, modifier) }
         BlockId.BLUETOOTH -> state.bluetooth?.let { BluetoothTile(it, c, modifier) }
         BlockId.AIRPLANE -> state.airplane?.let { AirplaneTile(it, c, modifier) }
-        BlockId.USB -> UsbBlock(state.usb, c, modifier, UsbContent.mode(cols))
+        BlockId.USB, BlockId.USB_2, BlockId.USB_3, BlockId.USB_4 ->
+            UsbBlock(UsbContent.drivesFor(UsbContent.slotOf(id) ?: 1, state.usb), c, modifier, UsbContent.mode(cols))
         BlockId.SETTINGS -> LauncherTile("settings", tr(S.BLOCK_SETTINGS), R.drawable.ox_parametres, null, c, modifier)
         BlockId.DISCORD -> LauncherTile("discord", tr(S.BLOCK_DISCORD), R.drawable.ox_apps, state.launchers?.discordIcon?.let { c.images[it] }, c, modifier)
         BlockId.SPOTIFY -> LauncherTile("spotify", tr(S.BLOCK_SPOTIFY), R.drawable.ox_apps, state.launchers?.spotifyIcon?.let { c.images[it] }, c, modifier)
@@ -1532,7 +1533,7 @@ private fun RoundIconKey(icon: Int, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Tile(icon: Int, title: String, subtitle: String, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun Tile(icon: Int, title: String, subtitle: String, on: Boolean, modifier: Modifier, iconSize: Dp = 28.dp, onClick: () -> Unit) {
     val fg = if (on) 1f else 0.5f
     Column(
         modifier
@@ -1545,7 +1546,7 @@ private fun Tile(icon: Int, title: String, subtitle: String, on: Boolean, modifi
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Picto(icon, 28.dp, fg)
+        Picto(icon, iconSize, fg)
         Spacer(Modifier.height(4.dp))
         GlassText(title, size = 16.sp, weight = if (on) FontWeight.SemiBold else FontWeight.Normal, alpha = fg)
         Spacer(Modifier.height(2.dp))
