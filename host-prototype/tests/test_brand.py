@@ -38,7 +38,8 @@ class BrandTest(unittest.TestCase):
         self.assertNotEqual(family, "MAZAGLA")
 
     def test_icons_render_at_dpr_2(self):
-        for name in ("etendre_affichage", "dupliquer_affichage", "stop"):
+        for name in ("etendre_affichage", "dupliquer_affichage", "stop", "position_right", "position_left",
+                     "position_above", "position_below", "choose", "interval"):
             pixmap = brand.icon_pixmap(name, 18, 2.0)
             self.assertFalse(pixmap.isNull(), name)
             self.assertEqual((pixmap.width(), pixmap.height()), (36, 36))

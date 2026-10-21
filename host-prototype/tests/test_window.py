@@ -10,7 +10,7 @@ if HAVE_QT:
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication
 
-    from app import i18n
+    from app import i18n, settings
     from app.window import MainWindow
 
 from engine import DisplayInfo, State, StreamStats
@@ -75,10 +75,15 @@ class WindowTest(unittest.TestCase):
         i18n.set_language("en")
         self.assertEqual((self.window.title_text(), self.window.detail_text()), ("Frame device", "Pixel 8 connected"))
 
-    def test_mode_items_have_icons_other_combos_none(self):
+    def test_mode_position_and_interval_items_have_icons_other_combos_none(self):
         self.assertTrue(self.window.combo_item_has_icon("mode", "extend"))
         self.assertTrue(self.window.combo_item_has_icon("mode", "duplicate"))
-        self.assertFalse(self.window.combo_item_has_icon("position", "right"))
+        for position in ("right", "left", "above", "below"):
+            self.assertTrue(self.window.combo_item_has_icon("position", position), position)
+        for interval in settings.FRAME_INTERVALS:
+            self.assertTrue(self.window.combo_item_has_icon("frame_interval", interval), interval)
+        self.assertFalse(self.window.combo_item_has_icon("scale", "auto"))
+        self.assertTrue(self.window.choose_has_icon())
         i18n.set_language("en")  # relabelling keeps the icons
         self.assertTrue(self.window.combo_item_has_icon("mode", "extend"))
 

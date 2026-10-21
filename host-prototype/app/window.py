@@ -18,6 +18,9 @@ MODE_KEYS = {"extend": "window.mode_extend", "duplicate": "window.mode_duplicate
 POSITION_KEYS = {"right": "window.position_right", "left": "window.position_left",
                  "above": "window.position_above", "below": "window.position_below"}
 MODE_ICONS = {"extend": "etendre_affichage", "duplicate": "dupliquer_affichage"}
+POSITION_ICONS = {"right": "position_right", "left": "position_left", "above": "position_above", "below": "position_below"}
+INTERVAL_ICON = "interval"  # one icon for every interval of the Frame combo
+CHOOSE_ICON = "choose"
 STOP_ICON = "stop"
 COMBO_ICON_PX = 18
 BUTTON_ICON_PX = 18
@@ -274,12 +277,13 @@ class MainWindow(QWidget):
 
         self._combos: dict[str, ChoiceCombo] = {
             "mode": ChoiceCombo(settings.MODES, _keyed(MODE_KEYS), self, MODE_ICONS),
-            "position": ChoiceCombo(settings.POSITIONS, _keyed(POSITION_KEYS), self),
+            "position": ChoiceCombo(settings.POSITIONS, _keyed(POSITION_KEYS), self, POSITION_ICONS),
             "scale": ChoiceCombo(settings.SCALES, _scale_label, self),
             "encoder": ChoiceCombo(ENCODER_VALUES, _encoder_label, self),
             "language": ChoiceCombo(tuple(value for _name, value in LANGUAGE_ITEMS),
                                     lambda value, _lang: dict((v, n) for n, v in LANGUAGE_ITEMS)[value], self),
-            "frame_interval": ChoiceCombo(settings.FRAME_INTERVALS, _interval_label, self),
+            "frame_interval": ChoiceCombo(settings.FRAME_INTERVALS, _interval_label, self,
+                                          {value: INTERVAL_ICON for value in settings.FRAME_INTERVALS}),
             "frame_fit": ChoiceCombo(settings.FRAME_FITS, _keyed(FRAME_FIT_KEYS), self),
         }
         signals = {"mode": self.mode_changed, "position": self.position_changed, "scale": self.scale_changed,
@@ -312,6 +316,7 @@ class MainWindow(QWidget):
         self._frame_path.setObjectName("folderPath")
         self._choose_folder = self._button("choose", self._on_choose_folder)
         self._choose_folder.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._refresh_choose_icon()
         folder_row = QHBoxLayout()
         folder_row.setSpacing(8)
         folder_row.addWidget(self._frame_path, 1)
@@ -454,6 +459,11 @@ class MainWindow(QWidget):
         else:
             self._primary.setIcon(QIcon())
 
+    def _refresh_choose_icon(self) -> None:
+        """The folder-picker icon sits left of the « Choose… » text."""
+        self._choose_folder.setIconSize(QSize(BUTTON_ICON_PX, BUTTON_ICON_PX))
+        self._choose_folder.setIcon(brand.icon(CHOOSE_ICON, BUTTON_ICON_PX, self.devicePixelRatioF()))
+
     def _update_actions(self) -> None:
         vdd_missing = (self._state is State.ERROR and self._detail_msg is not None
                        and self._detail_msg.key == VDD_MISSING_KEY)
@@ -562,6 +572,9 @@ class MainWindow(QWidget):
         combo = self._combos[name]
         return not combo.itemIcon(combo.findData(value)).isNull()
 
+    def choose_has_icon(self) -> bool:
+        return not self._choose_folder.icon().isNull()
+
     def quit_text(self) -> str:
         return self._quit.text()
 
@@ -653,6 +666,7 @@ class MainWindow(QWidget):
         for combo in self._combos.values():
             combo.refresh_icons()
         self._refresh_primary_icon()
+        self._refresh_choose_icon()
 
     def closeEvent(self, event) -> None:
         if self._quitting:
