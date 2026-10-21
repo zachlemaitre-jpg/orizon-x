@@ -68,6 +68,9 @@ LAUNCHERS = {"settings": True, "discord": False, "spotify": False, "downloads": 
              "icons": {"discord": None, "spotify": None}}
 
 
+PERF = {"available": True, "ram": {"value": 41, "used": 12.3, "total": 32.0, "history": [41, 42]}}
+
+
 def make_providers():
     return {
         "clock": FakeProvider({"epoch_ms": 1000, "utc_offset_min": 120}),
@@ -91,6 +94,7 @@ def make_providers():
         "gamepad": FakeProvider({"available": True}),
         "claude": FakeProvider({"available": True, "sessions": [], "connectors": []}),
         "launchers": FakeProvider(dict(LAUNCHERS)),
+        "perf": FakeProvider(dict(PERF)),
     }
 
 
@@ -145,6 +149,7 @@ class StateTest(unittest.TestCase):
             "gamepad": {"available": True},
             "claude": {"available": True, "sessions": [], "connectors": []},
             "launchers": dict(LAUNCHERS, available=True),
+            "perf": dict(PERF),
         })
         self.assertNotIn("notice", h.sent[0])
 
@@ -1670,6 +1675,57 @@ class LaunchersHubTest(unittest.TestCase):
         self.assertTrue(callable(providers["launchers"].snapshot) and callable(providers["launchers"].handle))
 
 
+class FakePerf(FakeProvider):
+    """perf stand-in that records its stop()."""
+
+    def __init__(self, snap=None):
+        super().__init__(dict(PERF) if snap is None else snap)
+        self.stops = 0
+
+    def stop(self):
+        self.stops += 1
+
+
+class PerfHubTest(unittest.TestCase):
+    def test_the_state_carries_the_perf_section_read_with_the_slow_group(self):
+        providers = make_providers()
+        providers["perf"] = FakePerf()
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["perf"], dict(PERF))
+        polls = providers["perf"].snapshots
+        h.tick(0.3)  # only the fast group is due
+        self.assertEqual(providers["perf"].snapshots, polls)
+        providers["perf"].snap["ram"]["value"] = 50
+        h.tick(1.0)
+        self.assertEqual(h.sent[-1]["perf"]["ram"]["value"], 50)
+
+    def test_a_missing_or_failing_perf_provider_is_unavailable(self):
+        providers = make_providers()
+        del providers["perf"]
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["perf"], {"available": False})
+        providers = make_providers()
+        providers["perf"].raises = RuntimeError("pdh")
+        h = Harness(providers)
+        h.tick()
+        self.assertEqual(h.sent[0]["perf"], {"available": False})
+
+    def test_stop_stops_the_perf_sampler(self):
+        providers = make_providers()
+        providers["perf"] = FakePerf()
+        h = Harness(providers)
+        h.hub.stop()
+        self.assertEqual(providers["perf"].stops, 1)
+
+    def test_default_providers_include_perf_without_starting_its_thread(self):
+        providers = default_providers(lambda _l: None)
+        self.assertIn("perf", providers)
+        self.assertIsNone(providers["perf"]._sampler)
+        providers["perf"].stop()
+
+
 class ClaudeHubTest(unittest.TestCase):
     SESSION = {"id": "abc", "title": "T", "project": "p", "branch": "main", "updated": 1, "status": "idle",
                "model": "", "effort": "", "mode": "", "tokens": None, "last_prompt": "", "last_result": "",
@@ -1855,7 +1911,7 @@ class DefaultProvidersTest(unittest.TestCase):
         logs = []
         providers = default_providers(logs.append)
         self.assertTrue(set(providers) <= {"clock", "battery", "audio", "media", "brightness", "radios",
-                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude", "launchers"})
+                                           "wifi_info", "bt_info", "usb", "now_playing", "context", "keyboard", "trackpad", "gamepad", "claude", "launchers", "perf"})
         for provider in providers.values():
             self.assertTrue(callable(provider.snapshot) and callable(provider.handle))
 
