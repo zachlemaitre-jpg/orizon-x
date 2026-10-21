@@ -386,7 +386,12 @@ private fun ControlBar(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             BarButton(tr(S.FRAME_INTERVAL_LESS_DESC), { onInterval(-1) }) { GlassText("−", size = 26.sp) }
-            Box(Modifier.widthIn(min = 76.dp), contentAlignment = Alignment.Center) {
+            Row(
+                Modifier.widthIn(min = 76.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            ) {
+                Image(painterResource(R.drawable.ox_interval), contentDescription = null, modifier = Modifier.size(20.dp), colorFilter = ColorFilter.tint(Color.White))
                 GlassText(FrameFormat.interval(intervalS, LocalLang.current), size = 17.sp, weight = FontWeight.SemiBold)
             }
             BarButton(tr(S.FRAME_INTERVAL_MORE_DESC), { onInterval(+1) }) { GlassText("+", size = 26.sp) }

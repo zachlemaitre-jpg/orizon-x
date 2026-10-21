@@ -64,9 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -74,8 +72,11 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -911,8 +912,10 @@ private fun usbRes(kind: UsbKind): Int = when (kind) {
 }
 
 /**
- * Battery: the ox_batterie shape is the body; its left part is filled in green / amber / red in proportion to the charge
- * (clipped to the shape), the rest stays dim. The percentage sits inside; ox_charge is the bolt when charging.
+ * Battery, drawn from the exact shapes of the user's batterie.svg / batterie_charge.svg: an outline ring (white), an inner
+ * pill dimmed to 28 % and, over it, the charge filled in green / amber / red clipped to the pill. When charging, the
+ * charge variant is used instead: its ring has the lightning bolt cut through the top, the pill a notch, and the bolt is
+ * drawn in amber. The percentage sits inside.
  */
 @Composable
 private fun BatteryPicto(battery: BatteryState) {
@@ -922,59 +925,82 @@ private fun BatteryPicto(battery: BatteryState) {
         BatteryLevel.CRITICAL -> BatteryRed
     }
     val fraction = ActionsFormat.batteryFill(battery.percent)
-    val shape = painterResource(R.drawable.ox_batterie)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        // The vector is a 48x48 square whose body spans x 2.46..45.55 and y 12.46..35.54: draw it larger than its box.
-        val bodyW = 68.dp
-        val bodyH = bodyW * (BATTERY_BODY_H / BATTERY_BODY_W)
-        Box(Modifier.size(width = bodyW, height = bodyH), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.requiredSize(bodyW * (BATTERY_VIEWPORT / BATTERY_BODY_W))) {
-                val k = size.width / BATTERY_VIEWPORT
-                val left = BATTERY_BODY_X * k
-                val top = BATTERY_BODY_Y * k
-                val width = BATTERY_BODY_W * k
-                val height = BATTERY_BODY_H * k
-                val body = Path().apply {
-                    addRoundRect(RoundRect(left, top, left + width, top + height, CornerRadius(BATTERY_BODY_R * k)))
-                }
-                // 1. The whole body, dimmed (the vector is white: drawn at 28 % alpha).
-                with(shape) { draw(size, alpha = 0.28f) }
-                // 2. The charge at full opacity on top, clipped to the rounded body.
+    val charging = battery.charging
+    val ring = if (charging) BatteryChargeRing else BatteryRing
+    val pill = if (charging) BatteryChargePill else BatteryPill
+    // The vector is a 48x48 square whose body spans x 2.46..45.55 and y 12.46..35.54: draw it larger than its box.
+    val bodyW = 68.dp
+    val bodyH = bodyW * (BATTERY_BODY_H / BATTERY_BODY_W)
+    Box(Modifier.size(width = bodyW, height = bodyH), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.requiredSize(bodyW * (BATTERY_VIEWPORT / BATTERY_BODY_W))) {
+            val k = size.width / BATTERY_VIEWPORT
+            // The paths are in viewport units: scale the canvas to them.
+            withTransform({ scale(k, k, pivot = Offset.Zero) }) {
+                // 1. The inner pill, dimmed (the shapes are plain white: drawn at 28 % alpha).
+                drawPath(pill, Color.White, alpha = 0.28f)
+                // 2. The charge at full opacity on top, clipped to the pill.
                 if (fraction > 0f) {
-                    clipPath(body) {
-                        drawRect(fillColor, Offset(left, top), Size(width * fraction.coerceAtLeast(0.14f), height))
+                    clipPath(pill) {
+                        val width = BATTERY_PILL_W * fraction.coerceAtLeast(0.14f)
+                        drawRect(fillColor, Offset(BATTERY_PILL_X, BATTERY_PILL_Y), Size(width, BATTERY_PILL_H))
                     }
                 }
+                // 3. The outline ring, and the bolt when charging.
+                drawPath(ring, Color.White, alpha = 0.9f)
+                if (charging) drawPath(BatteryBolt, Amber)
             }
-            // Dark text when the charge covers the middle of the body (bright fill behind it), white otherwise.
-            val onFill = fraction >= 0.5f
-            BasicText(
-                "${battery.percent}%",
-                style = TextStyle(
-                    color = if (onFill) BatteryText else Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFeatureSettings = "tnum",
-                    shadow = if (onFill) null else Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 3f),
-                ),
-                maxLines = 1,
-                softWrap = false,
-            )
         }
-        if (battery.charging) {
-            Spacer(Modifier.width(6.dp))
-            Picto(R.drawable.ox_charge, 28.dp, tint = Amber)
-        }
+        // Dark text when the charge covers the middle of the body (bright fill behind it), white otherwise.
+        val onFill = fraction >= 0.5f
+        BasicText(
+            "${battery.percent}%",
+            style = TextStyle(
+                color = if (onFill) BatteryText else Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                fontFeatureSettings = "tnum",
+                shadow = if (onFill) null else Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 3f),
+            ),
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
-// Geometry of ox_batterie.xml (viewport units).
+// Geometry of the battery shapes (viewport units of batterie.svg: 48x48): outer ring and inner pill.
 private const val BATTERY_VIEWPORT = 48f
-private const val BATTERY_BODY_X = 2.46f
-private const val BATTERY_BODY_Y = 12.46f
 private const val BATTERY_BODY_W = 43.09f
 private const val BATTERY_BODY_H = 23.08f
-private const val BATTERY_BODY_R = 9.22f
+private const val BATTERY_PILL_X = 7.41f
+private const val BATTERY_PILL_Y = 16.98f
+private const val BATTERY_PILL_W = 33.18f
+private const val BATTERY_PILL_H = 14.04f
+
+// Path data copied from extended/icons/batterie.svg and batterie_charge.svg (the ring has a hole: even-odd fill).
+private fun svgPath(d: String, evenOdd: Boolean = false): Path =
+    PathParser().parsePathString(d).toPath().also { if (evenOdd) it.fillType = PathFillType.EvenOdd }
+
+private val BatteryPill: Path by lazy {
+    svgPath("M40.59,21.92c0-2.72-2.41-4.94-5.38-4.94H12.79c-2.96,0-5.38,2.21-5.38,4.94v4.16c0,2.72,2.41,4.94,5.38,4.94h22.42c2.96,0,5.38-2.22,5.38-4.94v-4.16Z")
+}
+private val BatteryRing: Path by lazy {
+    svgPath(
+        "M36.32,12.46H11.68c-5.09,0-9.22,4.13-9.22,9.22v4.63c0,5.09,4.13,9.22,9.22,9.22h24.64c5.09,0,9.22-4.13,9.22-9.22v-4.63c0-5.09-4.13-9.22-9.22-9.22ZM42.9,26.29c0,3.75-3.18,6.79-7.08,6.79H12.18c-3.91,0-7.08-3.05-7.08-6.79v-4.58c0-3.75,3.18-6.79,7.08-6.79h23.64c3.91,0,7.08,3.05,7.08,6.79v4.58Z",
+        evenOdd = true,
+    )
+}
+private val BatteryBolt: Path by lazy {
+    svgPath("M31.25,11.92l-7-1.54c-.51-.11-.79-.67-.58-1.15l2.22-4.89c.39-.85-.71-1.59-1.35-.91l-8.21,8.59c-.45.47-.21,1.24.42,1.38l7,1.54c.51.11.79.67.58,1.15l-2.22,4.89c-.39.85.71,1.59,1.35.91l8.21-8.59c.45-.47.21-1.24-.42-1.38Z")
+}
+private val BatteryChargeRing: Path by lazy {
+    svgPath(
+        "M36.32,12.46h-2.45c.08.81-.18,1.62-.75,2.22l-.23.24h2.94c3.91,0,7.08,3.05,7.08,6.79v4.58c0,3.75-3.18,6.79-7.08,6.79H12.18c-3.91,0-7.08-3.05-7.08-6.79v-4.58c0-3.75,3.18-6.79,7.08-6.79h3.21c-.54-.36-.97-.88-1.16-1.52-.09-.31-.11-.63-.1-.94h-2.45c-5.09,0-9.22,4.13-9.22,9.22v4.63c0,5.09,4.13,9.22,9.22,9.22h24.64c5.09,0,9.22-4.13,9.22-9.22v-4.63c0-5.09-4.13-9.22-9.22-9.22Z",
+        evenOdd = true,
+    )
+}
+private val BatteryChargePill: Path by lazy {
+    svgPath("M35.21,16.98h-4.3l-6.01,6.28c-.55.58-1.29.88-2.04.88-.55,0-1.1-.16-1.59-.49-1.15-.78-1.56-2.25-.99-3.51l1.44-3.16h-8.93c-2.96,0-5.38,2.21-5.38,4.94v4.16c0,2.72,2.41,4.94,5.38,4.94h22.42c2.96,0,5.38-2.22,5.38-4.94v-4.16c0-2.72-2.41-4.94-5.38-4.94Z")
+}
 
 // --- Cards ---------------------------------------------------------------------------------
 
@@ -1242,7 +1268,7 @@ private fun BluetoothTile(bt: BluetoothState, c: Controls, modifier: Modifier) {
 
 @Composable
 private fun AirplaneTile(plane: AirplaneState, c: Controls, modifier: Modifier) {
-    Tile(R.drawable.ic_action_airplane, tr(S.AIRPLANE), onOff(plane.on), plane.on, modifier) {
+    Tile(R.drawable.ox_avion, tr(S.AIRPLANE), onOff(plane.on), plane.on, modifier) {
         c.tap()
         c.update { copy(airplane = AirplaneState(!plane.on)) }
         c.send(ActionMessages.airplaneSet(!plane.on))
@@ -1325,7 +1351,7 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
         BlockId.BLUETOOTH -> state.bluetooth?.let { BluetoothTile(it, c, modifier) }
         BlockId.AIRPLANE -> state.airplane?.let { AirplaneTile(it, c, modifier) }
         BlockId.USB -> UsbBlock(state.usb, c, modifier, UsbContent.mode(cols))
-        BlockId.SETTINGS -> LauncherTile("settings", tr(S.BLOCK_SETTINGS), R.drawable.ox_settings, null, c, modifier)
+        BlockId.SETTINGS -> LauncherTile("settings", tr(S.BLOCK_SETTINGS), R.drawable.ox_parametres, null, c, modifier)
         BlockId.DISCORD -> LauncherTile("discord", tr(S.BLOCK_DISCORD), R.drawable.ox_apps, state.launchers?.discordIcon?.let { c.images[it] }, c, modifier)
         BlockId.SPOTIFY -> LauncherTile("spotify", tr(S.BLOCK_SPOTIFY), R.drawable.ox_apps, state.launchers?.spotifyIcon?.let { c.images[it] }, c, modifier)
         BlockId.DOWNLOADS -> LauncherTile("downloads", tr(S.BLOCK_DOWNLOADS), R.drawable.ox_download, null, c, modifier)
