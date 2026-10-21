@@ -1328,6 +1328,7 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
         BlockId.DISCORD -> LauncherTile("discord", tr(S.BLOCK_DISCORD), R.drawable.ox_apps, state.launchers?.discordIcon?.let { c.images[it] }, c, modifier)
         BlockId.SPOTIFY -> LauncherTile("spotify", tr(S.BLOCK_SPOTIFY), R.drawable.ox_apps, state.launchers?.spotifyIcon?.let { c.images[it] }, c, modifier)
         BlockId.DOWNLOADS -> LauncherTile("downloads", tr(S.BLOCK_DOWNLOADS), R.drawable.ox_download, null, c, modifier)
+        BlockId.PERF_CPU, BlockId.PERF_GPU, BlockId.PERF_RAM, BlockId.PERF_NET, BlockId.PERF_NPU -> Unit // drawn in the next commit
     }
 }
 

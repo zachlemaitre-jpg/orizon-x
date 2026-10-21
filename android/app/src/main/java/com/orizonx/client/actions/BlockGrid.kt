@@ -29,6 +29,11 @@ enum class BlockId(val wire: String, private val default: Span, private val min:
     DISCORD("discord", Span(1, 1), Span(1, 1)),
     SPOTIFY("spotify", Span(1, 1), Span(1, 1)),
     DOWNLOADS("downloads", Span(1, 1), Span(1, 1)),
+    PERF_CPU("perf_cpu", Span(2, 1), Span(1, 1)),
+    PERF_GPU("perf_gpu", Span(2, 1), Span(1, 1)),
+    PERF_RAM("perf_ram", Span(2, 1), Span(1, 1)),
+    PERF_NET("perf_net", Span(2, 1), Span(1, 1)),
+    PERF_NPU("perf_npu", Span(2, 1), Span(1, 1)),
     ;
 
     /** The Sound block starts taller when it carries the media keys, so they are visible by default. */
@@ -103,6 +108,13 @@ object ActionsBlocks {
             if (l.discord) add(BlockId.DISCORD)
             if (l.spotify) add(BlockId.SPOTIFY)
             if (l.downloads) add(BlockId.DOWNLOADS)
+        }
+        state.perf?.let { p ->
+            if (p.cpu != null) add(BlockId.PERF_CPU)
+            if (p.gpu != null) add(BlockId.PERF_GPU)
+            if (p.ram != null) add(BlockId.PERF_RAM)
+            if (p.netDown != null) add(BlockId.PERF_NET)
+            if (p.npu != null) add(BlockId.PERF_NPU)
         }
     }
 }

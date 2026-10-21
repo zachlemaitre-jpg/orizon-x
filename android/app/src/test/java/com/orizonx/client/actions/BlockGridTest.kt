@@ -8,6 +8,11 @@ import com.orizonx.client.actions.BlockId.CLOCK
 import com.orizonx.client.actions.BlockId.DISCORD
 import com.orizonx.client.actions.BlockId.DOWNLOADS
 import com.orizonx.client.actions.BlockId.NOW_PLAYING
+import com.orizonx.client.actions.BlockId.PERF_CPU
+import com.orizonx.client.actions.BlockId.PERF_GPU
+import com.orizonx.client.actions.BlockId.PERF_NET
+import com.orizonx.client.actions.BlockId.PERF_NPU
+import com.orizonx.client.actions.BlockId.PERF_RAM
 import com.orizonx.client.actions.BlockId.SETTINGS
 import com.orizonx.client.actions.BlockId.SOUND
 import com.orizonx.client.actions.BlockId.SPOTIFY
@@ -51,6 +56,11 @@ class BlockGridTest {
             Triple(DISCORD, Span(1, 1), Span(1, 1)),
             Triple(SPOTIFY, Span(1, 1), Span(1, 1)),
             Triple(DOWNLOADS, Span(1, 1), Span(1, 1)),
+            Triple(PERF_CPU, Span(2, 1), Span(1, 1)),
+            Triple(PERF_GPU, Span(2, 1), Span(1, 1)),
+            Triple(PERF_RAM, Span(2, 1), Span(1, 1)),
+            Triple(PERF_NET, Span(2, 1), Span(1, 1)),
+            Triple(PERF_NPU, Span(2, 1), Span(1, 1)),
         )
         for ((id, default, min) in table) {
             assertEquals(id.name, default, id.defaultSize())
@@ -78,11 +88,11 @@ class BlockGridTest {
     @Test
     fun defaultOrder() {
         assertEquals(
-            listOf(CLOCK, NOW_PLAYING, SOUND, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE, USB, SETTINGS, DISCORD, SPOTIFY, DOWNLOADS),
+            listOf(CLOCK, NOW_PLAYING, SOUND, BRIGHTNESS, WIFI, BLUETOOTH, AIRPLANE, USB, SETTINGS, DISCORD, SPOTIFY, DOWNLOADS, PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU),
             BlockId.DEFAULT_ORDER,
         )
         assertEquals(
-            listOf("clock", "now_playing", "sound", "brightness", "wifi", "bluetooth", "airplane", "usb", "settings", "discord", "spotify", "downloads"),
+            listOf("clock", "now_playing", "sound", "brightness", "wifi", "bluetooth", "airplane", "usb", "settings", "discord", "spotify", "downloads", "perf_cpu", "perf_gpu", "perf_ram", "perf_net", "perf_npu"),
             BlockId.DEFAULT_ORDER.map { it.wire },
         )
     }
@@ -173,11 +183,16 @@ class BlockGridTest {
                 at(BLUETOOTH, 10, 1, 1, 1),
                 at(AIRPLANE, 0, 2, 1, 1),
                 at(USB, 1, 2, 3, 1),
-                // The launchers come last and take the first free cells.
+                // The launchers and the performance blocks come last and take the first free cells.
                 at(SETTINGS, 4, 2, 1, 1),
                 at(DISCORD, 5, 2, 1, 1),
                 at(SPOTIFY, 6, 2, 1, 1),
                 at(DOWNLOADS, 7, 2, 1, 1),
+                at(PERF_CPU, 8, 2, 2, 1),
+                at(PERF_GPU, 0, 3, 2, 1),
+                at(PERF_RAM, 2, 3, 2, 1),
+                at(PERF_NET, 4, 3, 2, 1),
+                at(PERF_NPU, 6, 3, 2, 1),
             ),
             place(columns = 11),
         )
@@ -208,6 +223,11 @@ class BlockGridTest {
                 at(DISCORD, 6, 3, 1, 1),
                 at(SPOTIFY, 0, 4, 1, 1),
                 at(DOWNLOADS, 1, 4, 1, 1),
+                at(PERF_CPU, 2, 4, 2, 1),
+                at(PERF_GPU, 4, 4, 2, 1),
+                at(PERF_RAM, 0, 5, 2, 1),
+                at(PERF_NET, 2, 5, 2, 1),
+                at(PERF_NPU, 4, 5, 2, 1),
             ),
             place(columns = 7),
         )
@@ -399,7 +419,8 @@ class BlockGridTest {
                 "brightness":{"available":true,"value":0.5},"wifi":{"available":true,"on":true},
                 "bluetooth":{"available":true,"on":false},"airplane":{"available":true,"on":false},
                 "usb":[{"drive":"E:","label":"K","kind":"stick"}],
-                "launchers":{"settings":true,"discord":true,"spotify":true,"downloads":true,"icons":{"discord":null,"spotify":null}}}""",
+                "launchers":{"settings":true,"discord":true,"spotify":true,"downloads":true,"icons":{"discord":null,"spotify":null}},
+                "perf":{"available":true,"cpu":{"value":1},"gpu":{"value":1},"ram":{"value":1},"net":{"down":1,"up":1},"npu":{"value":0}}}""",
         )
         assertEquals(BlockId.entries.toSet(), ActionsBlocks.present(all))
     }
@@ -450,9 +471,50 @@ class BlockGridTest {
     }
 
     @Test
+    fun perfBlocksFollowTheirMeasures() {
+        assertEquals(emptySet<BlockId>(), ActionsBlocks.present(state("""{"perf":{"available":false,"cpu":{"value":5}}}""")))
+        assertEquals(
+            setOf(PERF_CPU, PERF_RAM, PERF_NET),
+            ActionsBlocks.present(state("""{"perf":{"available":true,"cpu":{"value":5},"ram":{"value":9},"net":{"down":0,"up":0}}}""")),
+        )
+        // With every measure but the NPU, that block is simply not there.
+        assertEquals(
+            setOf(PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET),
+            ActionsBlocks.present(state("""{"perf":{"available":true,"cpu":{"value":5},"gpu":{"value":5},"ram":{"value":9},"net":{"down":0,"up":0}}}""")),
+        )
+        assertEquals(
+            setOf(PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU),
+            ActionsBlocks.present(state("""{"perf":{"available":true,"cpu":{"value":5},"gpu":{"value":5},"ram":{"value":9},"net":{"down":0,"up":0},"npu":{"value":0}}}""")),
+        )
+    }
+
+    @Test
+    fun perfBlocksJoinAnExistingSavedLayoutAtTheFirstFreeCells() {
+        // A layout saved with the twelve older blocks: the five perf ids have no cell yet.
+        val saved = mapOf(
+            CLOCK to CellPos(0, 0), NOW_PLAYING to CellPos(4, 0), SOUND to CellPos(7, 0), BRIGHTNESS to CellPos(7, 1),
+            WIFI to CellPos(10, 0), BLUETOOTH to CellPos(10, 1), AIRPLANE to CellPos(0, 4), USB to CellPos(1, 4),
+            SETTINGS to CellPos(0, 2), DISCORD to CellPos(1, 2), SPOTIFY to CellPos(2, 2), DOWNLOADS to CellPos(3, 2),
+        )
+        val p = place(BlockId.DEFAULT_ORDER, columns = 11, saved = saved)
+        for ((id, pos) in saved) assertEquals(pos, p.first { it.id == id }.pos)
+        val perf = p.filter { it.id.wire.startsWith("perf_") }
+        assertEquals(listOf(PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU), perf.map { it.id })
+        // Each one is 2x1, the first takes the first free spot (row 2, after the launchers), and nothing overlaps.
+        assertEquals(listOf(Span(2, 1)), perf.map { Span(it.cols, it.rows) }.distinct())
+        assertEquals(at(PERF_CPU, 4, 2, 2, 1), perf[0])
+        for (a in p) for (b in p) {
+            if (a.id != b.id) {
+                val apart = a.col + a.cols <= b.col || b.col + b.cols <= a.col || a.row + a.rows <= b.row || b.row + b.rows <= a.row
+                assertTrue("${a.id} overlaps ${b.id}", apart)
+            }
+        }
+    }
+
+    @Test
     fun anOldSavedOrderWithoutTheNewIdsAppendsThemInTheDefaultOrder() {
         val l = ActionsLayout.fromJson("""{"order":["usb","clock"],"hidden":[]}""")
-        assertEquals(listOf(SETTINGS, DISCORD, SPOTIFY, DOWNLOADS), l.order.takeLast(4))
+        assertEquals(listOf(SETTINGS, DISCORD, SPOTIFY, DOWNLOADS, PERF_CPU, PERF_GPU, PERF_RAM, PERF_NET, PERF_NPU), l.order.takeLast(9))
     }
 
     @Test

@@ -96,6 +96,11 @@ internal fun blockName(id: BlockId): S = when (id) {
     BlockId.DISCORD -> S.BLOCK_DISCORD
     BlockId.SPOTIFY -> S.BLOCK_SPOTIFY
     BlockId.DOWNLOADS -> S.BLOCK_DOWNLOADS
+    BlockId.PERF_CPU -> S.BLOCK_PERF_CPU
+    BlockId.PERF_GPU -> S.BLOCK_PERF_GPU
+    BlockId.PERF_RAM -> S.BLOCK_PERF_RAM
+    BlockId.PERF_NET -> S.BLOCK_PERF_NET
+    BlockId.PERF_NPU -> S.BLOCK_PERF_NPU
 }
 
 /**

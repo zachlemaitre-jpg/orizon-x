@@ -146,6 +146,7 @@ data class ActionsState(
     val gamepad: GamepadInfo? = null,
     val claude: ClaudeInfo? = null,
     val launchers: LaunchersInfo? = null,
+    val perf: PerfState? = null,
 ) {
     companion object {
         /** Never throws: anything unreadable simply makes the matching section absent. */
@@ -195,6 +196,7 @@ data class ActionsState(
             gamepad = gamepad(json),
             claude = ClaudeInfo.parse(json.optJSONObject("claude")),
             launchers = LaunchersInfo.parse(json.optJSONObject("launchers")),
+            perf = PerfState.parse(json.optJSONObject("perf")),
         )
 
         /**
