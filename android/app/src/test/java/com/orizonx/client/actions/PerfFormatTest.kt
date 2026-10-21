@@ -63,4 +63,21 @@ class PerfFormatTest {
         assertFalse(PerfFormat.compact(1, 2))
         assertFalse(PerfFormat.compact(3, 3))
     }
+
+    @Test
+    fun percentagesBecomeFractions() {
+        assertEquals(listOf(0f, 0.5f, 1f), PerfFormat.fractions(listOf(0, 50, 100)))
+        assertEquals(emptyList<Float>(), PerfFormat.fractions(emptyList()))
+    }
+
+    @Test
+    fun bothNetworkCurvesShareOneScale() {
+        // The scale is the next 1/2/5 step above the biggest point of either curve: 3 000 000 -> 5 000 000.
+        val s = PerfFormat.netSeries(listOf(0L, 3_000_000L), listOf(500_000L, 1_000_000L))
+        assertEquals(listOf(0f, 0.6f), s[0])
+        assertEquals(listOf(0.1f, 0.2f), s[1])
+        // Nothing moving: the minimum scale, flat curves.
+        assertEquals(listOf(listOf(0f, 0f), listOf(0f)), PerfFormat.netSeries(listOf(0L, 0L), listOf(0L)))
+        assertEquals(listOf(emptyList<Float>(), emptyList<Float>()), PerfFormat.netSeries(emptyList(), emptyList()))
+    }
 }

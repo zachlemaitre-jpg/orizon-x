@@ -51,4 +51,14 @@ object PerfFormat {
 
     /** A 1x1 block shows only the icon, the name and the value. */
     fun compact(cols: Int, rows: Int): Boolean = cols < 2 && rows < 2
+
+    /** Percent points (0..100) as graph heights (0..1). */
+    fun fractions(history: List<Int>): List<Float> = history.map { (it / 100f).coerceIn(0f, 1f) }
+
+    /** The received and sent curves as graph heights (0..1), both on the scale of the biggest point of either. */
+    fun netSeries(down: List<Long>, up: List<Long>): List<List<Float>> {
+        val scale = netScale(maxOf(down.maxOrNull() ?: 0L, up.maxOrNull() ?: 0L)).toDouble()
+        fun norm(history: List<Long>) = history.map { (it / scale).toFloat().coerceIn(0f, 1f) }
+        return listOf(norm(down), norm(up))
+    }
 }

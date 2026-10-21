@@ -129,6 +129,7 @@ import com.orizonx.client.actions.ContextPageMemory
 import com.orizonx.client.actions.ContextScroll
 import com.orizonx.client.actions.NowPlaying
 import com.orizonx.client.actions.NowPlayingLayout
+import com.orizonx.client.actions.PerfFormat
 import com.orizonx.client.actions.UsbDrive
 import com.orizonx.client.actions.UsbKind
 import com.orizonx.client.actions.VolumeIcon
@@ -875,7 +876,7 @@ private fun ClockDigits(text: String, sizeSp: Float, color: Color, modifier: Mod
 
 /** Orizon X pictogram from [res] (white vector), tinted with [tint]; [alpha] dims it. */
 @Composable
-private fun Picto(res: Int, size: Dp, alpha: Float = 1f, modifier: Modifier = Modifier, tint: Color = Color.White) {
+internal fun Picto(res: Int, size: Dp, alpha: Float = 1f, modifier: Modifier = Modifier, tint: Color = Color.White) {
     Image(
         painterResource(res),
         contentDescription = null,
@@ -1328,7 +1329,43 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
         BlockId.DISCORD -> LauncherTile("discord", tr(S.BLOCK_DISCORD), R.drawable.ox_apps, state.launchers?.discordIcon?.let { c.images[it] }, c, modifier)
         BlockId.SPOTIFY -> LauncherTile("spotify", tr(S.BLOCK_SPOTIFY), R.drawable.ox_apps, state.launchers?.spotifyIcon?.let { c.images[it] }, c, modifier)
         BlockId.DOWNLOADS -> LauncherTile("downloads", tr(S.BLOCK_DOWNLOADS), R.drawable.ox_download, null, c, modifier)
-        BlockId.PERF_CPU, BlockId.PERF_GPU, BlockId.PERF_RAM, BlockId.PERF_NET, BlockId.PERF_NPU -> Unit // drawn in the next commit
+        BlockId.PERF_CPU -> state.perf?.let { p ->
+            val lang = LocalLang.current
+            p.cpu?.let { m ->
+                PerfCard(R.drawable.ox_perf_cpu, tr(S.BLOCK_PERF_CPU), PerfFormat.percent(m.value, lang), p.cpuGhz?.let { PerfFormat.ghz(it, lang) },
+                    listOf(PerfFormat.fractions(m.history)), emptySet(), PerfFormat.compact(cols, rows), modifier)
+            }
+        }
+        BlockId.PERF_GPU -> state.perf?.let { p ->
+            val lang = LocalLang.current
+            p.gpu?.let { m ->
+                val mem = if (p.gpuMemUsed != null && p.gpuMemTotal != null) PerfFormat.gb(p.gpuMemUsed, p.gpuMemTotal, lang) else null
+                PerfCard(R.drawable.ox_perf_gpu, tr(S.BLOCK_PERF_GPU), PerfFormat.percent(m.value, lang), mem,
+                    listOf(PerfFormat.fractions(m.history)), emptySet(), PerfFormat.compact(cols, rows), modifier)
+            }
+        }
+        BlockId.PERF_RAM -> state.perf?.let { p ->
+            val lang = LocalLang.current
+            p.ram?.let { m ->
+                val mem = if (p.ramUsed != null && p.ramTotal != null) PerfFormat.gb(p.ramUsed, p.ramTotal, lang) else null
+                PerfCard(R.drawable.ox_perf_ram, tr(S.BLOCK_PERF_RAM), PerfFormat.percent(m.value, lang), mem,
+                    listOf(PerfFormat.fractions(m.history)), emptySet(), PerfFormat.compact(cols, rows), modifier)
+            }
+        }
+        BlockId.PERF_NET -> state.perf?.let { p ->
+            val lang = LocalLang.current
+            p.netDown?.let { down ->
+                PerfCard(R.drawable.ox_wifi_3, tr(S.BLOCK_PERF_NET), "↓ " + PerfFormat.rate(down, lang), p.netUp?.let { "↑ " + PerfFormat.rate(it, lang) },
+                    PerfFormat.netSeries(p.netDownHistory, p.netUpHistory), setOf(1), PerfFormat.compact(cols, rows), modifier)
+            }
+        }
+        BlockId.PERF_NPU -> state.perf?.let { p ->
+            val lang = LocalLang.current
+            p.npu?.let { m ->
+                PerfCard(R.drawable.ox_perf_npu, tr(S.BLOCK_PERF_NPU), PerfFormat.percent(m.value, lang), null,
+                    listOf(PerfFormat.fractions(m.history)), emptySet(), PerfFormat.compact(cols, rows), modifier)
+            }
+        }
     }
 }
 
