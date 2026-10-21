@@ -11,7 +11,7 @@ class NowPlayingLayoutTest {
     @Test
     fun theCoverIsNeverSmallerThanToday() {
         assertEquals(112f, plan(340f, 60f).coverSide, 0f) // a very short block
-        assertEquals(112f, plan(200f, 240f).coverSide, 0f) // too narrow to give the text 180 dp beside a bigger cover
+        assertEquals(112f, plan(200f, 190f).coverSide, 0f) // too narrow to give the text 180 dp beside a bigger cover
         assertEquals(112f, plan(0f, 0f).coverSide, 0f)
         assertFalse(plan(0f, 0f).vertical)
         assertEquals(112f, plan(-5f, -5f).coverSide, 0f)
@@ -32,10 +32,10 @@ class NowPlayingLayoutTest {
 
     @Test
     fun theCoverStopsGrowingWhereTheTextWouldBeSqueezed() {
-        // 336 wide: the cover can be at most 336 - 16 - 180 = 140 dp, however tall the block is while it is not "much taller".
+        // 336 wide: the cover can be at most 336 - 16 - 180 = 140 dp, however tall the block is while it is not taller than wide.
         assertEquals(140f, plan(336f, 204f).coverSide, 0f)
         assertEquals(140f, plan(336f, 300f).coverSide, 0f)
-        assertEquals(140f, plan(336f, 420f).coverSide, 0f) // 420 = 1.25 * 336: not yet vertical
+        assertEquals(140f, plan(336f, 336f).coverSide, 0f) // square: not yet vertical
         // The text column keeps its width.
         for (w in listOf(336f, 400f, 500f, 800f)) {
             val p = plan(w, w * 1.0f)
@@ -44,7 +44,7 @@ class NowPlayingLayoutTest {
     }
 
     @Test
-    fun aMuchTallerBlockPutsTheCoverOnTop() {
+    fun aTallerThanWideBlockPutsTheCoverOnTop() {
         // 3x4 cells of 116 dp, 14 dp padding: about 336 x 460.
         val p = plan(336f, 460f)
         assertTrue(p.vertical)
@@ -59,9 +59,11 @@ class NowPlayingLayoutTest {
     }
 
     @Test
-    fun theVerticalSwitchNeedsAnAspectAndARoomyCover() {
-        assertFalse(plan(336f, 420f).vertical) // exactly 1.25: still beside
-        assertTrue(plan(336f, 421f).vertical)
+    fun theVerticalSwitchIsHeightOverWidthAndNeedsARoomyCover() {
+        assertFalse(plan(336f, 336f).vertical) // square: still beside
+        assertTrue(plan(336f, 337f).vertical) // one dp taller: on top
+        assertEquals(202.2f, plan(336f, 337f).coverSide, 0.001f)
+        assertFalse(plan(336f, 300f).vertical) // wider than tall
         // Tall and narrow but the 60 % cover would be under the minimum: stays beside the text.
         assertFalse(plan(120f, 180f).vertical) // 60 % of 180 is 108 < 112
     }
@@ -76,10 +78,20 @@ class NowPlayingLayoutTest {
     }
 
     @Test
+    fun onlySpotifyShowsItsIconWhateverTheCase() {
+        assertTrue(NowPlayingLayout.isSpotify("Spotify"))
+        assertTrue(NowPlayingLayout.isSpotify("spotify.exe"))
+        assertTrue(NowPlayingLayout.isSpotify("SPOTIFY Premium"))
+        assertFalse(NowPlayingLayout.isSpotify("Chrome"))
+        assertFalse(NowPlayingLayout.isSpotify(""))
+    }
+
+    @Test
     fun theVerticalCoverLeavesRoomForTheTextAndKeys() {
-        for (h in 420..1200 step 20) {
+        for (h in 337..1200 step 21) {
             val p = plan(336f, h.toFloat())
-            if (p.vertical) assertTrue("$h", h - p.coverSide >= 168f) // about 40 % of the height, at least 168 dp
+            assertTrue("$h", p.vertical)
+            assertTrue("$h", h - p.coverSide >= h * 0.4f - 0.01f) // 40 % of the height for the text and keys
         }
     }
 }

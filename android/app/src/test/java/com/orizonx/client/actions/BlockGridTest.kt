@@ -15,6 +15,7 @@ import com.orizonx.client.actions.BlockId.USB
 import com.orizonx.client.actions.BlockId.WIFI
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -116,6 +117,18 @@ class BlockGridTest {
         assertEquals(UsbMode.COMPACT, UsbContent.mode(1))
         assertEquals(UsbMode.FULL, UsbContent.mode(3))
         assertEquals(UsbMode.FULL, UsbContent.mode(7))
+    }
+
+    @Test
+    fun usbChipsShareTheHeightOnlyWhenTheyAllFitAtLeast68dp() {
+        assertTrue(UsbContent.fits(1, 68f))
+        assertFalse(UsbContent.fits(1, 67f))
+        assertTrue(UsbContent.fits(2, 146f)) // 2 x 68 + 10
+        assertFalse(UsbContent.fits(2, 145f))
+        assertTrue(UsbContent.fits(3, 500f))
+        assertFalse(UsbContent.fits(3, 200f)) // too many for the block: it scrolls
+        assertTrue(UsbContent.fits(0, 0f))
+        assertFalse(UsbContent.fits(1, Float.POSITIVE_INFINITY))
     }
 
     // --- The fixed 6-row grid -----------------------------------------------------------------------------------------------------

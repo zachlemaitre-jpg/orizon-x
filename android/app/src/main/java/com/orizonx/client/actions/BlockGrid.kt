@@ -75,6 +75,16 @@ enum class UsbMode { COMPACT, FULL }
 object UsbContent {
     /** Two cells wide: a compact chip (icon, name, eject). From three: the full chip (free space, open and eject). */
     fun mode(cols: Int): UsbMode = if (cols >= 3) UsbMode.FULL else UsbMode.COMPACT
+
+    /** Height of one chip, and the least it keeps when the chips share the block's height. */
+    const val CHIP_HEIGHT = 68f
+
+    /** Space between two chips. */
+    const val CHIP_GAP = 10f
+
+    /** True when [count] chips of at least [CHIP_HEIGHT] fit in [heightDp]: they then share the height, otherwise the block scrolls. */
+    fun fits(count: Int, heightDp: Float): Boolean =
+        count <= 0 || (heightDp.isFinite() && heightDp >= count * CHIP_HEIGHT + (count - 1) * CHIP_GAP)
 }
 
 /** Which blocks the PC currently gives something to show for (a hidden or absent block is simply not drawn). */

@@ -216,7 +216,6 @@ fun ActionsScreen(
     // Page picked per context profile; lives with the screen so it survives the bar disappearing and coming back.
     val pageMemory = remember { ContextPageMemory() }
     var pageVersion by remember { mutableIntStateOf(0) }
-    var stripHeightPx by remember { mutableIntStateOf(0) }
     var keyboardOpen by remember { mutableStateOf(false) }
     var trackpadOpen by remember { mutableStateOf(false) }
     var gamepadOpen by remember { mutableStateOf(false) }
@@ -267,7 +266,6 @@ fun ActionsScreen(
                             pageMemory.select(profile, id)
                             pageVersion++
                         },
-                        onHeight = { stripHeightPx = it },
                     )
                 }
             }
@@ -394,8 +392,9 @@ fun ActionsScreen(
                             )
                         }
                     }
-                    // The Touch-Bar-like strip sits at the very bottom; without a context nothing is reserved for it.
-                    contextStrip()
+                    // The Touch-Bar-like strip sits at the very bottom, in an area reserved at its tallest (tabs stacked over the buttons)
+                    // whether a bar is shown or not: the grid above keeps its size and place when the bar comes, goes or changes shape.
+                    Box(Modifier.fillMaxWidth().height(ContextStripReservedHeight), contentAlignment = Alignment.BottomCenter) { contextStrip() }
                 }
             }
             AnimatedVisibility(
@@ -403,8 +402,9 @@ fun ActionsScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
-                        bottom = if (contextBar != null && !showKeyboard && !showTrackpad && !showGamepad && !showClaude) {
-                            24.dp + maxOf(ContextBarHeight, with(LocalDensity.current) { stripHeightPx.toDp() }) + ContextBarBottomMargin
+                        bottom = if (!showKeyboard && !showTrackpad && !showGamepad && !showClaude) {
+                            // The normal page always reserves the strip's area: the notice clears it.
+                            24.dp + ContextStripReservedHeight
                         } else {
                             24.dp
                         },
@@ -503,6 +503,12 @@ private val ContextKeyShape = RoundedCornerShape(14.dp)
 private val ContextKeyMinWidth = 64.dp
 private val ContextScrollKeyWidth = 132.dp
 private val ContextTabsRowHeight = 34.dp
+
+/**
+ * The tallest the strip gets: the stacked layout (tabs row over the buttons area, [ContextBarHeight] less 8 dp) plus its
+ * bottom margin. The normal page reserves exactly this under the grid, bar or no bar.
+ */
+private val ContextStripReservedHeight = ContextTabsRowHeight + (ContextBarHeight - 8.dp) + ContextBarBottomMargin
 private val ContextIconSize = 28.dp
 private val ContextIconShape = RoundedCornerShape(6.dp)
 private val ContextSwipeThreshold = 48.dp
@@ -513,8 +519,7 @@ private const val CONTEXT_PAGE_FADE_MS = 150
  * Full-width glass strip with the buttons for the PC's foreground app. The content crossfades (~200 ms) when the profile
  * changes; changes inside the same profile (e.g. the window title in the app name) just update it in place.
  * With several pages, tabs pick the page and a horizontal swipe on the buttons moves to the neighbour page;
- * [pageMemory] gives each profile back the page it was left on. [onHeight] reports the strip height in pixels.
- */
+ * [pageMemory] gives each profile back the page it was left on. */
 @Composable
 private fun ContextBarStrip(
     bar: ContextBar,
@@ -523,7 +528,6 @@ private fun ContextBarStrip(
     pageMemory: ContextPageMemory,
     pageVersion: Int,
     onPage: (profile: String, pageId: String) -> Unit,
-    onHeight: (Int) -> Unit,
 ) {
     val latest by rememberUpdatedState(bar)
     // The outgoing profile keeps showing its own buttons while it fades out.
@@ -533,7 +537,6 @@ private fun ContextBarStrip(
         Modifier
             .fillMaxWidth()
             .padding(start = 12.dp, end = 12.dp, bottom = ContextBarBottomMargin)
-            .onSizeChanged { onHeight(it.height) }
             .heightIn(min = ContextBarHeight)
             .clip(ContextBarShape)
             .background(Color.White.copy(alpha = 0.10f))
@@ -1031,6 +1034,8 @@ private fun SoundCard(
         } else {
             if (audio != null) {
                 Spacer(Modifier.height(8.dp))
+                // Taller than its content: the slider sits in the middle of the free space, the keys at the bottom.
+                if (stretch) Spacer(Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     VolumeSlider(audio, c, Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp))
@@ -1040,7 +1045,7 @@ private fun SoundCard(
                 }
                 Spacer(Modifier.height(10.dp))
             }
-            // In the equal-height landscape row the card may be taller than its content: push the keys to the bottom.
+            // The card may be taller than its content (a grid block, the equal-height landscape row): push the keys to the bottom.
             if (stretch) Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (audio != null) {
@@ -1081,10 +1086,18 @@ private fun VolumeSlider(audio: AudioState, c: Controls, modifier: Modifier) {
  * The now-playing block. The cover grows with the block ([NowPlayingLayout]): beside the text it is as tall as the block,
  * but the text column keeps at least ~180 dp; in a block much taller than wide it sits above the text, as wide as the block.
  * The bitmap is only scaled (high quality) to the drawn size; the title, artist, app and the three keys follow.
- * With [stretch] the content is centred in the block.
+ * With [stretch] the content follows the block's height: beside the cover the text column fills the room (title, artist and
+ * app on top, the three keys spread along the bottom); above the text (taller than wide) the cover is on top and the text
+ * and keys fill the rest. [appIcon] is Spotify's icon (when the media comes from Spotify), small in the block's top-right corner.
  */
 @Composable
-private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
+private fun NowPlayingCard(
+    now: NowPlaying,
+    c: Controls,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    stretch: Boolean = false,
+    appIcon: ImageBitmap? = null,
+) {
     val cover = now.artworkId?.let { c.images[it] }
     GlassCard(modifier) {
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f, fill = stretch)) {
@@ -1108,13 +1121,17 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                     }
                 }
             }
+            // The icon sits in the top-right corner: beside the cover the title stops short of it, above the text it overlays the cover.
+            val showIcon = appIcon != null && NowPlayingLayout.isSpotify(now.app)
+            val titleEnd = if (showIcon && !plan.vertical) NowPlayingLayout.APP_ICON_DP.dp + 8.dp else 0.dp
             val texts: @Composable () -> Unit = {
-                OneLine(now.title.ifBlank { tr(S.NOW_PLAYING) }, 18.sp, FontWeight.Bold, 1f)
+                Box(Modifier.padding(end = titleEnd)) { OneLine(now.title.ifBlank { tr(S.NOW_PLAYING) }, 18.sp, FontWeight.Bold, 1f) }
                 val details = listOf(now.artist, now.album).filter { it.isNotBlank() }.joinToString(" · ")
                 if (details.isNotEmpty()) OneLine(details, 14.sp, FontWeight.Normal, 0.8f)
                 if (now.app.isNotBlank()) OneLine(now.app, 12.sp, FontWeight.Normal, 0.55f)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            }
+            val keys: @Composable (Arrangement.Horizontal, Modifier) -> Unit = { arrangement, keysModifier ->
+                Row(keysModifier, horizontalArrangement = arrangement, verticalAlignment = Alignment.CenterVertically) {
                     RoundIconKey(R.drawable.ox_next_left) { c.tap(); c.send(ActionMessages.mediaPrevious()) }
                     RoundIconKey(if (now.playing) R.drawable.ox_pause else R.drawable.ox_play) {
                         c.tap()
@@ -1125,10 +1142,14 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                 }
             }
             if (plan.vertical) {
-                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                     art()
                     Spacer(Modifier.height(10.dp))
-                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { texts() }
+                    // Text on top of what is left, the keys at its bottom.
+                    Column(Modifier.fillMaxWidth().weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.padding(bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) { texts() }
+                        keys(Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally), Modifier)
+                    }
                 }
             } else {
                 Row(
@@ -1137,8 +1158,21 @@ private fun NowPlayingCard(now: NowPlaying, c: Controls, modifier: Modifier = Mo
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     art()
-                    Column(Modifier.weight(1f)) { texts() }
+                    // The column takes the width right of the cover and the block's height: text on top, the keys spread along the bottom.
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.padding(bottom = 10.dp)) { texts() }
+                        keys(Arrangement.SpaceEvenly, Modifier.fillMaxWidth())
+                    }
                 }
+            }
+            if (showIcon && appIcon != null) {
+                Image(
+                    appIcon,
+                    contentDescription = null,
+                    modifier = Modifier.align(Alignment.TopEnd).size(NowPlayingLayout.APP_ICON_DP.dp).clip(RoundedCornerShape(5.dp)),
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.High,
+                )
             }
         }
     }
@@ -1155,7 +1189,7 @@ private fun OneLine(text: String, size: androidx.compose.ui.unit.TextUnit, weigh
 }
 
 @Composable
-private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth()) {
+private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: Modifier = Modifier.fillMaxWidth(), stretch: Boolean = false) {
     GlassCard(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Picto(brightnessRes(brightness), 28.dp)
@@ -1163,6 +1197,8 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
             GlassText(tr(S.BRIGHTNESS), size = 16.sp, weight = FontWeight.SemiBold)
         }
         Spacer(Modifier.height(8.dp))
+        // With [stretch] (a grid block) the slider sits in the middle of the room under the header; nothing grows.
+        if (stretch) Spacer(Modifier.weight(1f))
         Row(verticalAlignment = Alignment.CenterVertically) {
             GlassSlider(
                 value = brightness.value,
@@ -1181,6 +1217,7 @@ private fun BrightnessCard(brightness: BrightnessState, c: Controls, modifier: M
                 GlassText(tr(S.PERCENT, "value" to (brightness.value * 100).roundToInt()), size = 16.sp)
             }
         }
+        if (stretch) Spacer(Modifier.weight(1f))
     }
 }
 
@@ -1251,11 +1288,22 @@ private fun LauncherTile(target: String, label: String, fallback: Int, image: Im
 /** The drives of the USB block, one chip each; it scrolls on its own when there are more than fit. */
 @Composable
 private fun UsbBlock(usb: List<UsbDrive>, c: Controls, modifier: Modifier, mode: UsbMode) {
-    Column(
-        modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-    ) {
-        for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth(), compact = mode == UsbMode.COMPACT)
+    val compact = mode == UsbMode.COMPACT
+    // Not inside an intrinsic-size row (a BoxWithConstraints there crashes): the grid gives the block a fixed cell.
+    BoxWithConstraints(modifier) {
+        if (UsbContent.fits(usb.size, maxHeight.value)) {
+            // Enough room: the chips share the block's height (each at least 68 dp).
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(UsbContent.CHIP_GAP.dp)) {
+                for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth().weight(1f), compact = compact, fixedHeight = false)
+            }
+        } else {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(UsbContent.CHIP_GAP.dp, Alignment.CenterVertically),
+            ) {
+                for (drive in usb) UsbChip(drive, c, Modifier.fillMaxWidth(), compact = compact)
+            }
+        }
     }
 }
 
@@ -1268,8 +1316,10 @@ internal fun BlockContent(id: BlockId, state: ActionsState, c: Controls, clockSp
             Box(Modifier.wrapContentHeight(unbounded = true)) { ClockBlock(state.clock, state.battery, clockSp, (clockSp * 0.42f).coerceIn(12f, 22f)) }
         }
         BlockId.SOUND -> SoundCard(state, c, modifier, stretch = true, mode = SoundContent.mode(cols, rows, soundKeys(state)))
-        BlockId.NOW_PLAYING -> state.nowPlaying?.let { NowPlayingCard(it, c, modifier, stretch = true) }
-        BlockId.BRIGHTNESS -> state.brightness?.let { BrightnessCard(it, c, modifier) }
+        BlockId.NOW_PLAYING -> state.nowPlaying?.let {
+            NowPlayingCard(it, c, modifier, stretch = true, appIcon = state.launchers?.spotifyIcon?.let { id -> c.images[id] })
+        }
+        BlockId.BRIGHTNESS -> state.brightness?.let { BrightnessCard(it, c, modifier, stretch = true) }
         BlockId.WIFI -> state.wifi?.let { WifiTile(it, c, modifier) }
         BlockId.BLUETOOTH -> state.bluetooth?.let { BluetoothTile(it, c, modifier) }
         BlockId.AIRPLANE -> state.airplane?.let { AirplaneTile(it, c, modifier) }
@@ -1289,10 +1339,10 @@ private fun onOff(on: Boolean) = tr(if (on) S.STATE_ON else S.STATE_OFF)
  * The chips are stacked inside the USB block of the grid.
  */
 @Composable
-private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier, compact: Boolean = false) {
+private fun UsbChip(drive: UsbDrive, c: Controls, modifier: Modifier = Modifier, compact: Boolean = false, fixedHeight: Boolean = true) {
     Row(
         modifier
-            .height(68.dp)
+            .then(if (fixedHeight) Modifier.height(UsbContent.CHIP_HEIGHT.dp) else Modifier)
             .clip(ChipShape)
             .background(Color.White.copy(alpha = 0.10f))
             .border(1.dp, Color.White.copy(alpha = 0.25f), ChipShape)
