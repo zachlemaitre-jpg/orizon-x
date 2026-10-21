@@ -77,3 +77,33 @@ Quatre nouveaux blocs. Chacun est déplaçable, redimensionnable et masquable co
   - compacter la session ;
   - limites qui s'ouvrent puis se referment ;
   - les deux limites visibles ensemble.
+
+## 4. Révision (2026-10-21, retours de l'essai réel)
+
+### 4.1 Icône de Spotify (version Microsoft Store)
+- **Constat** : le Spotify de l'utilisateur est la version Store (`SpotifyAB.SpotifyMusic`). Le PC ne trouvait que le protocole `spotify:` et envoyait donc `icons.spotify = null`.
+- **PC** : quand `%APPDATA%\Spotify\Spotify.exe` est absent, le PC lit en lecture seule le registre `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\SpotifyAB.SpotifyMusic_*`, valeur `PackageRootFolder`. Si `<racine>\Spotify.exe` existe (il est lisible), l'icône en est extraite. Le lancement continue de passer par `spotify:`.
+- **Appareil** : le bloc « Lecture en cours » affiche cette icône (`launchers.icons.spotify`) en petit (≈ 22 dp, coins arrondis), **en haut à droite du bloc**, quand la source du média (`now.app`) contient « spotify » (casse ignorée) et que l'image est arrivée.
+
+### 4.2 Barre contextuelle : la grille ne bouge plus
+- La zone de la barre en bas est **toujours réservée** sur la page normale, à sa hauteur maximale (onglets empilés compris), qu'une barre soit affichée ou non.
+- La barre se dessine en bas de cette zone. La grille garde donc la même taille et la même position quand la barre apparaît, disparaît ou change de forme.
+
+### 4.3 Le contenu des blocs suit leur taille
+- **Lecture en cours, côte à côte** : la colonne de texte occupe toute la largeur à droite de la pochette.
+  - Le titre, l'artiste et l'app sont en haut ; les trois touches sont en bas, réparties sur la largeur de la colonne.
+  - La taille du texte ne change pas, sans écrasement (une ligne, points de suspension).
+- **Lecture en cours, vertical** : dès que le bloc est plus haut que large (hauteur > largeur), la pochette se met au-dessus et le texte en dessous.
+  - La pochette prend au plus la largeur du bloc et au plus 60 % de sa hauteur.
+  - Le texte et les touches occupent le reste.
+- **Son et Luminosité** agrandis vers le bas : l'en-tête est en haut, le curseur au milieu de l'espace libre, les touches (Son) en bas. Le contenu se répartit dans la hauteur au lieu de rester groupé en haut ; rien ne grossit.
+- **Clé USB** : les puces se partagent la hauteur du bloc ; chaque puce a une hauteur minimale de 68 dp et défile s'il en manque.
+
+### 4.4 Lanceurs : ouvrir puis réduire
+- Si la fenêtre de l'application ciblée est **au premier plan** sur le PC, un tap la **réduit** (équivalent de « _ », `ShowWindow(SW_MINIMIZE)`). Sinon, le tap l'ouvre ou la ramène, comme avant.
+- Reconnaissance de la fenêtre au premier plan :
+  - `discord` : processus `Discord.exe` ;
+  - `spotify` : processus `Spotify.exe` ;
+  - `settings` : fenêtre `ApplicationFrameWindow` dont une fenêtre enfant appartient à `SystemSettings.exe`, ou processus `SystemSettings.exe` ;
+  - `downloads` : fenêtre de l'Explorateur (`CabinetWClass`) dont le dossier courant est le dossier Téléchargements (`Shell.Application().Windows()`, correspondance par HWND).
+- La liste des cibles reste fermée. Les tests utilisent des fausses fonctions de fenêtre : rien n'est réduit en vrai pendant les tests.
