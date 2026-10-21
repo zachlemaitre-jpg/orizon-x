@@ -46,7 +46,7 @@ Toutes les mesures passent par les **compteurs de performance de Windows (PDH)**
 - Une mesure introuvable est absente de la section.
 - Les courbes en pourcentage sont des entiers de 0 à 100 ; les débits sont en octets par seconde, entiers ; les quantités de mémoire sont en Go, avec une décimale.
 - La section pèse environ 2 Kio, bien sous le budget de 64 Kio de l'état.
-- Elle est envoyée avec le groupe rapide, au plus une fois par seconde (nouvel échantillon seulement).
+- Elle est lue avec le groupe lent du hub (1 s) : un nouvel échantillon par lecture.
 
 **Erreurs** : un compteur qui échoue rend sa mesure absente, puis le PC réessaie à la découverte suivante. Rien n'est journalisé plus d'une fois par minute et par mesure.
 
