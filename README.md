@@ -71,16 +71,17 @@ L'appareil devient un écran en plus.
 
 Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le PC. L'écran reste allumé, et le portrait est autorisé. Les tuiles dont le PC ne dispose pas (pas de batterie, pas de Wi-Fi…) disparaissent.
 
-**Réorganiser les blocs** : un appui long sur une zone libre d'un bloc (l'heure, un titre de carte) passe en mode édition ; la grille de 6 lignes apparaît. On glisse un bloc où l'on veut (les cases deviennent rouges si la place est prise), la poignée ↘ l'agrandit ou le réduit case par case (le Son et la clé USB adaptent leur contenu, la pochette de Spotify grandit avec son bloc), ✕ masque un bloc, « + Ajouter » le rétablit et « Terminé » (en haut à gauche) quitte. La disposition est gardée sur l'appareil, en paysage et en portrait.
+**Réorganiser les blocs** : un appui long sur une zone libre d'un bloc (l'heure, un titre de carte) passe en mode édition ; la grille de 6 lignes apparaît. On glisse un bloc où l'on veut (les cases deviennent rouges si la place est prise), la poignée ↘ l'agrandit ou le réduit case par case (le contenu suit la taille : le Son, la Luminosité et la clé USB se répartissent dans la hauteur, la pochette grandit avec son bloc et le texte occupe la place libre, sous la pochette quand le bloc est vertical), ✕ masque un bloc, « + Ajouter » le rétablit et « Terminé » (en haut à gauche) quitte. La disposition est gardée sur l'appareil, en paysage et en portrait.
 
 - **Horloge** (heure et date du PC) et **batterie du PC**.
 - **Volume** (curseur) et **muet**.
 - **Médias** : précédent, lecture/pause, suivant.
-- **En cours de lecture** : carte avec la pochette, le titre, l'artiste, l'album et l'application. Elle marche avec toute source qui publie dans les contrôles multimédias de Windows (Spotify, navigateur, VLC…).
+- **En cours de lecture** : carte avec la pochette, le titre, l'artiste, l'album et l'application. Elle marche avec toute source qui publie dans les contrôles multimédias de Windows (Spotify, navigateur, VLC…). Avec Spotify, son icône s'affiche en haut à droite.
 - **Luminosité**.
 - **Wi-Fi** (avec barres de signal), **Bluetooth** et **mode avion**.
 - **Clés et disques USB** : **Ouvrir** dans l'Explorateur, **Éjecter** proprement. Si l'éjection est refusée (clé utilisée), un message le dit.
-- **Barre contextuelle** (en bas) : des boutons adaptés à l'app au premier plan sur le PC, avec son icône au-dessus de son nom.
+- **Lanceurs** : Paramètres (de Windows), Discord, Spotify (classique ou Microsoft Store) et Téléchargements. Un tap ouvre l'app ; si elle est déjà au premier plan, un tap la réduit.
+- **Barre contextuelle** (en bas) : des boutons adaptés à l'app au premier plan sur le PC, avec son icône au-dessus de son nom. Sa place est toujours réservée : la grille ne bouge pas quand elle apparaît.
   - Apps : Spotify, PowerPoint, Word, Excel, VS Code, Explorateur, Illustrator, Photoshop, InDesign, Premiere Pro, After Effects, Lightroom Classic, Canva et Figma (app ou site, reconnus par l'adresse), et les IA : Claude (app ou claude.ai), ChatGPT (app ou site) et Gemini, avec une page « Chat » (nouvelle discussion, recherche, barre latérale, copier la réponse, arrêter…).
   - Les apps créatives ont plusieurs pages (Outils, Édition, Affichage…), à choisir par onglets ou par balayage.
   - **Navigateurs** (Chrome, Edge, Opera, Firefox, Brave, Vivaldi, Arc…) : une page **Onglets** liste les onglets ouverts ; un tap bascule sur l'onglet.
@@ -98,7 +99,7 @@ Aucune vidéo : l'appareil affiche seulement des boutons natifs qui pilotent le 
   - Vérifier dans Windows : Win+R, `joy.cpl`.
 - **Claude Code** : les sessions Claude Code du PC, en lecture seule, groupées par projet.
   - À gauche : l'heure, les boutons « + Nouveau », « Artéfacts », « Personnalisation », « Plus » (ils agissent dans l'app Claude) et les conversations ; un tap ouvre la conversation dans l'app.
-  - À droite : contexte détaillé, limite de session et limite hebdomadaire, modifications (+/−), résultats et tâches en arrière-plan. Un tap sur le contexte ou sur une limite ouvre la vue correspondante dans l'app.
+  - À droite : contexte détaillé, limite de session et limite hebdomadaire, modifications (+/−), résultats et tâches en arrière-plan. Les deux limites restent affichées, chacune avec l'heure de sa dernière lecture. Un tap sur le contexte ou sur une limite ouvre la vue correspondante dans l'app ; un second tap sur une limite la referme. « Compacter la session » (deux taps pour confirmer) compacte la conversation ouverte.
   - Le détail du contexte et les limites sont lus dans le panneau de droite de l'app Claude, pour la conversation qui y est ouverte. Aucun texte de conversation ne quitte le PC.
 
 ### Mode Tableau (Frame)
