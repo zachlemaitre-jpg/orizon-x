@@ -60,6 +60,7 @@ from typing import Any, Callable, Optional
 
 from actions.claude_app_ui import (COMPACT_NAMES, CONTEXT_HEADER, RAIL_TOGGLES, SIDEBAR_BUTTONS, USAGE_BUTTON,
                                    ClaudeAppReader, ClaudeAppUi)
+from actions.folder_front import WindowRaiser
 
 _log = logging.getLogger("orizonx.actions.claude_code")
 
@@ -715,31 +716,24 @@ def _fit(section: dict) -> dict:
 
 # --- real window layer ---------------------------------------------------------------------------------------------
 
-class Win32Focus:
+class Win32Focus(WindowRaiser):
     """The window of the Claude app: found, restored, brought to the front. Created on first use."""
 
-    SW_RESTORE = 9
     GW_OWNER = 4
-    VK_MENU = 0x12
-    KEYEVENTF_KEYUP = 0x0002
 
     def __init__(self) -> None:
         import ctypes
         from ctypes import wintypes
         from actions.foreground import Win32Api
+        super().__init__()  # restore / SetForegroundWindow / Alt tap (self._u = user32)
         self._ctypes, self._wintypes = ctypes, wintypes
         self._api = Win32Api()
-        u = ctypes.WinDLL("user32", use_last_error=True)
-        self._u = u
+        u = self._u
         self._enum_proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         u.EnumWindows.argtypes = [self._enum_proto, wintypes.LPARAM]
         u.IsWindowVisible.argtypes = [wintypes.HWND]
         u.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
         u.GetWindow.restype = wintypes.HWND
-        u.IsIconic.argtypes = [wintypes.HWND]
-        u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-        u.SetForegroundWindow.argtypes = [wintypes.HWND]
-        u.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
 
     def find_window(self) -> int:
         found: "list[tuple[int, int]]" = []
@@ -760,18 +754,5 @@ class Win32Focus:
         found.sort(key=lambda item: item[0])
         return found[0][1] if found else 0
 
-    def is_iconic(self, hwnd: int) -> bool:
-        return bool(self._u.IsIconic(hwnd))
-
-    def restore(self, hwnd: int) -> None:
-        self._u.ShowWindow(hwnd, self.SW_RESTORE)
-
-    def set_foreground(self, hwnd: int) -> bool:
-        return bool(self._u.SetForegroundWindow(hwnd))
-
     def window_title(self, hwnd: int) -> str:
         return self._api.window_title(hwnd)
-
-    def alt_tap(self) -> None:
-        self._u.keybd_event(self.VK_MENU, 0, 0, 0)
-        self._u.keybd_event(self.VK_MENU, 0, self.KEYEVENTF_KEYUP, 0)

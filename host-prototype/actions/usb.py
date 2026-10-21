@@ -12,7 +12,9 @@ cannot be read.
   IOCTL_STORAGE_QUERY_PROPERTY (USB sticks and USB hard disks; SD slots, SATA/NVMe disks, optical and network
   drives are left out). Label from GetVolumeInformationW, space from GetDiskFreeSpaceExW; a slot without media
   (card reader) is skipped.
-- `usb.open`: os.startfile on the drive root, so Explorer opens it.
+- `usb.open`: os.startfile on the drive root, so Explorer opens it, then the window is brought to the front
+  (actions.folder_front: the hub is a background process, so Explorer alone would open it behind the other windows;
+  at most 3 s of polling, never an error: the open itself still counts as done).
 - `usb.eject`: volume → disk number (IOCTL_STORAGE_GET_DEVICE_NUMBER) → the GUID_DEVINTERFACE_DISK interface with the
   same number (SetupAPI) → its devinst → CM_Get_Parent → CM_Request_Device_EjectW with a veto buffer (which also
   keeps Windows from showing its own dialog). A veto (file open, Explorer window…) gives "usb_busy" after a few
@@ -20,7 +22,8 @@ cannot be read.
 - Both actions only accept a drive letter that is a USB drive right now: anything else is "usb_failed", so the device
   can never open an arbitrary path nor eject an internal disk.
 
-Every Win32 call goes through a small API object (Win32UsbApi) that tests replace with a fake.
+Every Win32 call goes through a small API object (Win32UsbApi) that tests replace with a fake; the same goes for the
+folder front (`front`, created on first use when None) and `sleep`.
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ import time
 from typing import Any, Callable, Iterator, Protocol
 
 from actions.base import ProviderError
+from actions.folder_front import ensure_front, open_folder_to_front
 
 # GetDriveTypeW
 DRIVE_UNKNOWN = 0
@@ -162,8 +166,9 @@ class UsbProvider:
     """Provider for the "usb" part of the state and the usb.open / usb.eject actions."""
 
     def __init__(self, api: UsbApi | None = None, *, log: Callable[[str], None] | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+                 sleep: Callable[[float], None] = time.sleep, front: Any = None) -> None:
         self._api = api if api is not None else Win32UsbApi()
+        self._front = front  # the Explorer window raiser, created on first use when None
         self._log = log or (lambda _line: None)
         self._sleep = sleep
 
@@ -218,8 +223,10 @@ class UsbProvider:
             return "disk"  # unreadable descriptor on a fixed drive: the safer reading
 
     def _open(self, letter: str) -> str | None:
+        root = root_path(letter)
         try:
-            self._api.startfile(root_path(letter))
+            self._front = ensure_front(self._front, self._log)
+            open_folder_to_front(root, lambda: self._api.startfile(root), self._front, self._sleep, self._log)
         except (UsbError, OSError) as error:
             self._log(f"USB: cannot open {letter}: ({error})")
             return FAILED

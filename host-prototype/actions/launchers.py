@@ -15,7 +15,9 @@ unknown or malformed one is ignored and logged, nothing is run):
 * ``spotify``: ``%APPDATA%\\Spotify\\Spotify.exe``, else the ``spotify:`` protocol (Microsoft Store version). The Store
   package keeps a readable ``Spotify.exe``: its folder is read (read-only) from the registry value ``PackageRootFolder`` of
   ``HKCU\\...\\AppModel\\Repository\\Packages\\SpotifyAB.SpotifyMusic_*`` and gives the icon; the launch stays ``spotify:``;
-* ``downloads``: the Downloads known folder (``FOLDERID_Downloads``) opened with ``explorer.exe``.
+* ``downloads``: the Downloads known folder (``FOLDERID_Downloads``) opened with ``explorer.exe``, then brought to the
+  front (``actions.folder_front``: the hub is a background process, so Explorer alone would open it behind the other
+  windows; at most 3 s of polling, never an error).
 
 Nothing is run through a shell and no console window appears (``CREATE_NO_WINDOW``). A missing app or a launch that fails
 is the notice ``app_not_found``. Normal hub path.
@@ -27,8 +29,8 @@ Open, then minimize (spec §4.4): when the target's window is already the PC for
 (compared case-insensitively, normalised). Any failure of that detection means "not in front": the app is launched.
 
 The file system, registry, Store package lookup, launcher, window functions (``windows``: foreground_window,
-window_class, window_pid, process_exe, child_exes, explorer_folder, minimize), clock and icon provider are injectable
-for the tests, which never touch a real window.
+window_class, window_pid, process_exe, child_exes, explorer_folder, minimize), clock, sleep, folder front (``front``) and icon
+provider are injectable for the tests, which never touch a real window.
 """
 from __future__ import annotations
 
@@ -40,7 +42,8 @@ import subprocess
 import time
 from ctypes import wintypes
 from typing import Any, Callable, Optional
-from urllib.parse import unquote, urlparse
+
+from actions.folder_front import ensure_front, explorer_folders, open_folder_to_front, same_path as _same_path
 
 _log = logging.getLogger("orizonx.actions.launchers")
 
@@ -145,10 +148,6 @@ class RealLauncher:
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
 
 
-def _same_path(a: Optional[str], b: Optional[str]) -> bool:
-    return bool(a and b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
-
-
 class RealWindows:
     """The real user32 / kernel32 / Explorer calls behind the minimize toggle. ``foreground.Win32Api`` answers the window
     class, process id and exe (an empty answer on failure, never an exception); the rest is added here."""
@@ -192,22 +191,7 @@ class RealWindows:
     def explorer_folder(self, hwnd: int) -> Optional[str]:
         """The folder shown by the Explorer window ``hwnd`` (``Shell.Application().Windows()``, matched by HWND), or None.
         comtypes is imported here, in the hub thread (which has COM initialised), never at module level."""
-        import comtypes.client
-        shell = comtypes.client.CreateObject("Shell.Application", dynamic=True)
-        windows = shell.Windows()
-        for i in range(int(windows.Count)):
-            try:
-                window = windows.Item(i)
-                if int(window.HWND) != hwnd:
-                    continue
-                try:
-                    return str(window.Document.Folder.Self.Path)
-                except Exception:  # noqa: BLE001 - fall back on the URL of the window
-                    url = urlparse(str(window.LocationURL))
-                    return unquote(url.path).lstrip("/").replace("/", "\\") if url.scheme == "file" else None
-            except Exception:  # noqa: BLE001 - a window that went away while it was read
-                continue
-        return None
+        return explorer_folders().get(hwnd)
 
     def minimize(self, hwnd: int) -> None:
         self._show(hwnd, SW_MINIMIZE)
@@ -221,7 +205,8 @@ class LaunchersProvider:
     def __init__(self, env: Optional[dict] = None, fs: Any = None, registry: Optional[Callable[[str], bool]] = None,
                  launcher: Any = None, icons: Any = None, downloads: Optional[Callable[[], Optional[str]]] = None,
                  clock: Callable[[], float] = time.monotonic, log: Optional[Callable[[str], None]] = None,
-                 packages: Optional[Callable[[str], "list[str]"]] = None, windows: Any = None) -> None:
+                 packages: Optional[Callable[[str], "list[str]"]] = None, windows: Any = None,
+                 front: Any = None, sleep: Callable[[float], None] = time.sleep) -> None:
         self._env = env if env is not None else os.environ
         self._fs = fs if fs is not None else RealFs()
         self._registry = registry or protocol_registered
@@ -230,6 +215,8 @@ class LaunchersProvider:
         self._downloads = downloads or downloads_folder
         self._packages = packages or store_package_roots  # Store package name prefix -> its root folders
         self._windows = windows  # created on first use when None (the real one needs no window until a tap)
+        self._front = front  # the Explorer window raiser, created on first use when None
+        self._sleep = sleep
         self._clock = clock
         self._log = log or _log.info
         self._found: Optional[dict] = None
@@ -330,7 +317,9 @@ class LaunchersProvider:
             folder = self._downloads()
             if not folder or not self._fs.isdir(folder):
                 return False
-            self._launcher.popen(["explorer.exe", folder])
+            self._front = ensure_front(self._front, self._log)
+            open_folder_to_front(folder, lambda: self._launcher.popen(["explorer.exe", folder]), self._front,
+                                 self._sleep, self._log)
             return True
         self._found = None  # an explicit tap looks again: the app may have been installed since
         entry = self._detect()[target]

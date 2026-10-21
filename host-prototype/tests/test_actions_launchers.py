@@ -103,6 +103,30 @@ class FakeWindows:
         self.minimized.append(hwnd)
 
 
+class FakeFront:
+    """Fake Explorer window layer: no key is pressed and no window is touched."""
+
+    def __init__(self, appears_after=0, hwnd=42, foreground=0, calls=None):
+        self.appears_after, self.hwnd, self.fg = appears_after, hwnd, foreground
+        self.calls = calls if calls is not None else []
+        self.finds = []
+        self.raised = []
+
+    def prepare(self):
+        self.calls.append("prepare")
+
+    def find(self, path):
+        self.finds.append(path)
+        return self.hwnd if len(self.finds) > self.appears_after else 0
+
+    def foreground(self):
+        return self.fg
+
+    def raise_(self, hwnd):
+        self.raised.append(hwnd)
+        return True
+
+
 class Clock:
     def __init__(self):
         self.t = 100.0
@@ -111,14 +135,15 @@ class Clock:
         return self.t
 
 
-def make(files=(), dirs=(), protocols=(), downloads=DOWNLOADS, packages=(), windows=None):
+def make(files=(), dirs=(), protocols=(), downloads=DOWNLOADS, packages=(), windows=None, front=None):
     fs = FakeFs(files, dirs | {downloads} if isinstance(dirs, set) else set(dirs) | {downloads})
     launcher, icons, clock, logs = FakeLauncher(), FakeIcons(), Clock(), []
     provider = LaunchersProvider(env={"LOCALAPPDATA": LOCAL, "APPDATA": ROAMING}, fs=fs,
                                  registry=lambda name: name in protocols, launcher=launcher, icons=icons,
                                  downloads=lambda: downloads, clock=clock, log=logs.append,
                                  packages=lambda prefix: [r for r in packages if prefix == "SpotifyAB.SpotifyMusic_"],
-                                 windows=windows if windows is not None else FakeWindows())
+                                 windows=windows if windows is not None else FakeWindows(),
+                                 front=front if front is not None else FakeFront(), sleep=lambda _s: None)
     return provider, fs, launcher, icons, clock, logs
 
 
@@ -369,6 +394,33 @@ class LaunchTest(unittest.TestCase):
         p, _, launcher, *_ = make()
         self.assertIsNone(open_(p, "downloads"))
         self.assertEqual(launcher.spawned, [["explorer.exe", DOWNLOADS]])
+
+    def test_downloads_prepares_then_opens_then_raises_the_window(self):
+        front = FakeFront(appears_after=2)
+        order = []
+        front.calls = order
+        p, _, launcher, *_ = make(front=front)
+        launcher.popen = lambda args: order.append("open")
+        self.assertIsNone(open_(p, "downloads"))
+        self.assertEqual(order, ["prepare", "open"])
+        self.assertEqual(front.finds, [DOWNLOADS] * 3)
+        self.assertEqual(front.raised, [42])
+
+    def test_downloads_window_never_found_is_still_a_success(self):
+        front = FakeFront(appears_after=10 ** 6)
+        p, _, launcher, _, _, logs = make(front=front)
+        self.assertIsNone(open_(p, "downloads"))
+        self.assertEqual(launcher.spawned, [["explorer.exe", DOWNLOADS]])
+        self.assertEqual(front.raised, [])
+        self.assertTrue(any("folder front" in line for line in logs))
+
+    def test_other_targets_do_not_touch_the_front(self):
+        front = FakeFront()
+        p, _, launcher, *_ = make(files={UPDATER}, front=front)
+        open_(p, "settings")
+        open_(p, "discord")
+        self.assertEqual(front.calls, [])
+        self.assertEqual(front.finds, [])
 
     def test_a_missing_downloads_folder_is_app_not_found(self):
         p, _, launcher, *_ = make(downloads=None)

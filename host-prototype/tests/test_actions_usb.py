@@ -123,8 +123,33 @@ DISKS = [
 PARENTS = {100: 10, 101: 11, 102: 12}
 
 
+class FakeFront:
+    """Fake Explorer window layer: no key is pressed and no window is touched."""
+
+    def __init__(self, appears_after=0, hwnd=42, foreground=0, calls=None):
+        self.appears_after, self.hwnd, self.fg = appears_after, hwnd, foreground
+        self.calls = calls if calls is not None else []
+        self.finds = []
+        self.raised = []
+
+    def prepare(self):
+        self.calls.append("prepare")
+
+    def find(self, path):
+        self.finds.append(path)
+        return self.hwnd if len(self.finds) > self.appears_after else 0
+
+    def foreground(self):
+        return self.fg
+
+    def raise_(self, hwnd):
+        self.raised.append(hwnd)
+        return True
+
+
 def provider(api, **kwargs):
     kwargs.setdefault("sleep", lambda _s: None)
+    kwargs.setdefault("front", FakeFront())
     return UsbProvider(api=api, **kwargs)
 
 
@@ -239,6 +264,50 @@ class OpenTests(unittest.TestCase):
 
         api = Raising(drives=this_pc(E=kingston()))
         self.assertEqual(provider(api).handle({"id": "usb.open", "drive": "E:"}), "usb_failed")
+
+
+class OpenToFrontTests(unittest.TestCase):
+    def open_drive(self, front, drive="E:", **kwargs):
+        calls = front.calls
+        api = FakeUsbApi(drives=this_pc(E=kingston()))
+        real = api.startfile
+        api.startfile = lambda path: (calls.append("open"), real(path))[1]
+        sleeps = []
+        result = provider(api, front=front, sleep=sleeps.append, **kwargs).handle({"id": "usb.open", "drive": drive})
+        return result, api, sleeps
+
+    def test_prepare_then_open_then_the_window_is_raised(self):
+        front = FakeFront()
+        result, api, _ = self.open_drive(front)
+        self.assertIsNone(result)
+        self.assertEqual(front.calls, ["prepare", "open"])
+        self.assertEqual(api.opened, ["E:\\"])
+        self.assertEqual(front.finds, ["E:\\"])
+        self.assertEqual(front.raised, [42])
+
+    def test_window_found_after_n_polls(self):
+        front = FakeFront(appears_after=4)
+        result, _, sleeps = self.open_drive(front)
+        self.assertIsNone(result)
+        self.assertEqual(len(front.finds), 5)
+        self.assertEqual(len(sleeps), 4)
+        self.assertEqual(front.raised, [42])
+
+    def test_window_never_found_still_succeeds_without_raising(self):
+        front = FakeFront(appears_after=10 ** 6)
+        lines = []
+        result, _, sleeps = self.open_drive(front, log=lines.append)
+        self.assertIsNone(result)
+        self.assertEqual(front.raised, [])
+        self.assertAlmostEqual(sum(sleeps), 3.0)
+        self.assertTrue(any("folder front" in line for line in lines))
+
+    def test_a_failed_open_is_not_raised(self):
+        front = FakeFront()
+        api = FakeUsbApi(drives=this_pc(E=kingston()), fail={"startfile": 2})
+        self.assertEqual(provider(api, front=front).handle({"id": "usb.open", "drive": "E:"}), "usb_failed")
+        self.assertEqual(front.raised, [])
+        self.assertEqual(front.finds, [])
 
 
 class EjectTests(unittest.TestCase):
